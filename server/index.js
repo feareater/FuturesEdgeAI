@@ -6,8 +6,10 @@ const http    = require('http');
 const path    = require('path');
 const express = require('express');
 const { WebSocketServer } = require('ws');
-const { authenticate }    = require('./auth/tradovate');
-const { getCandles }      = require('./data/snapshot');
+const { authenticate }      = require('./auth/tradovate');
+const { getCandles }        = require('./data/snapshot');
+const { computeIndicators } = require('./analysis/indicators');
+const settings              = require('../config/settings.json');
 
 const PORT        = process.env.PORT        || 3000;
 const DATA_SOURCE = process.env.DATA_SOURCE || 'seed';
@@ -33,6 +35,20 @@ app.get('/api/candles', (req, res) => {
     res.json({ symbol, timeframe, candles });
   } catch (err) {
     console.error(`[api] /candles error: ${err.message}`);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// GET /api/indicators?symbol=MNQ&timeframe=5m
+app.get('/api/indicators', (req, res) => {
+  const { symbol = 'MNQ', timeframe = '5m' } = req.query;
+  try {
+    const candles    = getCandles(symbol, timeframe);
+    const indicators = computeIndicators(candles, { swingLookback: settings.swingLookback });
+    console.log(`[api] /indicators  symbol=${symbol}  tf=${timeframe}`);
+    res.json({ symbol, timeframe, ...indicators });
+  } catch (err) {
+    console.error(`[api] /indicators error: ${err.message}`);
     res.status(400).json({ error: err.message });
   }
 });

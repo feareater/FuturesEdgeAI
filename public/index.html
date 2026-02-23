@@ -53,17 +53,68 @@
         <div id="chart-container"></div>
       </div>
 
-      <aside id="alert-panel">
-        <div class="panel-header">Alert Feed</div>
-        <div id="alert-feed">
-          <p class="placeholder">Setup alerts will appear here in Phase 4.</p>
+      <aside id="right-panel">
+
+        <!-- ── Layer toggles ───────────────────────────────────────────── -->
+        <div class="panel-section">
+          <div class="panel-header">Layers</div>
+          <div id="layer-list">
+
+            <label class="layer-row">
+              <input type="checkbox" data-layer="ema9" checked />
+              <span class="swatch" style="background:#2962ff"></span>
+              <span class="layer-name">EMA 9</span>
+            </label>
+
+            <label class="layer-row">
+              <input type="checkbox" data-layer="ema21" checked />
+              <span class="swatch" style="background:#ff6d00"></span>
+              <span class="layer-name">EMA 21</span>
+            </label>
+
+            <label class="layer-row">
+              <input type="checkbox" data-layer="ema50" checked />
+              <span class="swatch" style="background:#d500f9"></span>
+              <span class="layer-name">EMA 50</span>
+            </label>
+
+            <label class="layer-row">
+              <input type="checkbox" data-layer="vwap" checked />
+              <span class="swatch" style="background:#00bcd4; border-style:dashed"></span>
+              <span class="layer-name">VWAP</span>
+            </label>
+
+            <label class="layer-row">
+              <input type="checkbox" data-layer="priorDayHighLow" checked />
+              <span class="swatch" style="background:#607d8b; border-style:dashed"></span>
+              <span class="layer-name">PDH / PDL</span>
+            </label>
+
+            <label class="layer-row">
+              <input type="checkbox" data-layer="swingHighLow" checked />
+              <span class="swatch swing-swatch"></span>
+              <span class="layer-name">Swing H/L</span>
+            </label>
+
+          </div>
         </div>
+
+        <!-- ── Alert feed ──────────────────────────────────────────────── -->
+        <div class="panel-section" id="alert-section">
+          <div class="panel-header">Alert Feed</div>
+          <div id="alert-feed">
+            <p class="placeholder">Setup alerts will appear here in Phase 4.</p>
+          </div>
+        </div>
+
       </aside>
     </main>
 
   </div>
 
+  <!-- chart.js first — sets up window.ChartAPI synchronously -->
   <script src="/js/chart.js"></script>
+  <!-- layers.js second — reads window.ChartAPI immediately -->
   <script src="/js/layers.js"></script>
   <script src="/js/alerts.js"></script>
 </body>

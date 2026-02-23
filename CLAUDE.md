@@ -215,9 +215,9 @@ Default view (Reset to Default): all layers ON.
 | Phase | Focus | Status |
 |---|---|---|
 | 1 | Node.js scaffold, seed data pipeline, basic chart | ✅ Complete |
-| 2 | S/R + S/D zone detection, zone rendering, timeframe switcher | 🔲 Not started |
-| 3 | Setup detection algorithms, real-time WebSocket streaming | 🔲 Not started |
-| 4 | Visual alert feed, Claude API commentary integration | 🔲 Not started |
+| 2 | Indicators & overlays — EMA, VWAP, ATR, PDH/PDL, Swing H/L, layer toggles | ✅ Complete |
+| 3 | Setup detection algorithms, regime classification, alert feed, WebSocket push | 🔲 Not started |
+| 4 | Claude AI commentary integration | 🔲 Not started |
 | 5 | Trade log, JSON persistence, confluence scoring | 🔲 Not started |
 | 6 | UI polish, error handling, session awareness, CLAUDE.md refinement | 🔲 Not started |
 
@@ -237,16 +237,14 @@ Default view (Reset to Default): all layers ON.
 
 ## Current Phase
 
-**Phase 2 — Indicators & Overlays**
-Goal: Compute EMA 9/21/50, VWAP, ATR(14), Prior Day High/Low, and Swing H/L on every candle set; render as toggleable overlay layers on the chart.
+**Phase 3 — Setup Detection & Alert Feed**
+Goal: Classify market regime per timeframe; detect the three setup types (liquidity sweep, OB rejection, BOS/CHoCH); push alerts to the browser via WebSocket; populate the alert feed panel.
 
-**Phase 1 completed:**
-- Full folder/file scaffold + `package.json`
-- `server/auth/tradovate.js` — OAuth + auto-renewal (parked; blocked on Tradovate API key — needs funded live account + API Access subscription, or Optimusfutures to enable Ironbeam API)
-- `server/data/seedFetch.js` — pulls real OHLCV bars from Yahoo Finance (`NQ=F`, `GC=F`); 5 timeframes × 2 symbols = 10 JSON files in `data/seed/`; Yahoo Finance has ~15 min delay, seed ages from fetch time — run to refresh
-- `server/data/snapshot.js` — source-agnostic interface (`DATA_SOURCE=seed` now; set to `ironbeam` when live feed is available)
-- `server/index.js` — Express + WebSocket server; seed mode skips broker auth; `GET /api/candles?symbol=&timeframe=` serves normalized OHLCV
-- `public/index.html` + `public/css/dashboard.css` — dark trading terminal layout; symbol + timeframe controls; OHLC header; alert panel placeholder
-- `public/js/chart.js` — TradingView Lightweight Charts v4; crosshair OHLC display; symbol/TF switching
+**Phase 2 completed:**
+- `server/analysis/indicators.js` — EMA 9/21/50, VWAP (RTH session reset), ATR(14), Prior Day H/L, Swing H/L (configurable lookback); pure function, no I/O
+- `server/index.js` — `GET /api/indicators?symbol=&timeframe=` computes and serves all indicator data
+- `public/js/chart.js` — parallel candle + indicator fetch; EMA/VWAP line series; PDH/PDL price lines; swing H/L arrow markers; `window.ChartAPI.setLayerVisible()` for toggle integration
+- `public/js/layers.js` — checkbox toggles wired to ChartAPI; state persists in localStorage
+- `public/index.html` + `public/css/dashboard.css` — right panel split into Layers + Alert Feed sections
 
-**Next action:** Build `server/analysis/indicators.js` then expose computed values via `/api/indicators` and render EMA + VWAP lines and PDH/PDL + Swing H/L markers as chart overlays.
+**Next action:** Build `server/analysis/regime.js` (trend/range, direction, strength), then `server/analysis/setups.js` (three setup types), then wire results to WebSocket broadcast and populate `public/js/alerts.js`.
