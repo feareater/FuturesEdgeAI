@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FuturesEdge AI</title>
+  <link rel="stylesheet" href="/css/dashboard.css" />
+  <!-- TradingView Lightweight Charts v4 — loaded before our scripts -->
+  <script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+  <div id="app">
+
+    <header id="topbar">
+      <div id="brand">FuturesEdge AI</div>
+
+      <div id="controls">
+        <div class="control-group">
+          <span class="control-label">Symbol</span>
+          <div class="btn-group">
+            <button class="sym-btn active" data-symbol="MNQ">MNQ</button>
+            <button class="sym-btn"        data-symbol="MGC">MGC</button>
+          </div>
+        </div>
+
+        <div class="control-group">
+          <span class="control-label">Timeframe</span>
+          <div class="btn-group">
+            <button class="tf-btn"        data-tf="1m">1m</button>
+            <button class="tf-btn"        data-tf="2m">2m</button>
+            <button class="tf-btn"        data-tf="3m">3m</button>
+            <button class="tf-btn active" data-tf="5m">5m</button>
+            <button class="tf-btn"        data-tf="15m">15m</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="ohlc-display">
+        <span class="ohlc-label">O</span><span id="ohlc-o">—</span>
+        <span class="ohlc-label">H</span><span id="ohlc-h">—</span>
+        <span class="ohlc-label">L</span><span id="ohlc-l">—</span>
+        <span class="ohlc-label">C</span><span id="ohlc-c">—</span>
+      </div>
+
+      <div id="last-price">
+        <span id="price-value">—</span>
+        <span id="price-symbol">MNQ · 5m</span>
+      </div>
+    </header>
+
+    <main id="main">
+      <div id="chart-wrap">
+        <div id="chart-container"></div>
+      </div>
+
+      <aside id="alert-panel">
+        <div class="panel-header">Alert Feed</div>
+        <div id="alert-feed">
+          <p class="placeholder">Setup alerts will appear here in Phase 4.</p>
+        </div>
+      </aside>
+    </main>
+
+  </div>
+
+  <script src="/js/chart.js"></script>
+  <script src="/js/layers.js"></script>
+  <script src="/js/alerts.js"></script>
+</body>
+</html>

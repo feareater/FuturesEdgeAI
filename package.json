@@ -1,0 +1,20 @@
+{
+  "name": "futuresedge-ai",
+  "version": "1.0.0",
+  "description": "Browser-based futures trading analysis dashboard for MNQ and MGC",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "nodemon server/index.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "technicalindicators": "^3.1.0",
+    "ws": "^8.18.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  }
+}

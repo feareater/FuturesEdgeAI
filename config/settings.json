@@ -1,0 +1,21 @@
+{
+  "layers": {
+    "ema9": true,
+    "ema21": true,
+    "ema50": true,
+    "vwap": true,
+    "autoTrendlines": true,
+    "manualTrendlines": true,
+    "orderBlocksUntested": true,
+    "orderBlocksTested": true,
+    "fvgOpen": true,
+    "fvgFilled": true,
+    "supplyDemandZones": true,
+    "priorDayHighLow": true,
+    "swingHighLow": true,
+    "iofConfluenceZones": true
+  },
+  "swingLookback": 10,
+  "impulseThreshold": 1.5,
+  "aiRateLimitMs": 60000
+}
