@@ -599,3 +599,41 @@ html, body {
 .alert-commentary p:last-child { margin-bottom: 0; }
 .alert-commentary.loading { color: var(--text-dim); font-style: italic; }
 .alert-commentary.error   { color: var(--bear); }
+
+/* ── Session badge ───────────────────────────────────────────────────────── */
+
+#session-badge {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}
+.session-rth { color: var(--bull); }
+.session-pre { color: #ffb300; }
+.session-eth { color: var(--text-dim); }
+
+/* ── WebSocket status dot ────────────────────────────────────────────────── */
+
+.ws-status {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.ws-connected    { background: var(--bull); }
+.ws-disconnected { background: var(--bear); }
+.ws-connecting   { background: #ffb300; }
+
+/* ── Alert placeholder variants ──────────────────────────────────────────── */
+
+.placeholder.error { color: var(--bear); }
+.placeholder a { color: var(--accent); cursor: pointer; text-decoration: underline; }
+
+/* ── R:R saved feedback ──────────────────────────────────────────────────── */
+
+.rr-status { min-width: 36px; transition: opacity 0.3s; }
+.rr-status.ok  { color: var(--bull); }
+.rr-status.err { color: var(--bear); }

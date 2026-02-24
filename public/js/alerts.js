@@ -20,16 +20,32 @@
   let currentAlerts = [];
 
   // ── DOM refs ───────────────────────────────────────────────────────────────
-  const alertFeed    = document.getElementById('alert-feed');
-  const wrWon        = document.getElementById('wr-won');
-  const wrLost       = document.getElementById('wr-lost');
-  const wrOpen       = document.getElementById('wr-open');
-  const wrPct        = document.getElementById('wr-pct');
-  const minConfInput = document.getElementById('min-conf');
-  const mnqInput     = document.getElementById('mnq-contracts');
-  const mgcInput     = document.getElementById('mgc-contracts');
-  const maxRiskInput = document.getElementById('max-risk');
-  const rrInput      = document.getElementById('rr-ratio');
+  const alertFeed      = document.getElementById('alert-feed');
+  const wrWon          = document.getElementById('wr-won');
+  const wrLost         = document.getElementById('wr-lost');
+  const wrOpen         = document.getElementById('wr-open');
+  const wrPct          = document.getElementById('wr-pct');
+  const minConfInput   = document.getElementById('min-conf');
+  const mnqInput       = document.getElementById('mnq-contracts');
+  const mgcInput       = document.getElementById('mgc-contracts');
+  const maxRiskInput   = document.getElementById('max-risk');
+  const rrInput        = document.getElementById('rr-ratio');
+  const rrStatusEl     = document.getElementById('rr-status');
+  const sessionBadgeEl = document.getElementById('session-badge');
+
+  // ── Session badge ──────────────────────────────────────────────────────────
+
+  function _updateSessionBadge() {
+    const h = new Date().getUTCHours();
+    let label, cls;
+    if (h >= 14 && h < 21)     { label = 'RTH';         cls = 'session-rth'; }
+    else if (h >= 21 || h < 1) { label = 'After-hours'; cls = 'session-eth'; }
+    else                        { label = 'Pre-market';  cls = 'session-pre'; }
+    if (sessionBadgeEl) {
+      sessionBadgeEl.textContent = label;
+      sessionBadgeEl.className   = `session-badge ${cls}`;
+    }
+  }
 
   // ── Boot ────────────────────────────────────────────────────────────────────
 
@@ -63,6 +79,8 @@
     await fetchAndRender();
     connectWS();
     _wireInputs();
+    _updateSessionBadge();
+    setInterval(_updateSessionBadge, 60_000);
   }
 
   // ── Fetch + render ─────────────────────────────────────────────────────────
@@ -82,7 +100,9 @@
         console.log(`[alerts] ${alerts.length} alerts  minConf=${minConf}`);
       } catch (err) {
         console.error('[alerts] Fetch failed:', err.message);
-        alertFeed.innerHTML = '<p class="placeholder">Could not load alerts.</p>';
+        alertFeed.innerHTML =
+          '<p class="placeholder error">Could not load alerts. <a id="alerts-retry">Retry</a></p>';
+        document.getElementById('alerts-retry')?.addEventListener('click', () => fetchAndRender());
       }
     }, debounceMs);
   }
@@ -90,7 +110,10 @@
   function _renderFeed() {
     alertFeed.innerHTML = '';
     if (!currentAlerts.length) {
-      alertFeed.innerHTML = '<p class="placeholder">No setups at this confidence level.</p>';
+      const msg = minConf > 0
+        ? `No setups at ≥${minConf}% confidence — try lowering Min Conf.`
+        : 'Scanning… no setups detected yet.';
+      alertFeed.innerHTML = `<p class="placeholder">${msg}</p>`;
       return;
     }
     currentAlerts.forEach(a => alertFeed.appendChild(_buildCard(a)));
@@ -263,7 +286,9 @@
 
         } catch (err) {
           commentaryEl.className   = 'alert-commentary error';
-          commentaryEl.textContent = 'Could not load analysis.';
+          commentaryEl.textContent = err.message === '503'
+            ? 'Rate-limited — try again shortly.'
+            : 'Could not load analysis.';
         } finally {
           aiBtn.disabled    = false;
           aiBtn.textContent = '✦ AI';
@@ -321,6 +346,16 @@
     });
   }
 
+  function _showRrStatus(msg, cls) {
+    if (!rrStatusEl) return;
+    rrStatusEl.textContent = msg;
+    rrStatusEl.className   = `filter-unit rr-status ${cls}`;
+    setTimeout(() => {
+      rrStatusEl.textContent = '';
+      rrStatusEl.className   = 'filter-unit rr-status';
+    }, 2000);
+  }
+
   async function _postRatio(rr) {
     rrInput.disabled = true;
     try {
@@ -331,9 +366,11 @@
       });
       if (!res.ok) throw new Error(`/api/settings ${res.status}`);
       console.log(`[alerts] R:R updated to ${rr}:1 — rescanning`);
+      _showRrStatus('Saved ✓', 'ok');
       await fetchAndRender();
     } catch (err) {
       console.error('[alerts] R:R update failed:', err.message);
+      _showRrStatus('Error', 'err');
     } finally {
       rrInput.disabled = false;
     }
@@ -341,12 +378,30 @@
 
   // ── WebSocket ──────────────────────────────────────────────────────────────
 
+  let _wsRetryDelay = 1000;
+  const _wsMaxDelay = 30_000;
+
+  function _setWsStatus(state) {
+    const el = document.getElementById('ws-status');
+    if (el) el.className = `ws-status ws-${state}`;
+  }
+
   function connectWS() {
+    _setWsStatus('connecting');
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${protocol}//${location.host}`);
 
-    ws.onopen  = () => console.log('[ws] Connected');
-    ws.onclose = () => { setTimeout(connectWS, 3000); };
+    ws.onopen = () => {
+      _wsRetryDelay = 1000; // reset on successful connect
+      _setWsStatus('connected');
+      console.log('[ws] Connected');
+    };
+    ws.onclose = () => {
+      _setWsStatus('disconnected');
+      const jitter = Math.random() * 500;
+      setTimeout(connectWS, _wsRetryDelay + jitter);
+      _wsRetryDelay = Math.min(_wsMaxDelay, _wsRetryDelay * 2);
+    };
     ws.onerror = err => console.error('[ws] Error:', err);
 
     ws.onmessage = event => {

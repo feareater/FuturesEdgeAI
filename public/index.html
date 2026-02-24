@@ -13,6 +13,7 @@
 
     <header id="topbar">
       <div id="brand">FuturesEdge AI</div>
+      <span id="session-badge" class="session-badge">—</span>
 
       <div id="controls">
         <div class="control-group">
@@ -48,6 +49,7 @@
       </div>
 
       <a href="/commentary.html" id="ai-nav-link" title="AI Analysis">AI Analysis</a>
+      <span id="ws-status" class="ws-status ws-connecting" title="WebSocket status"></span>
     </header>
 
     <main id="main">
@@ -152,6 +154,7 @@
               <label class="filter-label" for="rr-ratio">R:R Ratio</label>
               <input id="rr-ratio" type="number" class="filter-input narrow" value="2.0" min="1.5" max="5" step="0.5" />
               <span class="filter-unit">:1</span>
+              <span id="rr-status" class="filter-unit rr-status"></span>
             </div>
           </div>
 

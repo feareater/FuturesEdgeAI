@@ -134,58 +134,71 @@ PORT=3000
 
 **Confluence flag:** When an open FVG and untested OB overlap or are within proximity threshold → flagged as high-confluence IOF zone
 
-### Setup Detection (three types)
-1. **Liquidity Sweep + Reversal** — price sweeps swing H/L then closes back inside range with opposing body
-2. **Supply/Demand Zone Rejection** — price enters zone, produces long wick + close outside zone
-3. **Break of Structure / Change of Character (BOS/CHoCH)** — close beyond most recent significant swing H/L
+### Setup Detection (active types — backtest-validated)
+
+| Type | Code | Role | Backtest (Feb 2026, 45 resolved) |
+|---|---|---|---|
+| Supply/Demand Zone Rejection | `zone_rejection` | Primary signal | 72.7% WR — dominant positive edge |
+| PDH/PDL Breakout | `pdh_breakout` | Primary signal | 66.7% WR (regime-dependent) |
+| BOS / CHoCH | `bos` / `choch` | Confidence qualifier only (+10–15 pts) | Not traded standalone |
+| ~~Liquidity Sweep + Reversal~~ | ~~`liquidity_sweep_reversal`~~ | **Removed** | 43% WR, PF 0.68 — negative edge |
+
+**Zone Rejection** — price enters a Supply/Demand zone, produces a significant wick, closes back outside with body in rejection direction. BOS/CHoCH within the scan window adds +10–15 confidence pts.
+
+**PDH/PDL Breakout** — close beyond the prior-day high (bullish) or prior-day low (bearish) with momentum confirmation. RTH-gated (UTC 13:00–21:00).
+
+### Signal Scoring — Backtest Findings (Feb 2026)
+
+**Multi-TF Zone Stack (MNQ only)**
+- MNQ + HTF IOF zone at same level: **77.8% WR, PF 3.15** — strong positive predictor
+- MGC + HTF IOF zone: **37.5% WR, PF 0.39** — inverted predictor (contested level breaks rather than holds)
+- Double-stack (5m AND 15m both confirming): **50% WR, PF 0.65** — worse than single-TF; overloaded levels tend to already be tested
+- TF stack therefore: MNQ-only, capped at 1 confirming TF (+15 confidence pts max)
+- Constants: `STACK_BONUS_PER_TF=15`, `STACK_MAX=15`, `PROX_ATR_MULT=0.5`
+
+**Symbol-specific PDH R:R**
+- MNQ → 2:1 (`PDH_RR = 2.0`)
+- MGC → 1:1 (`PDH_RR = 1.0`)
 
 ---
 
-## Setup Report JSON Schema (v1.0)
+## Alert Object Schema (v2.0)
 
-Every triggered setup writes this structure to `data/logs/`:
+Alerts are persisted to `data/logs/alerts.json`. Each alert object has this shape:
 
 ```json
 {
   "symbol": "MNQ",
-  "timestamp": "2026-02-22T14:32:00Z",
-  "session": "RTH",
-  "timeframes": {
-    "15m_bias": "bullish",
-    "5m_structure": "higher_lows",
-    "1m_trigger_ready": true
-  },
+  "timeframe": "5m",
+  "ts": "2026-02-22T14:32:00.000Z",
   "regime": {
     "type": "trend",
     "direction": "bullish",
     "strength": 78,
     "alignment": true
   },
-  "key_levels": [
-    {"name": "Prior Day High", "price": 18245.25},
-    {"name": "VWAP", "price": 18210.75},
-    {"name": "5m Swing Low", "price": 18192.50}
-  ],
-  "setups": [
-    {
-      "type": "liquidity_sweep_reversal",
-      "entry_zone": [18205, 18212],
-      "trigger": "1m bullish engulfing",
-      "invalidation": 18192.50,
-      "confidence": 72,
-      "rationale": "Trend alignment with VWAP support"
-    }
-  ],
-  "chart_observations": [
-    "Clear ascending channel",
-    "Demand zone visible near VWAP"
-  ],
-  "risk_notes": [
-    "ATR expanding — expect volatility",
-    "Near prior day high resistance"
-  ]
+  "setup": {
+    "type": "zone_rejection",
+    "direction": "bullish",
+    "time": 1708609920,
+    "price": 21405.25,
+    "entry": 21405.25,
+    "sl": 21388.50,
+    "tp": 21439.00,
+    "riskPoints": 16.75,
+    "outcome": "won",
+    "outcomeTime": 1708612800,
+    "confidence": 82,
+    "scoreBreakdown": { "base": 40, "depth": 5, "body": 5, "wick": 10, "regime": 10, "align": 7, "iof": 5, "tfStack": 15 },
+    "rationale": "Zone rejection at demand — bullish wick, trend aligned · 15m stack",
+    "zoneLevel": 21390.00,
+    "tfStack": { "stackCount": 1, "bonus": 15, "tfs": ["15m"] },
+    "commentary": "This bullish zone rejection at 21390..."
+  }
 }
 ```
+
+`setup.time` is Unix seconds. `commentary` is present once AI has generated it (persisted to avoid re-calling the API).
 
 ---
 
@@ -217,9 +230,9 @@ Default view (Reset to Default): all layers ON.
 | 1 | Node.js scaffold, seed data pipeline, basic chart | ✅ Complete |
 | 2 | Indicators & overlays — EMA, VWAP, ATR, PDH/PDL, Swing H/L, layer toggles | ✅ Complete |
 | 3 | Setup detection algorithms, regime classification, alert feed, WebSocket push | ✅ Complete |
-| 4 | Claude AI commentary integration | ✅ Complete |
-| 5 | Alert persistence, commentary persistence, multi-TF confluence scoring | ✅ Complete |
-| 6 | UI polish, error handling, session awareness, CLAUDE.md refinement | 🔲 Not started |
+| 4 | Claude AI commentary integration (on-demand + batch, persisted) | ✅ Complete |
+| 5 | Alert + commentary persistence, multi-TF confluence scoring (MNQ-only, analysis-driven) | ✅ Complete |
+| 6 | UI polish, error handling, session badge, WebSocket backoff, CLAUDE.md refinement | ✅ Complete |
 
 ---
 
@@ -237,14 +250,12 @@ Default view (Reset to Default): all layers ON.
 
 ## Current Phase
 
-**Phase 3 — Setup Detection & Alert Feed**
-Goal: Classify market regime per timeframe; detect the three setup types (liquidity sweep, OB rejection, BOS/CHoCH); push alerts to the browser via WebSocket; populate the alert feed panel.
+**All 6 phases complete. Project is production-ready for seed-mode use.**
 
-**Phase 2 completed:**
-- `server/analysis/indicators.js` — EMA 9/21/50, VWAP (RTH session reset), ATR(14), Prior Day H/L, Swing H/L (configurable lookback); pure function, no I/O
-- `server/index.js` — `GET /api/indicators?symbol=&timeframe=` computes and serves all indicator data
-- `public/js/chart.js` — parallel candle + indicator fetch; EMA/VWAP line series; PDH/PDL price lines; swing H/L arrow markers; `window.ChartAPI.setLayerVisible()` for toggle integration
-- `public/js/layers.js` — checkbox toggles wired to ChartAPI; state persists in localStorage
-- `public/index.html` + `public/css/dashboard.css` — right panel split into Layers + Alert Feed sections
+**Phase 6 delivered:**
+- `public/index.html` — session badge (`RTH` / `Pre-market` / `After-hours`) + WebSocket status dot in topbar; R:R save feedback span
+- `public/css/dashboard.css` — session badge styles (green/amber/dim), WS dot (green/red/amber), contextual empty-state and error placeholder styles
+- `public/js/alerts.js` — session badge computed from UTC hour, updated every 60s; WebSocket reconnect with exponential backoff (1s → 2s → 4s … cap 30s) + jitter; alert fetch error shows "Retry" link; empty state provides context (minConf hint vs. initial scan); AI 503 rate-limit distinguished from generic error; R:R POST shows "Saved ✓" / "Error" for 2s
+- `CLAUDE.md` — phase table, signal scoring findings, alert schema v2.0
 
-**Next action:** Build `server/analysis/regime.js` (trend/range, direction, strength), then `server/analysis/setups.js` (three setup types), then wire results to WebSocket broadcast and populate `public/js/alerts.js`.
+**Next step when resuming:** integrate live Ironbeam/CQG WebSocket data feed (replace seed mode) per the data-source-agnostic interface in `server/data/snapshot.js`.
