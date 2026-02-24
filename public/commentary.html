@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Analysis — FuturesEdge AI</title>
+  <link rel="stylesheet" href="/css/dashboard.css" />
+  <link rel="stylesheet" href="/css/commentary.css" />
+</head>
+<body>
+  <div id="app">
+
+    <header id="topbar">
+      <div id="brand">
+        <a href="/" class="brand-link">FuturesEdge AI</a>
+        <span class="brand-sep">/</span>
+        <span class="brand-page">AI Analysis</span>
+      </div>
+
+      <div id="controls">
+        <div class="control-group">
+          <span id="commentary-status" class="commentary-status">—</span>
+        </div>
+      </div>
+
+      <div id="topbar-actions">
+        <button id="refresh-btn" class="action-btn">↻ Refresh</button>
+        <a href="/" class="action-btn">← Dashboard</a>
+      </div>
+    </header>
+
+    <main id="commentary-main">
+
+      <div id="commentary-meta">
+        <span id="meta-generated">Loading…</span>
+        <span id="meta-count"></span>
+      </div>
+
+      <div id="commentary-grid">
+        <div class="commentary-placeholder">
+          <div class="spinner"></div>
+          <p>Generating AI analysis…</p>
+        </div>
+      </div>
+
+    </main>
+
+  </div>
+
+  <script src="/js/commentary.js"></script>
+</body>
+</html>

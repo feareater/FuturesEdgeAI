@@ -170,6 +170,8 @@
     const card = document.createElement('div');
     card.className = `alert-card ${dirClass}${suppressed ? ' suppressed' : ''}${overBudget ? ' over-budget' : ''}`;
 
+    const aiKey = `${symbol}:${timeframe}:${setup.type}:${setup.time}`;
+
     card.innerHTML = [
       `<div class="alert-header">`,
       `  <span class="alert-sym">${symbol}</span>`,
@@ -189,8 +191,10 @@
       `  <span class="alert-conf">${setup.confidence}%</span>`,
       `  <span class="alert-outcome ${outcomeClass}">${outcomeLabel}</span>`,
       `  <span class="alert-risk ${riskClass}">${riskText}</span>`,
+      !suppressed ? `  <button class="ai-btn" data-key="${aiKey}" title="Get AI analysis">✦ AI</button>` : '',
       `  <span class="alert-time">${time} MT</span>`,
       `</div>`,
+      `<div class="alert-commentary"></div>`,
     ].join('');
 
     if (!suppressed) {
@@ -200,6 +204,55 @@
           .forEach(el => el.classList.remove('selected'));
         card.classList.add('selected');
         window.ChartAPI?.highlightSetup(alert);
+      });
+
+      const aiBtn       = card.querySelector('.ai-btn');
+      const commentaryEl = card.querySelector('.alert-commentary');
+
+      aiBtn.addEventListener('click', async (e) => {
+        e.stopPropagation(); // don't trigger chart highlight
+
+        // Toggle if commentary is already loaded
+        if (commentaryEl.dataset.loaded) {
+          const nowHidden = commentaryEl.style.display === 'none';
+          commentaryEl.style.display = nowHidden ? 'block' : 'none';
+          aiBtn.classList.toggle('active', nowHidden);
+          return;
+        }
+
+        aiBtn.disabled    = true;
+        aiBtn.textContent = '…';
+        commentaryEl.className   = 'alert-commentary loading';
+        commentaryEl.textContent = 'Generating…';
+        commentaryEl.style.display = 'block';
+
+        try {
+          const res = await fetch('/api/commentary/single', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ key: aiBtn.dataset.key }),
+          });
+          if (!res.ok) throw new Error(`${res.status}`);
+          const { commentary } = await res.json();
+
+          // Render sentences as paragraphs using safe DOM methods
+          commentaryEl.className = 'alert-commentary';
+          commentaryEl.innerHTML = '';
+          commentary.split(/(?<=[.!?])\s+/).filter(s => s.trim()).forEach(s => {
+            const p = document.createElement('p');
+            p.textContent = s;
+            commentaryEl.appendChild(p);
+          });
+          commentaryEl.dataset.loaded = '1';
+          aiBtn.classList.add('active');
+
+        } catch (err) {
+          commentaryEl.className   = 'alert-commentary error';
+          commentaryEl.textContent = 'Could not load analysis.';
+        } finally {
+          aiBtn.disabled    = false;
+          aiBtn.textContent = '✦ AI';
+        }
       });
     }
 

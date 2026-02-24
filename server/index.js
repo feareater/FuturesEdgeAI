@@ -12,6 +12,7 @@ const { computeIndicators } = require('./analysis/indicators');
 const { classifyRegime, computeAlignment } = require('./analysis/regime');
 const { detectSetups }      = require('./analysis/setups');
 const { detectTrendlines }  = require('./analysis/trendlines');
+const { generateCommentary, generateSingle } = require('./ai/commentary');
 const settings              = require('../config/settings.json');
 
 const PORT        = process.env.PORT        || 3000;
@@ -25,6 +26,13 @@ const alertCache = [];            // newest-first ordered alert objects
 const alertSeenKeys = new Set();  // dedup: symbol:tf:type:time
 
 const MAX_ALERTS = 100;
+
+// ── Commentary cache ──────────────────────────────────────────────────────────
+// Holds the last successful AI commentary run.
+// { generated: ISO string, items: [{ symbol, timeframe, setupTime, commentary, alert }] }
+let commentaryCache = { generated: null, items: [] };
+
+const COMMENTARY_TOP_N = 5; // number of setups sent to Claude per run
 
 function _cacheAlert(alert) {
   const key = `${alert.symbol}:${alert.timeframe}:${alert.setup.type}:${alert.setup.time}`;
@@ -156,6 +164,40 @@ app.get('/api/alerts', (req, res) => {
   res.json({ alerts: filtered.slice(0, limit) });
 });
 
+// GET /api/commentary — returns the last AI-generated setup commentary
+app.get('/api/commentary', (_req, res) => {
+  res.json(commentaryCache);
+});
+
+// POST /api/commentary/single — on-demand AI commentary for any one alert
+// Body: { key: "MNQ:5m:zone_rejection:1708700000" }
+app.post('/api/commentary/single', async (req, res) => {
+  const { key } = req.body;
+  if (!key) return res.status(400).json({ error: 'key required' });
+
+  const parts = key.split(':');
+  if (parts.length < 4) return res.status(400).json({ error: 'invalid key format' });
+  const [symbol, timeframe, type, timeStr] = parts;
+  const time = parseInt(timeStr, 10);
+
+  const alert = alertCache.find(a =>
+    a.symbol    === symbol    &&
+    a.timeframe === timeframe &&
+    a.setup.type === type     &&
+    a.setup.time === time
+  );
+  if (!alert) return res.status(404).json({ error: 'alert not found in cache' });
+
+  try {
+    const commentary = await generateSingle(alert, getCandles);
+    if (!commentary) return res.status(503).json({ error: 'could not generate commentary' });
+    res.json({ commentary });
+  } catch (err) {
+    console.error('[api] /commentary/single error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/scan  — manually trigger a full re-scan (useful for seed mode refresh)
 app.get('/api/scan', async (_req, res) => {
   try {
@@ -281,7 +323,34 @@ async function runScan() {
   }
 
   console.log(`[scan] Done — ${newCount} new alerts  (${alertCache.length} cached total)`);
+
+  // ── Generate AI commentary for the top N unsuppressed alerts ─────────────
+  // Run async after scan completes so the scan response isn't blocked.
+  _refreshCommentary().catch(err => console.error('[ai] Commentary error:', err.message));
+
   return newCount;
+}
+
+/**
+ * Pick the top COMMENTARY_TOP_N unsuppressed alerts by confidence,
+ * call Claude, update the cache, and broadcast to connected clients.
+ */
+async function _refreshCommentary() {
+  // Apply trade filter to get suppressed flags, then take top N unsuppressed
+  const filtered = _applyTradeFilter(alertCache);
+  const top = filtered
+    .filter(a => !a.suppressed)
+    .sort((a, b) => b.setup.confidence - a.setup.confidence)
+    .slice(0, COMMENTARY_TOP_N);
+
+  if (top.length === 0) return;
+
+  const items = await generateCommentary(top, getCandles, settings);
+  if (!items) return; // null = rate-limited; keep existing cache
+
+  commentaryCache = { generated: new Date().toISOString(), items };
+  broadcast({ type: 'commentary', generated: commentaryCache.generated, count: items.length });
+  console.log(`[ai] Commentary cached (${items.length} items) and broadcast`);
 }
 
 /** Safely compute regime for one symbol + timeframe. Returns null on error. */
