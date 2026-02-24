@@ -175,7 +175,7 @@ html, body {
 /* ── Right panel (layers + alerts) ─────────────────────────────────────── */
 
 #right-panel {
-  width: 220px;
+  width: 260px;
   flex-shrink: 0;
   background: var(--bg-panel);
   border-left: 1px solid var(--border);
@@ -204,6 +204,89 @@ html, body {
   letter-spacing: 0.6px;
   color: var(--text-dim);
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.alert-stats-badge {
+  margin-left: auto;
+  font-size: 10px;
+  letter-spacing: 0;
+  color: var(--text-dim);
+  text-transform: none;
+}
+
+/* ── Win-rate bar ────────────────────────────────────────────────────────── */
+
+#wr-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.wr-won  { color: var(--bull); }
+.wr-lost { color: var(--bear); }
+.wr-open { color: var(--text-dim); font-weight: 400; }
+.wr-pct  { margin-left: auto; color: var(--text-dim); }
+.wr-pct.good    { color: var(--bull); }
+.wr-pct.neutral { color: #ffb300; }
+.wr-pct.bad     { color: var(--bear); }
+
+/* ── Alert filter controls ───────────────────────────────────────────────── */
+
+#alert-filters {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.filter-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.filter-label {
+  font-size: 10px;
+  color: var(--text-dim);
+  min-width: 48px;
+}
+
+.filter-sym {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.filter-input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 11px;
+  padding: 2px 5px;
+  border-radius: var(--radius);
+  width: 46px;
+  text-align: right;
+}
+
+.filter-input.narrow { width: 32px; }
+
+.filter-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.filter-unit {
+  font-size: 10px;
+  color: var(--text-dim);
 }
 
 /* ── Layer toggles ──────────────────────────────────────────────────────── */
@@ -248,6 +331,20 @@ html, body {
   border-radius: 1px;
 }
 
+/* Trendlines swatch: red (resistance) top half, green (support) bottom half */
+.trendline-swatch {
+  background: linear-gradient(to bottom, #ef5350 50%, #00e676 50%);
+  height: 8px;
+  border-radius: 1px;
+}
+
+/* IOF zones swatch: red FVG top, teal OB bottom */
+.iof-swatch {
+  background: linear-gradient(to bottom, rgba(239,83,80,0.7) 50%, rgba(38,166,154,0.7) 50%);
+  height: 8px;
+  border-radius: 1px;
+}
+
 .layer-name {
   font-size: 12px;
   color: var(--text);
@@ -258,11 +355,191 @@ html, body {
 #alert-feed {
   flex: 1;
   overflow-y: auto;
-  padding: 12px;
+  padding: 8px;
 }
 
 .placeholder {
   color: #4a4e5a;
   font-size: 12px;
   line-height: 1.5;
+  padding: 4px;
 }
+
+/* ── Alert cards ─────────────────────────────────────────────────────────── */
+
+.alert-card {
+  background: rgba(255,255,255,0.02);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: var(--radius);
+  padding: 7px 9px;
+  margin-bottom: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.alert-card.bull { border-left-color: var(--bull); }
+.alert-card.bear { border-left-color: var(--bear); }
+
+.alert-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 3px;
+}
+
+.alert-sym {
+  font-weight: 700;
+  color: var(--text);
+  font-size: 11px;
+}
+
+.alert-tf {
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.alert-type {
+  background: var(--border);
+  padding: 1px 4px;
+  border-radius: 2px;
+  color: var(--text);
+  font-size: 10px;
+}
+
+.alert-dir {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.alert-dir.bull { color: var(--bull); }
+.alert-dir.bear { color: var(--bear); }
+
+.alert-rationale {
+  color: var(--text-dim);
+  font-size: 10px;
+  line-height: 1.4;
+  word-break: break-word;
+  margin-bottom: 3px;
+}
+
+.alert-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.alert-conf {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.alert-time {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Alert card: selected + suppressed states ──────────────────────────── */
+
+.alert-card.selected {
+  border-color: var(--accent);
+  background: rgba(33, 150, 243, 0.08);
+}
+
+.alert-card.suppressed {
+  opacity: 0.4;
+  cursor: default !important;
+}
+
+.alert-suppressed-tag {
+  font-size: 9px;
+  color: var(--text-dim);
+  background: var(--border);
+  padding: 1px 4px;
+  border-radius: 2px;
+  margin-left: 2px;
+}
+
+/* ── Alert card: entry / SL / TP price row ─────────────────────────────── */
+
+.alert-prices {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  margin-bottom: 3px;
+  font-size: 10px;
+  flex-wrap: wrap;
+}
+
+.price-label {
+  color: var(--text-dim);
+}
+
+.price-label.sl { color: #ef9a9a; }
+.price-label.tp { color: #80cbc4; }
+
+.price-val {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  margin-right: 4px;
+}
+
+.price-val.sl { color: var(--bear); }
+.price-val.tp { color: var(--bull); }
+
+/* ── Alert card: outcome badge ─────────────────────────────────────────── */
+
+.alert-outcome {
+  font-weight: 600;
+  font-size: 10px;
+}
+
+.alert-outcome.won  { color: var(--bull); }
+.alert-outcome.lost { color: var(--bear); }
+.alert-outcome.open { color: var(--text-dim); }
+
+/* ── Alert card: dollar risk badge ────────────────────────────────────── */
+
+.alert-risk {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.alert-risk.risk-ok   { color: var(--text-dim); }
+.alert-risk.risk-over { color: #ff6d00; font-weight: 700; }
+
+/* Over-budget card gets a subtle warning left border */
+.alert-card.over-budget {
+  border-left-color: #ff6d00;
+}
+
+/* ── Score breakdown row ──────────────────────────────────────────────────── */
+
+.alert-score-bd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  margin-bottom: 3px;
+}
+
+.bd-base {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--text-dim);
+  margin-right: 1px;
+}
+
+.bd-item {
+  font-size: 9px;
+  color: var(--text-dim);
+  opacity: 0.85;
+}
+
+.bd-item.bd-regime { color: var(--accent); opacity: 1; }
+.bd-item.bd-align  { color: #ab47bc;       opacity: 1; }
+.bd-item.bd-iof    { color: #ffb300;       opacity: 1; }
+.bd-item.bd-bos    { color: #26c6da;       opacity: 1; } /* BOS-qualified zone — teal */

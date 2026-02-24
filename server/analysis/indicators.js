@@ -3,6 +3,7 @@
 // Pure function: candles in → indicator data out. No I/O.
 
 const { EMA, ATR } = require('technicalindicators');
+const { detectFVGs, detectOrderBlocks } = require('./iof');
 
 // EST = UTC-5. Simplified — not DST-aware (acceptable for Phase 2 seed data).
 const ET_OFFSET_MS = 5 * 60 * 60 * 1000;
@@ -20,7 +21,7 @@ const ET_OFFSET_MS = 5 * 60 * 60 * 1000;
  * @returns {Object}  Indicator payload — see shape below
  */
 function computeIndicators(candles, opts = {}) {
-  const { swingLookback = 10 } = opts;
+  const { swingLookback = 10, impulseThreshold = 1.5 } = opts;
 
   if (!candles || candles.length === 0) {
     return {
@@ -29,6 +30,7 @@ function computeIndicators(candles, opts = {}) {
       atrCurrent: null,
       pdh: null, pdl: null,
       swingHighs: [], swingLows: [],
+      fvgs: [], orderBlocks: [],
     };
   }
 
@@ -39,15 +41,19 @@ function computeIndicators(candles, opts = {}) {
   const { current: atrCurrent } = _atr(candles, 14);
   const { pdh, pdl }            = _pdhl(candles);
   const { highs: swingHighs, lows: swingLows } = _swings(candles, swingLookback);
+  const fvgs        = detectFVGs(candles);
+  const orderBlocks = detectOrderBlocks(candles, atrCurrent, impulseThreshold);
 
   console.log(
     `[indicators] ema9:${ema9.length} ema21:${ema21.length} ema50:${ema50.length}` +
     ` vwap:${vwap.length} atr:${atrCurrent?.toFixed(2)}` +
     ` pdh:${pdh} pdl:${pdl}` +
-    ` swingH:${swingHighs.length} swingL:${swingLows.length}`
+    ` swingH:${swingHighs.length} swingL:${swingLows.length}` +
+    ` fvgs:${fvgs.length}(open:${fvgs.filter(f=>f.status==='open').length})` +
+    ` obs:${orderBlocks.length}(untested:${orderBlocks.filter(o=>o.status==='untested').length})`
   );
 
-  return { ema9, ema21, ema50, vwap, atrCurrent, pdh, pdl, swingHighs, swingLows };
+  return { ema9, ema21, ema50, vwap, atrCurrent, pdh, pdl, swingHighs, swingLows, fvgs, orderBlocks };
 }
 
 module.exports = { computeIndicators };

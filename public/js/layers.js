@@ -14,6 +14,8 @@
     vwap:            true,
     priorDayHighLow: true,
     swingHighLow:    true,
+    trendlines:      true,
+    iofZones:        true,
   };
 
   function load() {

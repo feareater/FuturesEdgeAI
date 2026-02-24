@@ -96,14 +96,65 @@
               <span class="layer-name">Swing H/L</span>
             </label>
 
+            <label class="layer-row">
+              <input type="checkbox" data-layer="trendlines" checked />
+              <span class="swatch trendline-swatch"></span>
+              <span class="layer-name">Trendlines</span>
+            </label>
+
+            <label class="layer-row">
+              <input type="checkbox" data-layer="iofZones" checked />
+              <span class="swatch iof-swatch"></span>
+              <span class="layer-name">IOF Zones</span>
+            </label>
+
           </div>
         </div>
 
         <!-- ── Alert feed ──────────────────────────────────────────────── -->
         <div class="panel-section" id="alert-section">
-          <div class="panel-header">Alert Feed</div>
+
+          <div class="panel-header">
+            Alert Feed
+            <span id="alert-stats" class="alert-stats-badge">—</span>
+          </div>
+
+          <!-- Win-rate stats row -->
+          <div id="wr-bar">
+            <span id="wr-won"  class="wr-won">W 0</span>
+            <span id="wr-lost" class="wr-lost">L 0</span>
+            <span id="wr-open" class="wr-open">O 0</span>
+            <span id="wr-pct"  class="wr-pct">— WR</span>
+          </div>
+
+          <!-- Filter controls -->
+          <div id="alert-filters">
+            <div class="filter-row">
+              <label class="filter-label" for="min-conf">Min Conf</label>
+              <input id="min-conf" type="number" class="filter-input" value="0" min="0" max="99" step="5" />
+              <span class="filter-unit">%</span>
+            </div>
+            <div class="filter-row">
+              <label class="filter-label">Contracts</label>
+              <span class="filter-sym">MNQ</span>
+              <input id="mnq-contracts" type="number" class="filter-input narrow" value="5" min="1" max="20" />
+              <span class="filter-sym">MGC</span>
+              <input id="mgc-contracts" type="number" class="filter-input narrow" value="3" min="1" max="20" />
+            </div>
+            <div class="filter-row">
+              <label class="filter-label" for="max-risk">Max Risk</label>
+              <span class="filter-unit">$</span>
+              <input id="max-risk" type="number" class="filter-input" value="200" min="50" max="2000" step="50" />
+            </div>
+            <div class="filter-row">
+              <label class="filter-label" for="rr-ratio">R:R Ratio</label>
+              <input id="rr-ratio" type="number" class="filter-input narrow" value="2.0" min="1.5" max="5" step="0.5" />
+              <span class="filter-unit">:1</span>
+            </div>
+          </div>
+
           <div id="alert-feed">
-            <p class="placeholder">Setup alerts will appear here in Phase 4.</p>
+            <p class="placeholder">Scanning…</p>
           </div>
         </div>
 

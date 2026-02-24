@@ -17,5 +17,11 @@
   },
   "swingLookback": 10,
   "impulseThreshold": 1.5,
-  "aiRateLimitMs": 60000
+  "aiRateLimitMs": 60000,
+  "risk": {
+    "mnqContracts": 5,
+    "mgcContracts": 3,
+    "maxRiskDollars": 200,
+    "rrRatio": 1.0
+  }
 }

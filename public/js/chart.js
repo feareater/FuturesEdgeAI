@@ -4,6 +4,14 @@
 
 (function () {
 
+  // ── Multi-TF trendline constants ───────────────────────────────────────────
+  const TRENDLINE_TFS = ['1m', '5m', '15m'];
+  const TREND_COLORS = {
+    '1m':  { support: 'rgba(102,187,106,0.50)', resistance: 'rgba(239,154,154,0.50)', width: 1 },
+    '5m':  { support: 'rgba(0,220,110,0.72)',   resistance: 'rgba(239,83,80,0.72)',   width: 1 },
+    '15m': { support: '#00e676',                resistance: '#ef5350',               width: 2 },
+  };
+
   // ── State ──────────────────────────────────────────────────────────────────
   let activeSymbol = 'MNQ';
   let activeTf     = '5m';
@@ -13,8 +21,16 @@
   let chart        = null;
   let candleSeries = null;
 
-  // Overlay line series (created once, data swapped on symbol/tf change)
-  const lineSeries = { ema9: null, ema21: null, ema50: null, vwap: null };
+  // EMA / VWAP overlay line series
+  const lineSeries = {
+    ema9:  null,
+    ema21: null,
+    ema50: null,
+    vwap:  null,
+  };
+
+  // Multi-TF trendline series — keys like '1m_support', '15m_resistance'
+  const trendLineSeries = {};
 
   // PDH/PDL price line handles (re-created each load)
   let pdhLine = null;
@@ -22,11 +38,26 @@
   let currentPDH = null;
   let currentPDL = null;
 
-  // Swing marker arrays (merged + sorted before calling setMarkers)
+  // IOF zone price line handles (re-created each load)
+  let iofPriceLines = [];
+  let lastFVGs      = [];
+  let lastOBs       = [];
+
+  // Marker arrays merged into candleSeries
   let swingHighMarkers = [];
   let swingLowMarkers  = [];
+  let trendlineMarkers = [];   // TF endpoint labels
+  let setupEntryMkr    = null;
 
-  // Layer visibility — layers.js writes here via ChartAPI before and after load
+  // Active candle times (sorted) for snapping trendline timestamps
+  let activeCandleTimes = [];
+
+  // Setup overlay (click-to-chart)
+  let setupSlLine    = null;
+  let setupTpLine    = null;
+  let pendingOverlay = null;
+
+  // Layer visibility
   const vis = {
     ema9:            true,
     ema21:           true,
@@ -34,6 +65,8 @@
     vwap:            true,
     priorDayHighLow: true,
     swingHighLow:    true,
+    trendlines:      true,
+    iofZones:        true,
   };
 
   // ── DOM refs ───────────────────────────────────────────────────────────────
@@ -69,11 +102,18 @@
         secondsVisible: false,
         rightOffset: 8,
       },
+      // Display all chart times in Mountain Time (MST = UTC-7, MDT = UTC-6)
+      localization: {
+        timeFormatter: (ts) => new Date(ts * 1000).toLocaleTimeString('en-US', {
+          hour: '2-digit', minute: '2-digit', hour12: false,
+          timeZone: 'America/Denver',
+        }),
+      },
       handleScroll: { mouseWheel: true, pressedMouseMove: true },
       handleScale:  { mouseWheel: true, pinch: true },
     });
 
-    // Candlestick series — always on, not toggled
+    // Candlestick series — always on
     candleSeries = chart.addCandlestickSeries({
       upColor:       '#26a69a',
       downColor:     '#ef5350',
@@ -82,7 +122,7 @@
       wickDownColor: '#ef5350',
     });
 
-    // EMA line series — created once, hidden/shown via applyOptions
+    // EMA line series
     lineSeries.ema9 = chart.addLineSeries({
       color: '#2962ff', lineWidth: 1,
       priceLineVisible: false, crosshairMarkerVisible: false,
@@ -99,13 +139,28 @@
       title: 'EMA 50',
     });
 
-    // VWAP — dashed cyan line
+    // VWAP — dashed cyan
     lineSeries.vwap = chart.addLineSeries({
       color: '#00bcd4', lineWidth: 1,
       lineStyle: LightweightCharts.LineStyle.Dashed,
       priceLineVisible: false, crosshairMarkerVisible: false,
       title: 'VWAP',
     });
+
+    // Multi-TF trendline series (6 total: 3 TFs × support + resistance)
+    for (const tf of TRENDLINE_TFS) {
+      const c = TREND_COLORS[tf];
+      trendLineSeries[`${tf}_support`] = chart.addLineSeries({
+        color: c.support, lineWidth: c.width,
+        priceLineVisible: false, crosshairMarkerVisible: false,
+        lastValueVisible: false,
+      });
+      trendLineSeries[`${tf}_resistance`] = chart.addLineSeries({
+        color: c.resistance, lineWidth: c.width,
+        priceLineVisible: false, crosshairMarkerVisible: false,
+        lastValueVisible: false,
+      });
+    }
 
     // OHLC crosshair display
     chart.subscribeCrosshairMove(param => {
@@ -126,68 +181,210 @@
   async function loadData(symbol, tf) {
     console.log(`[chart] Loading ${symbol} ${tf}`);
 
-    // Fetch candles and indicators in parallel
-    const [candleRes, indRes] = await Promise.all([
+    const [candleRes, indRes, tlRes] = await Promise.all([
       fetch(`/api/candles?symbol=${symbol}&timeframe=${tf}`),
       fetch(`/api/indicators?symbol=${symbol}&timeframe=${tf}`),
+      fetch(`/api/trendlines?symbol=${symbol}`),
     ]);
 
     if (!candleRes.ok) throw new Error(`/api/candles ${candleRes.status}`);
     if (!indRes.ok)    throw new Error(`/api/indicators ${indRes.status}`);
 
-    const { candles }    = await candleRes.json();
-    const indicators     = await indRes.json();
+    const { candles } = await candleRes.json();
+    const indicators  = await indRes.json();
+    const tlData      = tlRes.ok ? await tlRes.json() : {};
 
     if (!candles.length) throw new Error('No candles returned');
 
-    // Candles
     candleSeries.setData(candles);
-    chart.timeScale().fitContent();
+    chart.timeScale().scrollToRealTime();
     lastCandle = candles[candles.length - 1];
+
+    // Store sorted candle times for trendline timestamp snapping
+    activeCandleTimes = candles.map(c => c.time);
+
     resetOHLC();
+    renderIndicators(indicators, tlData.trendlines || {});
 
-    // Overlays
-    renderIndicators(indicators);
+    if (pendingOverlay) { _drawSetupOverlay(pendingOverlay); pendingOverlay = null; }
 
-    console.log(`[chart] Rendered ${candles.length} candles  ATR: ${indicators.atrCurrent?.toFixed(2)}`);
+    console.log(`[chart] Rendered ${candles.length} candles  ATR:${indicators.atrCurrent?.toFixed(2)}`);
   }
 
   // ── Indicator rendering ────────────────────────────────────────────────────
-  function renderIndicators(d) {
-    // EMA + VWAP line series
+  function renderIndicators(d, multiTFTrendlines) {
+    // EMA + VWAP
     lineSeries.ema9.setData(d.ema9);
     lineSeries.ema21.setData(d.ema21);
     lineSeries.ema50.setData(d.ema50);
     lineSeries.vwap.setData(d.vwap);
 
-    // PDH / PDL price lines — remove stale, store new values, redraw if visible
+    // PDH/PDL
     clearPricelines();
     currentPDH = d.pdh;
     currentPDL = d.pdl;
     if (vis.priorDayHighLow) drawPricelines();
 
-    // Swing markers
+    // Swing markers — small circles only (structural context).
+    // Arrows are reserved for the entry/exit overlay (click-to-chart).
     swingHighMarkers = (d.swingHighs || []).map(s => ({
       time:     s.time,
       position: 'aboveBar',
-      color:    '#ef5350',
-      shape:    'arrowDown',
+      color:    'rgba(239,83,80,0.40)',
+      shape:    'circle',
       size:     1,
     }));
     swingLowMarkers = (d.swingLows || []).map(s => ({
       time:     s.time,
       position: 'belowBar',
-      color:    '#26a69a',
-      shape:    'arrowUp',
+      color:    'rgba(38,166,154,0.40)',
+      shape:    'circle',
       size:     1,
     }));
     updateMarkers();
 
-    // Apply any visibility state that was set before this load completed
+    // Multi-TF trendlines (1m, 5m, 15m — shown regardless of active TF)
+    _renderMultiTFTrendlines(multiTFTrendlines);
+
+    // IOF zones (FVGs + Order Blocks)
+    lastFVGs = d.fvgs        || [];
+    lastOBs  = d.orderBlocks || [];
+    clearIOFZones();
+    if (vis.iofZones) _drawIOFZones(lastFVGs, lastOBs);
+
+    // Apply persisted visibility state
     for (const [key, visible] of Object.entries(vis)) {
       _applyVis(key, visible);
     }
   }
+
+  // ── Multi-TF Trendlines ─────────────────────────────────────────────────────
+
+  /**
+   * Binary-search snap: find the nearest active candle timestamp.
+   * Ensures trendline endpoints align to the chart's time axis.
+   */
+  function _snapToCandle(ts) {
+    if (!activeCandleTimes.length) return ts;
+    let lo = 0, hi = activeCandleTimes.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (activeCandleTimes[mid] < ts) lo = mid + 1;
+      else hi = mid;
+    }
+    if (lo === 0) return activeCandleTimes[0];
+    const before = activeCandleTimes[lo - 1];
+    const after  = activeCandleTimes[lo];
+    return (ts - before <= after - ts) ? before : after;
+  }
+
+  /** Interpolate the trendline price at a new (snapped) timestamp. */
+  function _trendlinePrice(origT, origP, endT, endP, newT) {
+    if (endT === origT) return origP;
+    return origP + (endP - origP) * (newT - origT) / (endT - origT);
+  }
+
+  function _renderMultiTFTrendlines(data) {
+    trendlineMarkers = [];
+
+    for (const tf of TRENDLINE_TFS) {
+      const tfData = data[tf] || {};
+
+      // ── Support ────────────────────────────────────────────────────────────
+      const supp    = tfData.support;
+      const suppKey = `${tf}_support`;
+      if (supp) {
+        const t0 = _snapToCandle(supp.startTime);
+        const t1 = _snapToCandle(supp.endTime);
+        if (t0 < t1) {
+          const p0 = _trendlinePrice(supp.startTime, supp.startPrice, supp.endTime, supp.endPrice, t0);
+          const p1 = _trendlinePrice(supp.startTime, supp.startPrice, supp.endTime, supp.endPrice, t1);
+          trendLineSeries[suppKey].setData([{ time: t0, value: p0 }, { time: t1, value: p1 }]);
+          trendlineMarkers.push({
+            time: t1, position: 'belowBar',
+            color: TREND_COLORS[tf].support, shape: 'circle', size: 0, text: tf,
+          });
+        } else {
+          trendLineSeries[suppKey].setData([]);
+        }
+      } else {
+        trendLineSeries[suppKey].setData([]);
+      }
+
+      // ── Resistance ─────────────────────────────────────────────────────────
+      const res    = tfData.resistance;
+      const resKey = `${tf}_resistance`;
+      if (res) {
+        const t0 = _snapToCandle(res.startTime);
+        const t1 = _snapToCandle(res.endTime);
+        if (t0 < t1) {
+          const p0 = _trendlinePrice(res.startTime, res.startPrice, res.endTime, res.endPrice, t0);
+          const p1 = _trendlinePrice(res.startTime, res.startPrice, res.endTime, res.endPrice, t1);
+          trendLineSeries[resKey].setData([{ time: t0, value: p0 }, { time: t1, value: p1 }]);
+          trendlineMarkers.push({
+            time: t1, position: 'aboveBar',
+            color: TREND_COLORS[tf].resistance, shape: 'circle', size: 0, text: tf,
+          });
+        } else {
+          trendLineSeries[resKey].setData([]);
+        }
+      } else {
+        trendLineSeries[resKey].setData([]);
+      }
+    }
+
+    updateMarkers();
+  }
+
+  // ── IOF Zones (FVGs + Order Blocks) ────────────────────────────────────────
+
+  function clearIOFZones() {
+    for (const { line } of iofPriceLines) {
+      try { candleSeries.removePriceLine(line); } catch (_) {}
+    }
+    iofPriceLines = [];
+  }
+
+  function _drawIOFZones(fvgs, obs) {
+    // ── Fair Value Gaps ──────────────────────────────────────────────────────
+    for (const fvg of fvgs) {
+      const isB = fvg.type === 'bullish';
+      const col = isB ? 'rgba(0,230,118,0.55)' : 'rgba(239,83,80,0.55)';
+      const lbl = isB ? 'FVG↑' : 'FVG↓';
+
+      iofPriceLines.push({ line: candleSeries.createPriceLine({
+        price: fvg.top, color: col, lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Dotted,
+        axisLabelVisible: true, title: lbl,
+      })});
+      iofPriceLines.push({ line: candleSeries.createPriceLine({
+        price: fvg.bottom, color: col, lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Dotted,
+        axisLabelVisible: false, title: '',
+      })});
+    }
+
+    // ── Order Blocks ─────────────────────────────────────────────────────────
+    for (const ob of obs) {
+      const isB   = ob.type === 'bullish';
+      const col   = isB ? 'rgba(38,166,154,0.7)' : 'rgba(239,83,80,0.7)';
+      const style = ob.status === 'untested'
+        ? LightweightCharts.LineStyle.Solid
+        : LightweightCharts.LineStyle.Dashed;
+      const lbl = isB ? 'OB↑' : 'OB↓';
+
+      iofPriceLines.push({ line: candleSeries.createPriceLine({
+        price: ob.top, color: col, lineWidth: 1, lineStyle: style,
+        axisLabelVisible: true, title: lbl,
+      })});
+      iofPriceLines.push({ line: candleSeries.createPriceLine({
+        price: ob.bottom, color: col, lineWidth: 1, lineStyle: style,
+        axisLabelVisible: false, title: '',
+      })});
+    }
+  }
+
+  // ── PDH / PDL ──────────────────────────────────────────────────────────────
 
   function clearPricelines() {
     if (pdhLine) { candleSeries.removePriceLine(pdhLine); pdhLine = null; }
@@ -197,35 +394,76 @@
   function drawPricelines() {
     if (currentPDH != null) {
       pdhLine = candleSeries.createPriceLine({
-        price: currentPDH,
-        color: '#607d8b',
-        lineWidth: 1,
+        price: currentPDH, color: '#607d8b', lineWidth: 1,
         lineStyle: LightweightCharts.LineStyle.Dashed,
-        axisLabelVisible: true,
-        title: 'PDH',
+        axisLabelVisible: true, title: 'PDH',
       });
     }
     if (currentPDL != null) {
       pdlLine = candleSeries.createPriceLine({
-        price: currentPDL,
-        color: '#607d8b',
-        lineWidth: 1,
+        price: currentPDL, color: '#607d8b', lineWidth: 1,
         lineStyle: LightweightCharts.LineStyle.Dashed,
-        axisLabelVisible: true,
-        title: 'PDL',
+        axisLabelVisible: true, title: 'PDL',
       });
     }
   }
+
+  // ── Markers ────────────────────────────────────────────────────────────────
 
   function updateMarkers() {
     const markers = [
       ...(vis.swingHighLow ? swingHighMarkers : []),
       ...(vis.swingHighLow ? swingLowMarkers  : []),
+      ...(vis.trendlines   ? trendlineMarkers : []),
+      ...(setupEntryMkr    ? [setupEntryMkr]  : []),
     ].sort((a, b) => a.time - b.time);
     candleSeries.setMarkers(markers);
   }
 
-  // ── Visibility ─────────────────────────────────────────────────────────────
+  // ── Setup overlay (click-to-chart) ─────────────────────────────────────────
+
+  function _clearSetupOverlay() {
+    if (setupSlLine)   { candleSeries.removePriceLine(setupSlLine);  setupSlLine  = null; }
+    if (setupTpLine)   { candleSeries.removePriceLine(setupTpLine);  setupTpLine  = null; }
+    if (setupEntryMkr) { setupEntryMkr = null; updateMarkers(); }
+  }
+
+  function _drawSetupOverlay(setup) {
+    _clearSetupOverlay();
+    if (setup.sl != null) {
+      setupSlLine = candleSeries.createPriceLine({
+        price: setup.sl, color: '#ef5350', lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Dashed,
+        axisLabelVisible: true, title: 'SL',
+      });
+    }
+    if (setup.tp != null) {
+      setupTpLine = candleSeries.createPriceLine({
+        price: setup.tp, color: '#26a69a', lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Dashed,
+        axisLabelVisible: true, title: 'TP',
+      });
+    }
+    // Entry marker — yellow arrow; the only arrow signal on the chart
+    setupEntryMkr = {
+      time:     setup.time,
+      position: setup.direction === 'bullish' ? 'belowBar' : 'aboveBar',
+      color:    '#ffeb3b',
+      shape:    setup.direction === 'bullish' ? 'arrowUp' : 'arrowDown',
+      text:     'Entry',
+      size:     2,
+    };
+    updateMarkers();
+    try {
+      chart.timeScale().setVisibleRange({
+        from: setup.time - 7200,
+        to:   setup.time + 7200,
+      });
+    } catch (_) {}
+  }
+
+  // ── Layer visibility ────────────────────────────────────────────────────────
+
   function _applyVis(key, visible) {
     switch (key) {
       case 'ema9':
@@ -234,21 +472,49 @@
       case 'vwap':
         lineSeries[key]?.applyOptions({ visible });
         break;
+
+      case 'trendlines':
+        for (const s of Object.values(trendLineSeries)) {
+          s.applyOptions({ visible });
+        }
+        updateMarkers(); // show/hide TF endpoint label markers
+        break;
+
       case 'priorDayHighLow':
         clearPricelines();
         if (visible) drawPricelines();
         break;
+
       case 'swingHighLow':
         updateMarkers();
+        break;
+
+      case 'iofZones':
+        clearIOFZones();
+        if (visible) _drawIOFZones(lastFVGs, lastOBs);
         break;
     }
   }
 
-  // ── Public API (consumed by layers.js) ────────────────────────────────────
+  // ── Public API (consumed by layers.js + alerts.js) ─────────────────────────
   window.ChartAPI = {
     setLayerVisible(key, visible) {
       vis[key] = visible;
       _applyVis(key, visible);
+    },
+
+    highlightSetup(alert) {
+      const { symbol, timeframe, setup } = alert;
+      if (symbol !== activeSymbol || timeframe !== activeTf) {
+        activeSymbol   = symbol;
+        activeTf       = timeframe;
+        pendingOverlay = setup;
+        setActive('.sym-btn', 'symbol', activeSymbol);
+        setActive('.tf-btn',  'tf',     activeTf);
+        loadData(activeSymbol, activeTf).catch(err => console.error('[chart]', err.message));
+      } else {
+        _drawSetupOverlay(setup);
+      }
     },
   };
 

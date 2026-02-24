@@ -9,10 +9,31 @@ const { WebSocketServer } = require('ws');
 const { authenticate }      = require('./auth/tradovate');
 const { getCandles }        = require('./data/snapshot');
 const { computeIndicators } = require('./analysis/indicators');
+const { classifyRegime, computeAlignment } = require('./analysis/regime');
+const { detectSetups }      = require('./analysis/setups');
+const { detectTrendlines }  = require('./analysis/trendlines');
 const settings              = require('../config/settings.json');
 
 const PORT        = process.env.PORT        || 3000;
 const DATA_SOURCE = process.env.DATA_SOURCE || 'seed';
+
+// ---------------------------------------------------------------------------
+// Alert cache — in-memory; survives until server restart
+// ---------------------------------------------------------------------------
+
+const alertCache = [];            // newest-first ordered alert objects
+const alertSeenKeys = new Set();  // dedup: symbol:tf:type:time
+
+const MAX_ALERTS = 100;
+
+function _cacheAlert(alert) {
+  const key = `${alert.symbol}:${alert.timeframe}:${alert.setup.type}:${alert.setup.time}`;
+  if (alertSeenKeys.has(key)) return false;
+  alertSeenKeys.add(key);
+  alertCache.unshift(alert);
+  if (alertCache.length > MAX_ALERTS) alertCache.pop();
+  return true; // was new
+}
 
 // ---------------------------------------------------------------------------
 // Express
@@ -44,12 +65,105 @@ app.get('/api/indicators', (req, res) => {
   const { symbol = 'MNQ', timeframe = '5m' } = req.query;
   try {
     const candles    = getCandles(symbol, timeframe);
-    const indicators = computeIndicators(candles, { swingLookback: settings.swingLookback });
-    console.log(`[api] /indicators  symbol=${symbol}  tf=${timeframe}`);
-    res.json({ symbol, timeframe, ...indicators });
+    const indicators = computeIndicators(candles, {
+      swingLookback:    settings.swingLookback,
+      impulseThreshold: settings.impulseThreshold,
+    });
+    const trendlines = detectTrendlines(candles, indicators.atrCurrent);
+
+    // Filter IOF to active zones only (keeps payload small)
+    const fvgs        = (indicators.fvgs || []).filter(f => f.status === 'open').slice(-6);
+    const orderBlocks = (indicators.orderBlocks || []).filter(o => o.status !== 'mitigated').slice(-4);
+
+    console.log(`[api] /indicators  symbol=${symbol}  tf=${timeframe}  fvgs=${fvgs.length}  obs=${orderBlocks.length}  trendlines=${trendlines.support?'S':'–'}${trendlines.resistance?'R':'–'}`);
+    res.json({ symbol, timeframe, ...indicators, fvgs, orderBlocks, trendlines });
   } catch (err) {
     console.error(`[api] /indicators error: ${err.message}`);
     res.status(400).json({ error: err.message });
+  }
+});
+
+// GET /api/trendlines?symbol=MNQ — trendlines for 1m, 5m, 15m (multi-TF overlay)
+app.get('/api/trendlines', (req, res) => {
+  const { symbol = 'MNQ' } = req.query;
+  const TRENDLINE_TFS = ['1m', '5m', '15m'];
+  try {
+    const result = {};
+    for (const tf of TRENDLINE_TFS) {
+      const candles = getCandles(symbol, tf);
+      const ind     = computeIndicators(candles, { swingLookback: settings.swingLookback });
+      result[tf]    = detectTrendlines(candles, ind.atrCurrent);
+    }
+    console.log(`[api] /trendlines  symbol=${symbol}  1m:${result['1m']?.support?'S':'–'}${result['1m']?.resistance?'R':'–'}  5m:${result['5m']?.support?'S':'–'}${result['5m']?.resistance?'R':'–'}  15m:${result['15m']?.support?'S':'–'}${result['15m']?.resistance?'R':'–'}`);
+    res.json({ symbol, trendlines: result });
+  } catch (err) {
+    console.error(`[api] /trendlines error: ${err.message}`);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// GET /api/settings — returns the risk section of settings.json for the frontend
+app.get('/api/settings', (_req, res) => {
+  res.json({ risk: settings.risk || {} });
+});
+
+// POST /api/settings — update in-memory risk params and re-scan.
+// Changing rrRatio invalidates all cached outcomes, so we clear + rescan.
+app.post('/api/settings', async (req, res) => {
+  const { rrRatio } = req.body;
+  let needRescan = false;
+
+  if (rrRatio !== undefined) {
+    const parsed = parseFloat(rrRatio);
+    if (!isNaN(parsed) && parsed >= 1.0) {
+      settings.risk.rrRatio = parsed;
+      needRescan = true;
+    }
+  }
+
+  if (needRescan) {
+    // Clear cache — TP/outcome depend on rrRatio
+    alertCache.length = 0;
+    alertSeenKeys.clear();
+    try {
+      const newCount = await runScan();
+      return res.json({ status: 'ok', newAlerts: newCount, totalCached: alertCache.length, risk: settings.risk });
+    } catch (err) {
+      console.error('[api] /settings POST error:', err.message);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  res.json({ status: 'ok', risk: settings.risk });
+});
+
+// GET /api/alerts?limit=20&minConfidence=0
+// minConfidence is applied BEFORE the one-trade filter so WR stats are accurate.
+app.get('/api/alerts', (req, res) => {
+  const limit   = Math.min(parseInt(req.query.limit) || 50, MAX_ALERTS);
+  const minConf = parseInt(req.query.minConfidence) || 0;
+
+  const qualifying = minConf > 0
+    ? alertCache.filter(a => a.setup.confidence >= minConf)
+    : alertCache;
+
+  const filtered = _applyTradeFilter(qualifying);
+  // Sort: unsuppressed first, then by confidence desc
+  filtered.sort((a, b) => {
+    if (a.suppressed !== b.suppressed) return a.suppressed ? 1 : -1;
+    return b.setup.confidence - a.setup.confidence;
+  });
+  res.json({ alerts: filtered.slice(0, limit) });
+});
+
+// GET /api/scan  — manually trigger a full re-scan (useful for seed mode refresh)
+app.get('/api/scan', async (_req, res) => {
+  try {
+    const newCount = await runScan();
+    res.json({ status: 'ok', newAlerts: newCount, totalCached: alertCache.length });
+  } catch (err) {
+    console.error('[api] /scan error:', err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -74,6 +188,113 @@ function broadcast(payload) {
     if (client.readyState === client.OPEN) {
       client.send(msg);
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// One-trade-at-a-time filter (per symbol).
+// Processes a copy of the cache chronologically and marks any alert that fires
+// while a prior trade for the same symbol is still open as suppressed:true.
+// Does NOT mutate the cache — returns new objects.
+// ---------------------------------------------------------------------------
+
+function _applyTradeFilter(alerts) {
+  // Work chronologically; tag copies so the cache is never mutated
+  const chrono = alerts
+    .map(a => ({ ...a, setup: { ...a.setup } }))        // shallow-copy each alert
+    .sort((a, b) => a.setup.time - b.setup.time);       // oldest first
+
+  const activeUntil = {}; // symbol → outcomeTime (Unix ts) | Infinity (still open)
+
+  for (const alert of chrono) {
+    const sym  = alert.symbol;
+    const lock = activeUntil[sym];
+
+    if (lock !== undefined && alert.setup.time < lock) {
+      // A prior trade for this symbol is still running — suppress
+      alert.suppressed = true;
+    } else {
+      // Prior trade resolved (or none existed) — this alert is actionable
+      delete activeUntil[sym];
+
+      if (alert.setup.outcome === 'open') {
+        activeUntil[sym] = Infinity;
+      } else if (alert.setup.outcomeTime) {
+        activeUntil[sym] = alert.setup.outcomeTime;
+      }
+      // outcome won/lost with outcomeTime clears the lock after that time
+    }
+  }
+
+  return chrono;
+}
+
+// ---------------------------------------------------------------------------
+// Scan engine — detects setups across all symbol / timeframe combinations.
+// In live mode this would be called on every candle close event.
+// In seed mode it runs once at startup and is re-runnable via GET /api/scan.
+// ---------------------------------------------------------------------------
+
+const SCAN_SYMBOLS    = ['MNQ', 'MGC'];
+const SCAN_TIMEFRAMES = ['1m', '2m', '3m', '5m', '15m'];
+
+/**
+ * Run a full scan. Returns the count of NEW alerts added to the cache.
+ */
+async function runScan() {
+  console.log('[scan] Starting…');
+  let newCount = 0;
+
+  for (const symbol of SCAN_SYMBOLS) {
+    // Pre-compute 5m and 15m regimes for the alignment flag
+    const regime5m  = _regimeFor(symbol, '5m');
+    const regime15m = _regimeFor(symbol, '15m');
+    const alignment = computeAlignment(regime15m, regime5m);
+
+    for (const tf of SCAN_TIMEFRAMES) {
+      try {
+        const candles = getCandles(symbol, tf);
+        const ind     = computeIndicators(candles, {
+          swingLookback:    settings.swingLookback,
+          impulseThreshold: settings.impulseThreshold,
+        });
+        const regime  = { ...classifyRegime(ind), alignment };
+        const setups  = detectSetups(candles, ind, regime, { rrRatio: settings.risk.rrRatio || 1.0, symbol });
+
+        for (const setup of setups) {
+          const alert = {
+            symbol,
+            timeframe: tf,
+            regime,
+            setup,
+            ts: new Date().toISOString(),
+          };
+          if (_cacheAlert(alert)) {
+            broadcast({ type: 'setup', ...alert });
+            newCount++;
+          }
+        }
+      } catch (err) {
+        console.error(`[scan] ${symbol} ${tf} error: ${err.message}`);
+      }
+    }
+  }
+
+  console.log(`[scan] Done — ${newCount} new alerts  (${alertCache.length} cached total)`);
+  return newCount;
+}
+
+/** Safely compute regime for one symbol + timeframe. Returns null on error. */
+function _regimeFor(symbol, tf) {
+  try {
+    const candles = getCandles(symbol, tf);
+    const ind     = computeIndicators(candles, {
+      swingLookback:    settings.swingLookback,
+      impulseThreshold: settings.impulseThreshold,
+    });
+    return classifyRegime(ind);
+  } catch {
+    return null;
   }
 }
 
@@ -107,6 +328,10 @@ async function start() {
 
   server.listen(PORT, () => {
     console.log(`[server] Listening on http://localhost:${PORT}`);
+    // Seed mode: run initial scan after server is ready
+    if (DATA_SOURCE === 'seed') {
+      setTimeout(() => runScan().catch(err => console.error('[scan] Error:', err.message)), 500);
+    }
   });
 }
 
