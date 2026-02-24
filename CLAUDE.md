@@ -216,9 +216,9 @@ Default view (Reset to Default): all layers ON.
 |---|---|---|
 | 1 | Node.js scaffold, seed data pipeline, basic chart | ✅ Complete |
 | 2 | Indicators & overlays — EMA, VWAP, ATR, PDH/PDL, Swing H/L, layer toggles | ✅ Complete |
-| 3 | Setup detection algorithms, regime classification, alert feed, WebSocket push | 🔲 Not started |
-| 4 | Claude AI commentary integration | 🔲 Not started |
-| 5 | Trade log, JSON persistence, confluence scoring | 🔲 Not started |
+| 3 | Setup detection algorithms, regime classification, alert feed, WebSocket push | ✅ Complete |
+| 4 | Claude AI commentary integration | ✅ Complete |
+| 5 | Alert persistence, commentary persistence, multi-TF confluence scoring | ✅ Complete |
 | 6 | UI polish, error handling, session awareness, CLAUDE.md refinement | 🔲 Not started |
 
 ---

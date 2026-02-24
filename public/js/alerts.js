@@ -140,6 +140,7 @@
     if (sd.align  > 0) parts.push(`<span class="bd-item bd-align">+A${sd.align}</span>`);
     if (sd.iof    > 0) parts.push(`<span class="bd-item bd-iof">+IOF${sd.iof}</span>`);
     if (sd.bos    > 0) parts.push(`<span class="bd-item bd-bos">+BQ${sd.bos}</span>`);
+    if (sd.tfStack > 0) parts.push(`<span class="bd-item bd-tfstack">+TFS${sd.tfStack}</span>`);
     return `<div class="alert-score-bd">${parts.join('')}</div>`;
   }
 
@@ -217,6 +218,20 @@
           const nowHidden = commentaryEl.style.display === 'none';
           commentaryEl.style.display = nowHidden ? 'block' : 'none';
           aiBtn.classList.toggle('active', nowHidden);
+          return;
+        }
+
+        // Commentary pre-attached from batch run or persisted disk cache — no API call needed
+        if (alert.commentary) {
+          commentaryEl.className = 'alert-commentary';
+          alert.commentary.split(/(?<=[.!?])\s+/).filter(s => s.trim()).forEach(s => {
+            const p = document.createElement('p');
+            p.textContent = s;
+            commentaryEl.appendChild(p);
+          });
+          commentaryEl.dataset.loaded = '1';
+          commentaryEl.style.display  = 'block';
+          aiBtn.classList.add('active');
           return;
         }
 

@@ -560,6 +560,7 @@ html, body {
 .bd-item.bd-align  { color: #ab47bc;       opacity: 1; }
 .bd-item.bd-iof    { color: #ffb300;       opacity: 1; }
 .bd-item.bd-bos    { color: #26c6da;       opacity: 1; } /* BOS-qualified zone — teal */
+.bd-item.bd-tfstack{ color: #ffd54f;       opacity: 1; } /* multi-TF zone stack — gold */
 
 /* ── Alert card: on-demand AI button ─────────────────────────────────── */
 

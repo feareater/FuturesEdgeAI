@@ -186,6 +186,12 @@ async function generateSingle(alert, getCandles) {
   const { symbol, timeframe, setup: s } = alert;
   const key = `${symbol}:${timeframe}:${s.type}:${s.time}`;
 
+  // Commentary already on the alert object (from batch run or persisted prior request)
+  if (alert.commentary) {
+    console.log(`[ai] Single commentary from alert object: ${key}`);
+    return alert.commentary;
+  }
+
   const cached = singleCache.get(key);
   if (cached && Date.now() - cached.ts < SINGLE_TTL) {
     console.log(`[ai] Single cache hit: ${key}`);
@@ -217,6 +223,7 @@ async function generateSingle(alert, getCandles) {
     const commentary = Array.isArray(parsed) ? (parsed[0]?.commentary || null) : null;
 
     if (commentary) {
+      alert.commentary = commentary; // attach for persistence — saved to disk by caller
       singleCache.set(key, { commentary, ts: Date.now() });
     }
     return commentary;

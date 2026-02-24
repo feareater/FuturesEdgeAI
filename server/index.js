@@ -13,6 +13,8 @@ const { classifyRegime, computeAlignment } = require('./analysis/regime');
 const { detectSetups }      = require('./analysis/setups');
 const { detectTrendlines }  = require('./analysis/trendlines');
 const { generateCommentary, generateSingle } = require('./ai/commentary');
+const { checkTFZoneStack }  = require('./analysis/confluence');
+const { saveAlertCache, loadAlertCache, saveCommentaryCache, loadCommentaryCache } = require('./storage/log');
 const settings              = require('../config/settings.json');
 
 const PORT        = process.env.PORT        || 3000;
@@ -33,6 +35,32 @@ const MAX_ALERTS = 100;
 let commentaryCache = { generated: null, items: [] };
 
 const COMMENTARY_TOP_N = 5; // number of setups sent to Claude per run
+
+// ── Persistence helpers ───────────────────────────────────────────────────────
+
+/**
+ * Load persisted alert and commentary caches from disk at startup.
+ * Alerts already in the dedup set will be skipped by subsequent scans.
+ */
+function _loadPersistedData() {
+  const savedAlerts = loadAlertCache();
+  if (savedAlerts.length) {
+    for (const alert of savedAlerts) {
+      const key = `${alert.symbol}:${alert.timeframe}:${alert.setup.type}:${alert.setup.time}`;
+      alertSeenKeys.add(key);
+      alertCache.push(alert);
+    }
+    // Trim to MAX_ALERTS in case the file grew beyond the cap
+    if (alertCache.length > MAX_ALERTS) alertCache.splice(MAX_ALERTS);
+    console.log(`[storage] Loaded ${alertCache.length} alerts from disk`);
+  }
+
+  const savedCommentary = loadCommentaryCache();
+  if (savedCommentary.generated) {
+    commentaryCache = savedCommentary;
+    console.log(`[storage] Loaded commentary cache (${commentaryCache.items.length} items, generated ${commentaryCache.generated})`);
+  }
+}
 
 function _cacheAlert(alert) {
   const key = `${alert.symbol}:${alert.timeframe}:${alert.setup.type}:${alert.setup.time}`;
@@ -191,6 +219,8 @@ app.post('/api/commentary/single', async (req, res) => {
   try {
     const commentary = await generateSingle(alert, getCandles);
     if (!commentary) return res.status(503).json({ error: 'could not generate commentary' });
+    // generateSingle attaches commentary to alert.commentary — persist the update
+    saveAlertCache(alertCache);
     res.json({ commentary });
   } catch (err) {
     console.error('[api] /commentary/single error:', err.message);
@@ -304,6 +334,16 @@ async function runScan() {
         const setups  = detectSetups(candles, ind, regime, { rrRatio: settings.risk.rrRatio || 1.0, symbol });
 
         for (const setup of setups) {
+          // Multi-TF zone stack: check if the setup's key level has a confirming
+          // IOF zone on a higher timeframe. Adds up to +20 confidence + badge.
+          const stack = checkTFZoneStack(setup, symbol, tf, getCandles, computeIndicators, settings);
+          if (stack.bonus > 0) {
+            setup.confidence    = Math.min(100, setup.confidence + stack.bonus);
+            setup.tfStack       = stack;
+            setup.scoreBreakdown = { ...setup.scoreBreakdown, tfStack: stack.bonus };
+            setup.rationale    += ` · ${stack.tfs.join('/')} stack`;
+          }
+
           const alert = {
             symbol,
             timeframe: tf,
@@ -323,6 +363,9 @@ async function runScan() {
   }
 
   console.log(`[scan] Done — ${newCount} new alerts  (${alertCache.length} cached total)`);
+
+  // Persist alert cache immediately after scan
+  saveAlertCache(alertCache);
 
   // ── Generate AI commentary for the top N unsuppressed alerts ─────────────
   // Run async after scan completes so the scan response isn't blocked.
@@ -348,9 +391,21 @@ async function _refreshCommentary() {
   const items = await generateCommentary(top, getCandles, settings);
   if (!items) return; // null = rate-limited; keep existing cache
 
+  // Attach commentary text to each alert object so it persists and can be
+  // served instantly on future requests without re-calling the API.
+  items.forEach(item => {
+    if (item.alert && item.commentary) {
+      item.alert.commentary = item.commentary;
+    }
+  });
+
   commentaryCache = { generated: new Date().toISOString(), items };
   broadcast({ type: 'commentary', generated: commentaryCache.generated, count: items.length });
   console.log(`[ai] Commentary cached (${items.length} items) and broadcast`);
+
+  // Persist both caches so they survive a restart
+  saveAlertCache(alertCache);
+  saveCommentaryCache(commentaryCache);
 }
 
 /** Safely compute regime for one symbol + timeframe. Returns null on error. */
@@ -397,8 +452,10 @@ async function start() {
 
   server.listen(PORT, () => {
     console.log(`[server] Listening on http://localhost:${PORT}`);
-    // Seed mode: run initial scan after server is ready
     if (DATA_SOURCE === 'seed') {
+      // Restore persisted alerts + commentary before scanning so the feed is
+      // instantly populated and existing commentary doesn't need regeneration.
+      _loadPersistedData();
       setTimeout(() => runScan().catch(err => console.error('[scan] Error:', err.message)), 500);
     }
   });
