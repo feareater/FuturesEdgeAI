@@ -637,3 +637,19 @@ html, body {
 .rr-status { min-width: 36px; transition: opacity 0.3s; }
 .rr-status.ok  { color: var(--bull); }
 .rr-status.err { color: var(--bear); }
+
+/* ── Data freshness display ──────────────────────────────────────────────── */
+
+.data-age {
+  font-size: 10px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+/* ── Signal age on alert cards ───────────────────────────────────────────── */
+
+.alert-age {
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-left: 2px;
+}

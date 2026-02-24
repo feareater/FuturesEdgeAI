@@ -516,6 +516,13 @@
         _drawSetupOverlay(setup);
       }
     },
+
+    // Reload chart data for the active symbol + timeframe.
+    // Called by alerts.js when a data_refresh WebSocket message is received.
+    reload() {
+      loadData(activeSymbol, activeTf)
+        .catch(err => console.error('[chart] reload:', err.message));
+    },
   };
 
   // ── OHLC display ───────────────────────────────────────────────────────────

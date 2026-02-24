@@ -32,6 +32,18 @@
   const rrInput        = document.getElementById('rr-ratio');
   const rrStatusEl     = document.getElementById('rr-status');
   const sessionBadgeEl = document.getElementById('session-badge');
+  const dataAgeEl      = document.getElementById('data-age');
+
+  // ── Data freshness display ─────────────────────────────────────────────────
+
+  function _updateDataAge(ts) {
+    if (!dataAgeEl || !ts) return;
+    const t = new Date(ts).toLocaleTimeString('en-US', {
+      hour: '2-digit', minute: '2-digit', hour12: false,
+      timeZone: 'America/Denver',
+    });
+    dataAgeEl.textContent = `Data: ${t} MT`;
+  }
 
   // ── Session badge ──────────────────────────────────────────────────────────
 
@@ -57,6 +69,12 @@
         const { risk } = await res.json();
         cfg = { ...cfg, ...risk };
       }
+    } catch (_) {}
+
+    // Load initial data-age from health endpoint
+    try {
+      const hRes = await fetch('/api/health');
+      if (hRes.ok) { const { lastRefresh } = await hRes.json(); _updateDataAge(lastRefresh); }
     } catch (_) {}
 
     // Restore any locally saved overrides (client-only: contracts, maxRisk, minConf)
@@ -177,11 +195,15 @@
     const dirArrow   = dir === 'bullish' ? '▲' : '▼';
 
     const fmtP = n => (n != null ? n.toFixed(2) : '—');
-    // Display time in Mountain Time (MST/MDT)
+    // Display time + age in Mountain Time (MST/MDT)
     const time = new Date(setup.time * 1000).toLocaleTimeString('en-US', {
       hour: '2-digit', minute: '2-digit', hour12: false,
       timeZone: 'America/Denver',
     });
+    const ageMins = Math.round((Date.now() - setup.time * 1000) / 60000);
+    const ageText = ageMins < 2 ? 'just now'
+      : ageMins < 60  ? `${ageMins}m`
+      : `${Math.floor(ageMins / 60)}h`;
 
     const riskDollars  = _calcRisk(alert);
     const overBudget   = riskDollars != null && riskDollars > cfg.maxRiskDollars;
@@ -216,7 +238,7 @@
       `  <span class="alert-outcome ${outcomeClass}">${outcomeLabel}</span>`,
       `  <span class="alert-risk ${riskClass}">${riskText}</span>`,
       !suppressed ? `  <button class="ai-btn" data-key="${aiKey}" title="Get AI analysis">✦ AI</button>` : '',
-      `  <span class="alert-time">${time} MT</span>`,
+      `  <span class="alert-time">${time} MT</span><span class="alert-age">${ageText}</span>`,
       `</div>`,
       `<div class="alert-commentary"></div>`,
     ].join('');
@@ -408,6 +430,11 @@
       try {
         const msg = JSON.parse(event.data);
         if (msg.type === 'setup') fetchAndRender(); // re-fetch to keep trade filter accurate
+        if (msg.type === 'data_refresh') {
+          window.ChartAPI?.reload(); // re-fetch chart candles + indicators
+          fetchAndRender();          // re-fetch alert feed (open outcomes may have resolved)
+          _updateDataAge(msg.ts);    // update "Data: HH:MM MT" display
+        }
       } catch (_) {}
     };
   }

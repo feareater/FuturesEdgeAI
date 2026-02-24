@@ -15,10 +15,17 @@ const { detectTrendlines }  = require('./analysis/trendlines');
 const { generateCommentary, generateSingle } = require('./ai/commentary');
 const { checkTFZoneStack }  = require('./analysis/confluence');
 const { saveAlertCache, loadAlertCache, saveCommentaryCache, loadCommentaryCache } = require('./storage/log');
+const { fetchAll }          = require('./data/seedFetch');
 const settings              = require('../config/settings.json');
 
 const PORT        = process.env.PORT        || 3000;
 const DATA_SOURCE = process.env.DATA_SOURCE || 'seed';
+
+// Auto-refresh interval for seed mode (15 minutes).
+// Live-mode integration point: replace the setInterval in start() with a broker
+// WebSocket candle-close subscription, then call _autoRefresh({ fetchData: false }).
+const REFRESH_INTERVAL_MS = 15 * 60 * 1000;
+let   lastRefreshTs       = null; // ISO string, exposed via /api/health
 
 // ---------------------------------------------------------------------------
 // Alert cache — in-memory; survives until server restart
@@ -80,7 +87,7 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
 app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', dataSource: DATA_SOURCE, ts: new Date().toISOString() });
+  res.json({ status: 'ok', dataSource: DATA_SOURCE, ts: new Date().toISOString(), lastRefresh: lastRefreshTs });
 });
 
 // GET /api/candles?symbol=MNQ&timeframe=5m
@@ -423,6 +430,49 @@ function _regimeFor(symbol, tf) {
 }
 
 // ---------------------------------------------------------------------------
+// Auto-refresh (seed mode) — fetches fresh Yahoo Finance data every 15 min,
+// evicts open-outcome alerts so they get re-evaluated against new candles,
+// then re-runs the scan and broadcasts data_refresh to connected clients.
+//
+// Live-mode seam: replace the setInterval below with a broker WebSocket
+// candle-close handler and call _autoRefresh({ fetchData: false }) — the
+// broker already wrote fresh candles; skip the Yahoo fetch step.
+// ---------------------------------------------------------------------------
+
+async function _autoRefresh({ fetchData = true } = {}) {
+  console.log('[refresh] Starting data refresh…');
+
+  if (fetchData) {
+    try {
+      await fetchAll();
+    } catch (err) {
+      console.error('[refresh] Yahoo fetch failed:', err.message, '— using existing data');
+      // Non-fatal: continue with existing seed files; scan still re-evaluates open setups
+    }
+  }
+
+  // Evict open-outcome alerts so they get re-detected with potentially updated outcomes.
+  // Historical resolved setups (won/lost) stay in alertSeenKeys — they won't re-fire.
+  const openKeys = new Set(
+    alertCache
+      .filter(a => a.setup.outcome === 'open')
+      .map(a => `${a.symbol}:${a.timeframe}:${a.setup.type}:${a.setup.time}`)
+  );
+  for (const k of openKeys) alertSeenKeys.delete(k);
+  for (let i = alertCache.length - 1; i >= 0; i--) {
+    if (alertCache[i].setup.outcome === 'open') alertCache.splice(i, 1);
+  }
+  if (openKeys.size > 0) {
+    console.log(`[refresh] Evicted ${openKeys.size} open-outcome alert(s) for re-evaluation`);
+  }
+
+  const newCount = await runScan();
+  lastRefreshTs  = new Date().toISOString();
+  broadcast({ type: 'data_refresh', ts: lastRefreshTs, newAlerts: newCount });
+  console.log(`[refresh] Done — ${newCount} new alerts, data as of ${lastRefreshTs}`);
+}
+
+// ---------------------------------------------------------------------------
 // Startup
 // ---------------------------------------------------------------------------
 
@@ -457,6 +507,23 @@ async function start() {
       // instantly populated and existing commentary doesn't need regeneration.
       _loadPersistedData();
       setTimeout(() => runScan().catch(err => console.error('[scan] Error:', err.message)), 500);
+
+      // Schedule 15-minute auto-refresh. First refresh fires at T+15min (initial
+      // scan already ran above). Subsequent refreshes follow at the same interval.
+      // ── Live-mode integration point ─────────────────────────────────────────
+      // When switching to a live broker feed, remove this block and subscribe to
+      // the broker's WebSocket candle-close events, calling:
+      //   _autoRefresh({ fetchData: false })
+      // The scan engine, alert cache, and broadcast logic remain unchanged.
+      // ────────────────────────────────────────────────────────────────────────
+      setTimeout(() => {
+        _autoRefresh().catch(err => console.error('[refresh] Error:', err.message));
+        setInterval(
+          () => _autoRefresh().catch(err => console.error('[refresh] Error:', err.message)),
+          REFRESH_INTERVAL_MS
+        );
+      }, REFRESH_INTERVAL_MS);
+      console.log(`[startup] Auto-refresh scheduled every ${REFRESH_INTERVAL_MS / 60000} min`);
     }
   });
 }

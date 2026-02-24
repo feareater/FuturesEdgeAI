@@ -1,8 +1,12 @@
 'use strict';
-// One-time script — fetches real OHLCV candles from Yahoo Finance and writes
-// them to data/seed/ as JSON. Run whenever you want to refresh the seed data.
+// OHLCV seed fetcher — Yahoo Finance → data/seed/*.json
 //
-//   node server/data/seedFetch.js
+// Can be used two ways:
+//   1. CLI:    node server/data/seedFetch.js   (one-shot refresh)
+//   2. Module: const { fetchAll } = require('./seedFetch'); await fetchAll();
+//              Called by server/index.js every 15 minutes in seed mode.
+//              In live mode, replace the setInterval in index.js with a broker
+//              WebSocket candle-close subscription — fetchAll() is not needed.
 
 const fs   = require('fs');
 const path = require('path');
@@ -85,44 +89,48 @@ function aggregate(symbol, sourceCandles, minutes) {
 }
 
 // ---------------------------------------------------------------------------
-// Main
+// fetchAll — fetches all symbols × timeframes and writes to data/seed/
 // ---------------------------------------------------------------------------
 
-async function main() {
+async function fetchAll() {
   fs.mkdirSync(SEED_DIR, { recursive: true });
-  console.log(`Seed directory: ${SEED_DIR}\n`);
 
   for (const [symbol, yfSymbol] of Object.entries(SYMBOLS)) {
-    console.log(`── ${symbol} (${yfSymbol}) ──────────────────────────`);
+    console.log(`[seedFetch] ── ${symbol} (${yfSymbol}) ──`);
 
     for (const { tf, yf, range } of TIMEFRAMES) {
-      console.log(`\nFetching ${symbol} ${tf}...`);
       const raw        = await fetchYahoo(yfSymbol, yf, range);
       const normalized = normalize(symbol, tf, raw);
       const outPath    = path.join(SEED_DIR, `${symbol}_${tf}.json`);
       fs.writeFileSync(outPath, JSON.stringify(normalized, null, 2));
-      console.log(`  ✓ ${normalized.candles.length} candles  →  ${outPath}`);
+      console.log(`[seedFetch] ${symbol} ${tf}  ${normalized.candles.length} candles → ${outPath}`);
 
       // Be polite — Yahoo will rate-limit aggressive scrapers
       await new Promise(r => setTimeout(r, 600));
     }
 
     // Derive 3m by aggregating the 1m candles we just wrote
-    console.log(`\nDeriving ${symbol} 3m from 1m...`);
-    const oneMPath  = path.join(SEED_DIR, `${symbol}_1m.json`);
-    const oneM      = JSON.parse(fs.readFileSync(oneMPath, 'utf8'));
-    const threeM    = aggregate(symbol, oneM.candles, 3);
+    const oneMPath   = path.join(SEED_DIR, `${symbol}_1m.json`);
+    const oneM       = JSON.parse(fs.readFileSync(oneMPath, 'utf8'));
+    const threeM     = aggregate(symbol, oneM.candles, 3);
     const threeMPath = path.join(SEED_DIR, `${symbol}_3m.json`);
     fs.writeFileSync(threeMPath, JSON.stringify(threeM, null, 2));
-    console.log(`  ✓ ${threeM.candles.length} candles  →  ${threeMPath}`);
-
-    console.log();
+    console.log(`[seedFetch] ${symbol} 3m  ${threeM.candles.length} candles → ${threeMPath} (derived)`);
   }
-
-  console.log('Seed fetch complete.');
 }
 
-main().catch(err => {
-  console.error('\nSeed fetch failed:', err.message);
-  process.exit(1);
-});
+// ---------------------------------------------------------------------------
+// Module export + CLI entry point
+// ---------------------------------------------------------------------------
+
+module.exports = { fetchAll };
+
+// CLI: "node server/data/seedFetch.js" still works as before
+if (require.main === module) {
+  fetchAll()
+    .then(() => console.log('\nSeed fetch complete.'))
+    .catch(err => {
+      console.error('\nSeed fetch failed:', err.message);
+      process.exit(1);
+    });
+}
