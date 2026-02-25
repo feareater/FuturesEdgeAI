@@ -146,22 +146,28 @@
 
   refreshBtn.addEventListener('click', async () => {
     refreshBtn.disabled = true;
-    refreshBtn.textContent = '↻ Scanning…';
-    statusEl.textContent = 'Scanning…';
+    refreshBtn.textContent = '✦ Analyzing…';
+    statusEl.textContent = 'Calling AI…';
     statusEl.className = 'commentary-status loading';
     try {
-      // Trigger a full server rescan which will regenerate commentary
-      const res = await fetch('/api/scan');
-      if (!res.ok) throw new Error(`/api/scan ${res.status}`);
-      // Commentary arrives via WebSocket; also poll immediately
-      setTimeout(load, 2000);
+      // Call AI only for alerts that don't already have commentary — avoids redundant API calls.
+      const res = await fetch('/api/commentary/refresh', { method: 'POST' });
+      if (!res.ok) throw new Error(`/api/commentary/refresh ${res.status}`);
+      const { count, totalAnalyzed } = await res.json();
+      console.log(`[commentary] Refresh: ${count} new analysis runs, ${totalAnalyzed} total with commentary`);
+      if (count > 0) {
+        await load();
+      } else {
+        statusEl.textContent = 'Up to date';
+        statusEl.className = 'commentary-status live';
+      }
     } catch (err) {
-      console.error('[commentary] Refresh failed:', err.message);
+      console.error('[commentary] AI refresh failed:', err.message);
       statusEl.textContent = 'Error';
       statusEl.className = 'commentary-status error';
     } finally {
       refreshBtn.disabled = false;
-      refreshBtn.textContent = '↻ Refresh';
+      refreshBtn.textContent = '✦ AI Analysis';
     }
   });
 

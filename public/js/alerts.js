@@ -207,6 +207,10 @@
     document.addEventListener('chartViewChange', (e) => {
       activeSymbol = e.detail.symbol;
       activeTf     = e.detail.tf;
+      // Immediately sync markers — this clears stale markers (old symbol/TF alerts
+      // won't match the new filter and produce an empty alertMarkers array).
+      // fetchAndRender will re-populate with the correct alerts for the new view.
+      _syncChartMarkers();
       fetchAndRender();
     });
 
@@ -401,8 +405,14 @@
     const isTaken = takenTrades.has(`${symbol}:${timeframe}:${setup.type}:${setup.time}`);
     const aiKey   = `${symbol}:${timeframe}:${setup.type}:${setup.time}`;
 
+    // Border class: reflects outcome for resolved trades (won=green, lost=red);
+    // direction class still drives the arrow color inside the card.
+    const borderClass = setup.outcome === 'won'  ? 'outcome-won'
+                      : setup.outcome === 'lost' ? 'outcome-lost'
+                      :                            '';
+
     const card = document.createElement('div');
-    card.className = `alert-card ${dirClass}${suppressed ? ' suppressed' : ''}${overBudget ? ' over-budget' : ''}`;
+    card.className = `alert-card ${dirClass}${borderClass ? ` ${borderClass}` : ''}${suppressed ? ' suppressed' : ''}${overBudget ? ' over-budget' : ''}`;
     card.dataset.alertKey = aiKey;  // used by chart marker click handler
 
     card.innerHTML = [

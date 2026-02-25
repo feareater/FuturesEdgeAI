@@ -193,10 +193,10 @@
       });
     });
 
-    // Alert marker click — find alerts at the clicked bar time, dispatch to alerts.js
+    // Alert marker click — find alerts whose snapped time matches the clicked bar.
     chart.subscribeClick(param => {
       if (!param.time || !alertMarkersData.length) return;
-      const hit = alertMarkersData.filter(a => a.setup.time === param.time);
+      const hit = alertMarkersData.filter(a => _snapToCandle(a.setup.time) === param.time);
       if (hit.length === 0) return;
       document.dispatchEvent(new CustomEvent('chartMarkerClick', {
         detail: { alerts: hit },
@@ -207,6 +207,12 @@
   // ── Data loading ───────────────────────────────────────────────────────────
   async function loadData(symbol, tf) {
     console.log(`[chart] Loading ${symbol} ${tf}`);
+
+    // Clear alert markers before loading new data — prevents stale markers from a
+    // different symbol/TF being passed to TradingView (which errors on unknown bar times).
+    // alerts.js will re-populate via setAlertMarkers() after chartViewChange fires.
+    alertMarkers     = [];
+    alertMarkersData = [];
 
     const [candleRes, indRes, tlRes] = await Promise.all([
       fetch(`/api/candles?symbol=${symbol}&timeframe=${tf}`),
@@ -568,16 +574,18 @@
       );
       alertMarkersData = relevant;
       alertMarkers = relevant.map(a => {
-        const isBull  = a.setup.direction === 'bullish';
+        const isBull   = a.setup.direction === 'bullish';
         const takenKey = `${a.symbol}:${a.timeframe}:${a.setup.type}:${a.setup.time}`;
-        const isTaken = typeof window._isTaken === 'function' && window._isTaken(takenKey);
+        const isTaken  = typeof window._isTaken === 'function' && window._isTaken(takenKey);
         const color = isTaken                      ? '#ffb300'
                     : a.setup.outcome === 'won'    ? '#26a69a'
                     : a.setup.outcome === 'lost'   ? '#ef5350'
                     :                                '#2196f3';
         const label = a.setup.type === 'zone_rejection' ? 'ZR' : 'PDH';
+        // Snap to the nearest bar time so TradingView can render the marker correctly.
+        const snappedTime = _snapToCandle(a.setup.time);
         return {
-          time:     a.setup.time,
+          time:     snappedTime,
           position: isBull ? 'belowBar' : 'aboveBar',
           color,
           shape:    isBull ? 'arrowUp' : 'arrowDown',

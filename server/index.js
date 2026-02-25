@@ -263,6 +263,31 @@ app.post('/api/commentary/single', async (req, res) => {
   }
 });
 
+// POST /api/commentary/refresh — manually trigger AI commentary for top unanalyzed alerts.
+// Skips any alert that already has commentary to avoid redundant API calls.
+app.post('/api/commentary/refresh', async (_req, res) => {
+  try {
+    await _refreshCommentary();
+    const analyzed = alertCache.filter(a => a.commentary).length;
+    res.json({ status: 'ok', generated: commentaryCache.generated, count: commentaryCache.items.length, totalAnalyzed: analyzed });
+    console.log(`[ai] Manual commentary refresh complete — ${commentaryCache.items.length} new, ${analyzed} total with commentary`);
+  } catch (err) {
+    console.error('[api] /commentary/refresh error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/export — download all alerts + trades as a JSON file
+app.get('/api/export', (_req, res) => {
+  const date = new Date().toISOString().slice(0, 10);
+  res.setHeader('Content-Disposition', `attachment; filename="futuresedge-${date}.json"`);
+  res.json({
+    exported:  new Date().toISOString(),
+    alerts:    alertCache,
+    trades:    tradeLog,
+  });
+});
+
 // GET /api/trades — return all saved trade log entries
 app.get('/api/trades', (_req, res) => {
   res.json({ trades: tradeLog });
@@ -444,22 +469,20 @@ async function runScan() {
   // Persist alert cache immediately after scan
   saveAlertCache(alertCache);
 
-  // ── Generate AI commentary for the top N unsuppressed alerts ─────────────
-  // Run async after scan completes so the scan response isn't blocked.
-  _refreshCommentary().catch(err => console.error('[ai] Commentary error:', err.message));
-
   return newCount;
 }
 
 /**
- * Pick the top COMMENTARY_TOP_N unsuppressed alerts by confidence,
- * call Claude, update the cache, and broadcast to connected clients.
+ * Generate AI commentary for the top COMMENTARY_TOP_N unsuppressed alerts
+ * that don't already have commentary. Skips already-analyzed alerts to avoid
+ * unnecessary API calls. Called only when the user explicitly clicks "AI Analysis".
  */
 async function _refreshCommentary() {
   // Apply trade filter to get suppressed flags, then take top N unsuppressed
+  // that haven't been analyzed yet — skip anything with existing commentary.
   const filtered = _applyTradeFilter(alertCache);
   const top = filtered
-    .filter(a => !a.suppressed)
+    .filter(a => !a.suppressed && !a.commentary)
     .sort((a, b) => b.setup.confidence - a.setup.confidence)
     .slice(0, COMMENTARY_TOP_N);
 

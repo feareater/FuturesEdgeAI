@@ -151,7 +151,8 @@ html, body {
 /* ── AI Analysis nav link ────────────────────────────────────────────────── */
 
 #docs-nav-link,
-#ai-nav-link {
+#ai-nav-link,
+#export-nav-link {
   margin-left: 16px;
   padding: 4px 12px;
   background: rgba(33,150,243,0.12);
@@ -165,7 +166,8 @@ html, body {
   transition: background 0.15s;
 }
 #docs-nav-link:hover,
-#ai-nav-link:hover { background: rgba(33,150,243,0.22); }
+#ai-nav-link:hover,
+#export-nav-link:hover { background: rgba(33,150,243,0.22); }
 
 /* ── Last price ─────────────────────────────────────────────────────────── */
 
@@ -417,6 +419,10 @@ html, body {
 
 .alert-card.bull { border-left-color: var(--bull); }
 .alert-card.bear { border-left-color: var(--bear); }
+
+/* Outcome overrides direction border for resolved trades */
+.alert-card.outcome-won  { border-left-color: var(--bull) !important; }
+.alert-card.outcome-lost { border-left-color: var(--bear) !important; }
 
 .alert-header {
   display: flex;
@@ -862,8 +868,9 @@ html, body {
   #ohlc-display  { display: none; }
   #session-badge { display: none; }
   #data-age      { display: none; }
-  #docs-nav-link { display: none; }
-  #ai-nav-link   { display: none; }
+  #docs-nav-link    { display: none; }
+  #ai-nav-link      { display: none; }
+  #export-nav-link  { display: none; }
 
   /* ── Main area: column so chart fills width ──────────────────────────── */
 
