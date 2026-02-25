@@ -236,6 +236,39 @@ Default view (Reset to Default): all layers ON.
 
 ---
 
+## Git Workflow
+
+Repository: `https://github.com/feareater/FuturesEdgeAI`
+Default branch: `main` (always working, pushable)
+
+**Feature branch model:**
+```
+main                    ← stable, always working
+feature/<short-name>    ← active development
+```
+
+**Starting new work:**
+```bash
+git checkout main
+git pull origin main
+git checkout -b feature/ironbeam-live-data
+```
+
+**Finishing work:**
+```bash
+git checkout main
+git merge feature/ironbeam-live-data
+git push origin main
+git branch -d feature/ironbeam-live-data
+```
+
+- Commit at logical checkpoints (not just at the end)
+- Keep commits focused — one concern per commit
+- Push `main` to GitHub after every completed feature
+- Never commit `.env`, `server.log`, or `data/seed/*.json`
+
+---
+
 ## Coding Rules
 
 - **JavaScript only** — no Python, no TypeScript (keep it simple for now)
