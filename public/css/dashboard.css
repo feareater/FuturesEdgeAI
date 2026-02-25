@@ -150,6 +150,7 @@ html, body {
 
 /* ── AI Analysis nav link ────────────────────────────────────────────────── */
 
+#docs-nav-link,
 #ai-nav-link {
   margin-left: 16px;
   padding: 4px 12px;
@@ -163,6 +164,7 @@ html, body {
   white-space: nowrap;
   transition: background 0.15s;
 }
+#docs-nav-link:hover,
 #ai-nav-link:hover { background: rgba(33,150,243,0.22); }
 
 /* ── Last price ─────────────────────────────────────────────────────────── */

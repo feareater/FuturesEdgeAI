@@ -1,0 +1,851 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FuturesEdge AI — Setup Guide</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #131722;
+      --bg-panel: #1e222d;
+      --bg-card:  #181b26;
+      --border:   #2a2e39;
+      --text:     #d1d4dc;
+      --dim:      #787b86;
+      --accent:   #2196f3;
+      --bull:     #26a69a;
+      --bear:     #ef5350;
+      --amber:    #ffb300;
+      --purple:   #ab47bc;
+    }
+
+    html, body { height: 100%; background: var(--bg); color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 14px; line-height: 1.6; }
+
+    /* ── Top bar ─────────────────────────────────────────────────────── */
+    #topbar {
+      position: fixed; top: 0; left: 0; right: 0; height: 48px; z-index: 100;
+      background: var(--bg-panel); border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; padding: 0 24px; gap: 24px;
+    }
+    #topbar .brand { font-size: 14px; font-weight: 700; color: var(--accent); }
+    #topbar .sep   { color: var(--border); }
+    #topbar .title { color: var(--text); font-size: 13px; }
+    #topbar a      { margin-left: auto; color: var(--accent); text-decoration: none;
+                     font-size: 12px; padding: 4px 12px; border: 1px solid rgba(33,150,243,0.3);
+                     border-radius: 3px; background: rgba(33,150,243,0.08); }
+    #topbar a:hover { background: rgba(33,150,243,0.18); }
+
+    /* ── Layout ──────────────────────────────────────────────────────── */
+    #layout { display: flex; padding-top: 48px; min-height: 100vh; }
+
+    /* ── Sidebar ─────────────────────────────────────────────────────── */
+    #sidebar {
+      width: 220px; flex-shrink: 0; position: fixed; top: 48px; bottom: 0;
+      background: var(--bg-panel); border-right: 1px solid var(--border);
+      overflow-y: auto; padding: 20px 0;
+    }
+    #sidebar .nav-section { font-size: 9px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.8px; color: var(--dim); padding: 12px 18px 4px; }
+    #sidebar a {
+      display: block; padding: 6px 18px; color: var(--dim); text-decoration: none;
+      font-size: 12px; border-left: 2px solid transparent; transition: all 0.12s;
+    }
+    #sidebar a:hover  { color: var(--text); background: rgba(255,255,255,0.03); }
+    #sidebar a.active { color: var(--accent); border-left-color: var(--accent);
+                        background: rgba(33,150,243,0.06); }
+
+    /* ── Main content ────────────────────────────────────────────────── */
+    #content { margin-left: 220px; padding: 40px 48px; max-width: 900px; }
+
+    section { margin-bottom: 60px; scroll-margin-top: 64px; }
+
+    h1 { font-size: 28px; font-weight: 700; margin-bottom: 8px; color: var(--text); }
+    h2 { font-size: 20px; font-weight: 700; color: var(--text); margin-bottom: 16px;
+         padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+    h3 { font-size: 15px; font-weight: 600; color: var(--text); margin: 20px 0 8px; }
+    p  { color: var(--text); margin-bottom: 12px; line-height: 1.7; }
+    .lead { font-size: 15px; color: var(--dim); margin-bottom: 24px; line-height: 1.7; }
+
+    /* ── Diagram container ───────────────────────────────────────────── */
+    .diagram {
+      background: #0d0f1a; border: 1px solid var(--border); border-radius: 6px;
+      padding: 20px; margin: 24px 0; overflow-x: auto;
+    }
+    .diagram svg { display: block; width: 100%; max-width: 480px; margin: 0 auto; }
+    .diagram-caption { text-align: center; font-size: 11px; color: var(--dim);
+                        margin-top: 10px; }
+
+    /* ── Info cards ──────────────────────────────────────────────────── */
+    .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+             gap: 16px; margin: 20px 0; }
+    .card {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px;
+      padding: 16px; border-top: 3px solid var(--accent);
+    }
+    .card.bull  { border-top-color: var(--bull); }
+    .card.bear  { border-top-color: var(--bear); }
+    .card.amber { border-top-color: var(--amber); }
+    .card h4 { font-size: 13px; font-weight: 700; margin-bottom: 8px; }
+    .card p  { font-size: 12px; color: var(--dim); margin: 0; line-height: 1.5; }
+
+    /* ── Checklist ───────────────────────────────────────────────────── */
+    .checklist { list-style: none; margin: 12px 0 20px; }
+    .checklist li {
+      padding: 6px 0 6px 26px; position: relative; font-size: 13px;
+      color: var(--text); border-bottom: 1px solid rgba(255,255,255,0.04);
+    }
+    .checklist li::before { content: ''; position: absolute; left: 4px; top: 12px;
+      width: 10px; height: 10px; border-radius: 50%; background: var(--border); }
+    .checklist.green li::before { background: var(--bull); }
+    .checklist.red   li::before { background: var(--bear); }
+    .checklist.amber li::before { background: var(--amber); }
+
+    /* ── Alert example ───────────────────────────────────────────────── */
+    .alert-mock {
+      background: rgba(255,255,255,0.02); border: 1px solid var(--border);
+      border-left: 3px solid var(--bull); border-radius: 4px;
+      padding: 10px 14px; margin: 16px 0; font-size: 12px;
+    }
+    .alert-mock.bear { border-left-color: var(--bear); }
+    .alert-mock-header { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+    .tag { background: var(--border); padding: 1px 5px; border-radius: 2px;
+           font-size: 10px; color: var(--text); }
+    .conf { color: var(--accent); font-weight: 700; }
+    .bull-col { color: var(--bull); font-weight: 700; }
+    .bear-col { color: var(--bear); font-weight: 700; }
+
+    /* ── Callout boxes ───────────────────────────────────────────────── */
+    .callout {
+      border-left: 3px solid var(--accent); background: rgba(33,150,243,0.06);
+      padding: 12px 16px; border-radius: 0 4px 4px 0; margin: 16px 0;
+    }
+    .callout.warning { border-left-color: var(--amber); background: rgba(255,179,0,0.06); }
+    .callout.danger  { border-left-color: var(--bear);  background: rgba(239,83,80,0.06); }
+    .callout p { margin: 0; font-size: 13px; }
+
+    /* ── Phase badge ─────────────────────────────────────────────────── */
+    .setup-badge {
+      display: inline-block; font-size: 10px; font-weight: 700; padding: 2px 8px;
+      border-radius: 10px; text-transform: uppercase; letter-spacing: 0.5px;
+      margin-bottom: 12px;
+    }
+    .setup-badge.s1 { background: rgba(33,150,243,0.15); color: var(--accent); }
+    .setup-badge.s2 { background: rgba(38,166,154,0.15); color: var(--bull); }
+    .setup-badge.s3 { background: rgba(255,179,0,0.15);  color: var(--amber); }
+
+    /* ── Two-col layout ──────────────────────────────────────────────── */
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin: 16px 0; }
+    @media (max-width: 680px) { .two-col { grid-template-columns: 1fr; } }
+
+    hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+  </style>
+</head>
+<body>
+
+<!-- ── Top bar ───────────────────────────────────────────────────────────── -->
+<div id="topbar">
+  <span class="brand">FuturesEdge AI</span>
+  <span class="sep">›</span>
+  <span class="title">Setup Guide</span>
+  <a href="/">← Dashboard</a>
+</div>
+
+<!-- ── Layout ────────────────────────────────────────────────────────────── -->
+<div id="layout">
+
+  <!-- Sidebar -->
+  <nav id="sidebar">
+    <div class="nav-section">Getting Started</div>
+    <a href="#intro">Introduction</a>
+    <a href="#candlesticks">Reading Candlesticks</a>
+    <a href="#key-concepts">Key Concepts</a>
+
+    <div class="nav-section">The Three Setups</div>
+    <a href="#sweep">1 · Liquidity Sweep</a>
+    <a href="#zone">2 · Zone Rejection</a>
+    <a href="#bos">3 · BOS / CHoCH</a>
+
+    <div class="nav-section">Using the Dashboard</div>
+    <a href="#alerts">Reading the Alerts</a>
+    <a href="#risk">Risk Management</a>
+  </nav>
+
+  <!-- Main content -->
+  <main id="content">
+
+    <!-- ── Introduction ─────────────────────────────────────────────────── -->
+    <section id="intro">
+      <h1>Setup Guide</h1>
+      <p class="lead">This guide explains the three trade setup patterns that FuturesEdge AI
+        detects in real time — what they mean, what they look like on a chart, and how
+        to act on them. No experience required.</p>
+
+      <div class="cards">
+        <div class="card">
+          <h4>What FuturesEdge AI does</h4>
+          <p>Scans MNQ and MGC futures across five timeframes (1m–15m), detects
+          high-probability setups, and scores their quality from 0–100%.</p>
+        </div>
+        <div class="card amber">
+          <h4>What it does NOT do</h4>
+          <p>It never executes trades. It surfaces information to help you make
+          better decisions — the final call is always yours.</p>
+        </div>
+        <div class="card bull">
+          <h4>Three setup types</h4>
+          <p>Liquidity Sweep Reversal, Zone Rejection, and Break of
+          Structure / Change of Character. All three are explained below.</p>
+        </div>
+      </div>
+
+      <div class="callout">
+        <p><strong>How to use this guide:</strong> Read the candlestick basics first if
+        you're new to charts. Then study each setup. When an alert fires on the dashboard,
+        come back here to remind yourself what the pattern means and what confirms it.</p>
+      </div>
+    </section>
+
+    <!-- ── Candlestick Basics ────────────────────────────────────────────── -->
+    <section id="candlesticks">
+      <h2>Reading Candlesticks</h2>
+      <p>Every bar on the chart is a <strong>candlestick</strong> — a compact summary of
+        price action over one time period (1 minute, 5 minutes, etc.).</p>
+
+      <div class="diagram">
+        <svg viewBox="0 0 420 175" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <marker id="arr" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
+              <path d="M0,0 L6,3 L0,6 Z" fill="#787b86"/>
+            </marker>
+          </defs>
+          <!-- Bullish candle -->
+          <text x="90" y="18" fill="#26a69a" font-size="12" font-family="sans-serif"
+                text-anchor="middle" font-weight="700">BULLISH</text>
+          <!-- wick -->
+          <line x1="90" y1="28" x2="90" y2="155" stroke="#26a69a" stroke-width="2"/>
+          <!-- body: close higher than open -->
+          <rect x="72" y="65" width="36" height="55" fill="#26a69a" rx="1"/>
+          <!-- labels -->
+          <line x1="110" y1="28" x2="150" y2="28" stroke="#787b86" stroke-width="1"/>
+          <text x="155" y="32" fill="#787b86" font-size="11" font-family="sans-serif">High</text>
+          <line x1="110" y1="65" x2="150" y2="65" stroke="#787b86" stroke-width="1"/>
+          <text x="155" y="69" fill="#26a69a" font-size="11" font-family="sans-serif">Close (up)</text>
+          <line x1="110" y1="120" x2="150" y2="120" stroke="#787b86" stroke-width="1"/>
+          <text x="155" y="124" fill="#26a69a" font-size="11" font-family="sans-serif">Open</text>
+          <line x1="110" y1="155" x2="150" y2="155" stroke="#787b86" stroke-width="1"/>
+          <text x="155" y="159" fill="#787b86" font-size="11" font-family="sans-serif">Low</text>
+
+          <!-- Bearish candle -->
+          <text x="310" y="18" fill="#ef5350" font-size="12" font-family="sans-serif"
+                text-anchor="middle" font-weight="700">BEARISH</text>
+          <!-- wick -->
+          <line x1="310" y1="28" x2="310" y2="155" stroke="#ef5350" stroke-width="2"/>
+          <!-- body: close lower than open -->
+          <rect x="292" y="65" width="36" height="55" fill="#ef5350" rx="1"/>
+          <!-- labels left side -->
+          <line x1="292" y1="28" x2="252" y2="28" stroke="#787b86" stroke-width="1"/>
+          <text x="248" y="32" fill="#787b86" font-size="11" font-family="sans-serif"
+                text-anchor="end">High</text>
+          <line x1="292" y1="65" x2="252" y2="65" stroke="#787b86" stroke-width="1"/>
+          <text x="248" y="69" fill="#ef5350" font-size="11" font-family="sans-serif"
+                text-anchor="end">Open</text>
+          <line x1="292" y1="120" x2="252" y2="120" stroke="#787b86" stroke-width="1"/>
+          <text x="248" y="124" fill="#ef5350" font-size="11" font-family="sans-serif"
+                text-anchor="end">Close (down)</text>
+          <line x1="292" y1="155" x2="252" y2="155" stroke="#787b86" stroke-width="1"/>
+          <text x="248" y="159" fill="#787b86" font-size="11" font-family="sans-serif"
+                text-anchor="end">Low</text>
+        </svg>
+        <p class="diagram-caption">A green (bullish) candle closed higher than it opened.
+          A red (bearish) candle closed lower. The thin lines are "wicks" showing the
+          highest and lowest price reached during that period.</p>
+      </div>
+
+      <div class="two-col">
+        <div>
+          <h3>Body vs. Wick</h3>
+          <p>The <strong>body</strong> (the thick rectangle) shows where price opened
+          and closed. The <strong>wick</strong> (the thin line) shows the extremes reached
+          during the candle — but price didn't stay there.</p>
+          <p>A <strong>long wick</strong> with a small body is called a <em>hammer</em> or
+          <em>shooting star</em> — it means price was rejected at that level.</p>
+        </div>
+        <div>
+          <h3>Timeframes</h3>
+          <p>Each candle represents one time period. On the <strong>1-minute</strong> chart,
+          each candle = 1 minute. On the <strong>15-minute</strong> chart, each candle =
+          15 minutes.</p>
+          <p>Higher timeframes (15m) show the big picture. Lower timeframes (1m, 5m)
+          show the entry trigger. FuturesEdge AI monitors all five simultaneously.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Key Concepts ──────────────────────────────────────────────────── -->
+    <section id="key-concepts">
+      <h2>Key Concepts</h2>
+      <p>Before diving into the setups, here are the building blocks you'll see
+        referenced in every alert.</p>
+
+      <h3>Swing Highs and Swing Lows</h3>
+      <p>A <strong>swing high</strong> is a peak — a candle whose high is higher than the
+        candles on either side. A <strong>swing low</strong> is a valley. These are the
+        natural turning points in price and act as reference levels for every setup.</p>
+
+      <h3>Order Blocks (OB)</h3>
+      <p>An <strong>order block</strong> is the last opposing candle before a strong,
+        impulsive price move. For example, the last bearish candle before a big rally
+        upward. Institutional traders often leave large pending orders at these levels —
+        when price returns to them, it frequently reacts strongly. The system marks them
+        as <em>untested</em>, <em>tested</em>, or <em>mitigated</em>.</p>
+
+      <h3>Fair Value Gaps (FVG)</h3>
+      <p>A <strong>fair value gap</strong> is a three-candle sequence where price moves
+        so fast that a visible gap is left between candle 1's high and candle 3's low
+        (bullish FVG) or between candle 1's low and candle 3's high (bearish FVG). Markets
+        tend to return to fill these gaps before continuing. An <em>open</em> FVG means
+        price hasn't returned yet.</p>
+
+      <h3>Market Regime</h3>
+      <p>The system classifies each timeframe as either <strong>trend</strong> (price is
+        making consistent higher highs/lows or lower highs/lows) or <strong>range</strong>
+        (price is bouncing between support and resistance). Setups that align with the
+        regime score higher confidence.</p>
+
+      <div class="callout">
+        <p><strong>Multi-timeframe alignment:</strong> The best setups occur when the 15m
+        and 5m timeframes agree on direction. The system flags this as an alignment bonus
+        in the confidence score.</p>
+      </div>
+    </section>
+
+    <!-- ── Setup 1: Liquidity Sweep ─────────────────────────────────────── -->
+    <section id="sweep">
+      <span class="setup-badge s1">Setup 1</span>
+      <h2>Liquidity Sweep Reversal</h2>
+      <p><strong>Plain language:</strong> Price briefly spikes past a known swing high or
+        swing low — grabbing the stop-loss orders sitting just beyond it — then immediately
+        reverses direction and closes back inside the range. This spike is the "sweep."</p>
+      <p>Retail traders place their stops just above swing highs and just below swing lows.
+        Institutional players know this, and they briefly push price to those levels to
+        trigger a flood of orders, fill their own positions at better prices, and then
+        let price move the other direction.</p>
+
+      <!-- Bearish sweep diagram -->
+      <div class="diagram">
+        <svg viewBox="0 0 480 195" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <marker id="arrowD" markerWidth="7" markerHeight="7" refX="3.5" refY="3.5" orient="auto">
+              <path d="M0,0 L7,3.5 L0,7 Z" fill="#ef5350"/>
+            </marker>
+            <marker id="arrowA" markerWidth="7" markerHeight="7" refX="3.5" refY="3.5" orient="auto">
+              <path d="M0,0 L7,3.5 L0,7 Z" fill="#2196f3"/>
+            </marker>
+          </defs>
+
+          <!-- Swing high reference line -->
+          <line x1="10" y1="72" x2="295" y2="72" stroke="#ffb300" stroke-width="1.2"
+                stroke-dasharray="6,4" opacity="0.9"/>
+          <text x="300" y="76" fill="#ffb300" font-size="10" font-family="sans-serif">Swing High</text>
+          <text x="300" y="88" fill="#ffb300" font-size="9" font-family="sans-serif"
+                opacity="0.7">(stop cluster)</text>
+
+          <!-- Candle 1: bull x=18 -->
+          <line x1="32" y1="90" x2="32" y2="135" stroke="#26a69a" stroke-width="1.5"/>
+          <rect x="18" y="100" width="28" height="20" fill="#26a69a" rx="1"/>
+
+          <!-- Candle 2: bear x=60 -->
+          <line x1="74" y1="94" x2="74" y2="133" stroke="#ef5350" stroke-width="1.5"/>
+          <rect x="60" y="100" width="28" height="18" fill="#ef5350" rx="1"/>
+
+          <!-- Candle 3: bull x=102 -->
+          <line x1="116" y1="88" x2="116" y2="130" stroke="#26a69a" stroke-width="1.5"/>
+          <rect x="102" y="97" width="28" height="20" fill="#26a69a" rx="1"/>
+
+          <!-- Candle 4: small bear x=144 -->
+          <line x1="158" y1="91" x2="158" y2="128" stroke="#ef5350" stroke-width="1.5"/>
+          <rect x="144" y="100" width="28" height="15" fill="#ef5350" rx="1"/>
+
+          <!-- Candle 5: SWEEP x=186 — amber, huge upper wick, closes back below line -->
+          <line x1="200" y1="36" x2="200" y2="130" stroke="#ffb300" stroke-width="2"/>
+          <rect x="186" y="108" width="28" height="18" fill="#ffb300" rx="1"/>
+          <!-- Sweep label -->
+          <text x="220" y="42" fill="#ffb300" font-size="11" font-family="sans-serif"
+                font-weight="700">↑ Sweep!</text>
+          <text x="220" y="55" fill="#ffb300" font-size="9" font-family="sans-serif"
+                opacity="0.8">Stops triggered</text>
+
+          <!-- Candle 6: Entry — strong bear x=228 -->
+          <line x1="242" y1="104" x2="242" y2="160" stroke="#ef5350" stroke-width="2"/>
+          <rect x="228" y="107" width="28" height="40" fill="#ef5350" rx="1"/>
+
+          <!-- Entry annotation -->
+          <rect x="224" y="101" width="36" height="10" fill="rgba(33,150,243,0.25)"
+                stroke="#2196f3" stroke-width="1" rx="1"/>
+          <line x1="264" y1="106" x2="295" y2="106" stroke="#2196f3" stroke-width="1"
+                marker-end="url(#arrowA)" stroke-dasharray="3,2"/>
+          <text x="300" y="110" fill="#2196f3" font-size="10" font-family="sans-serif"
+                font-weight="600">Entry</text>
+
+          <!-- Candle 7: follow-through x=270 -->
+          <line x1="284" y1="145" x2="284" y2="168" stroke="#ef5350" stroke-width="1.5"/>
+          <rect x="270" y="147" width="28" height="17" fill="#ef5350" rx="1"/>
+
+          <!-- Candle 8: x=312 -->
+          <line x1="326" y1="160" x2="326" y2="180" stroke="#ef5350" stroke-width="1.5"/>
+          <rect x="312" y="162" width="28" height="14" fill="#ef5350" rx="1"/>
+
+          <!-- Direction arrow -->
+          <path d="M420,85 L420,175" stroke="#ef5350" stroke-width="2"
+                marker-end="url(#arrowD)"/>
+          <text x="430" y="135" fill="#ef5350" font-size="10" font-family="sans-serif"
+                font-weight="700" writing-mode="tb">SHORT</text>
+        </svg>
+        <p class="diagram-caption">Bearish sweep: price spikes above the swing high (amber candle),
+          triggers stops, then reverses sharply. Entry on the next bearish candle.</p>
+      </div>
+
+      <div class="two-col">
+        <div>
+          <h3>What to look for (Bearish)</h3>
+          <ul class="checklist green">
+            <li>Clear swing high visible on chart</li>
+            <li>Price wicks above that high (even briefly)</li>
+            <li>Closes back below the swing high in same candle</li>
+            <li>Next candle confirms with bearish body</li>
+            <li>15m or 5m regime is bearish or neutral</li>
+          </ul>
+        </div>
+        <div>
+          <h3>What to look for (Bullish)</h3>
+          <ul class="checklist green">
+            <li>Clear swing low visible on chart</li>
+            <li>Price wicks below that low (stop run)</li>
+            <li>Closes back above the swing low</li>
+            <li>Next candle confirms with bullish body</li>
+            <li>Demand zone or FVG nearby adds confidence</li>
+          </ul>
+        </div>
+      </div>
+
+      <h3>What invalidates this setup</h3>
+      <ul class="checklist red">
+        <li>Price does not close back inside the range after the sweep</li>
+        <li>Multiple candles close beyond the swing level (breakout, not sweep)</li>
+        <li>The stop-loss level is breached before entry is triggered</li>
+      </ul>
+
+      <div class="callout warning">
+        <p><strong>Key insight:</strong> The sweep candle itself is NOT the entry. Wait for
+          the confirmation candle that closes in the direction of the reversal. Chasing
+          the sweep candle is a common mistake.</p>
+      </div>
+    </section>
+
+    <!-- ── Setup 2: Zone Rejection ───────────────────────────────────────── -->
+    <section id="zone">
+      <span class="setup-badge s2">Setup 2</span>
+      <h2>Supply / Demand Zone Rejection</h2>
+      <p><strong>Plain language:</strong> Price enters a previously identified area where
+        large institutional orders were placed (an Order Block or Fair Value Gap), then
+        shows a clear rejection — a candle with a long wick pointing into the zone and a
+        small body closing back outside it.</p>
+      <p>These zones represent levels where big buyers (demand) or big sellers (supply)
+        previously stepped in. When price returns to the same level, those same institutions
+        often re-enter, causing a sharp reaction.</p>
+
+      <div class="diagram">
+        <svg viewBox="0 0 480 200" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <marker id="arrowU" markerWidth="7" markerHeight="7" refX="3.5" refY="3.5" orient="auto">
+              <path d="M0,0 L7,3.5 L0,7 Z" fill="#26a69a"/>
+            </marker>
+          </defs>
+
+          <!-- Demand zone (Order Block) shaded rectangle -->
+          <rect x="10" y="130" width="360" height="35" fill="rgba(38,166,154,0.12)"
+                stroke="#26a69a" stroke-width="1" stroke-dasharray="4,3" rx="2"/>
+          <text x="16" y="144" fill="#26a69a" font-size="10" font-family="sans-serif"
+                font-weight="600">Demand Zone (Order Block)</text>
+          <text x="16" y="158" fill="#26a69a" font-size="9" font-family="sans-serif"
+                opacity="0.7">Institutional buy orders clustered here</text>
+
+          <!-- Prior context candles (trending down into zone) -->
+          <!-- Candle 1: bear x=18, up high -->
+          <line x1="32" y1="25" x2="32" y2="70" stroke="#ef5350" stroke-width="1.5"/>
+          <rect x="18" y="28" width="28" height="28" fill="#ef5350" rx="1"/>
+
+          <!-- Candle 2: bear x=60 -->
+          <line x1="74" y1="52" x2="74" y2="92" stroke="#ef5350" stroke-width="1.5"/>
+          <rect x="60" y="55" width="28" height="24" fill="#ef5350" rx="1"/>
+
+          <!-- Candle 3: bear x=102 -->
+          <line x1="116" y1="74" x2="116" y2="112" stroke="#ef5350" stroke-width="1.5"/>
+          <rect x="102" y="77" width="28" height="22" fill="#ef5350" rx="1"/>
+
+          <!-- Candle 4: enters zone x=144 -->
+          <line x1="158" y1="96" x2="158" y2="148" stroke="#ef5350" stroke-width="1.5"/>
+          <rect x="144" y="100" width="28" height="32" fill="#ef5350" rx="1"/>
+
+          <!-- Candle 5: REJECTION (hammer) x=186 — long lower wick, tiny body at top of zone -->
+          <line x1="200" y1="110" x2="200" y2="162" stroke="#26a69a" stroke-width="2"/>
+          <rect x="186" y="112" width="28" height="12" fill="#26a69a" rx="1"/>
+          <!-- Label -->
+          <text x="220" y="125" fill="#26a69a" font-size="11" font-family="sans-serif"
+                font-weight="700">Rejection!</text>
+          <text x="220" y="138" fill="#26a69a" font-size="9" font-family="sans-serif"
+                opacity="0.8">Long wick → buyers stepped in</text>
+
+          <!-- Candle 6: Entry — strong bull x=228 -->
+          <line x1="242" y1="96" x2="242" y2="132" stroke="#26a69a" stroke-width="2"/>
+          <rect x="228" y="98" width="28" height="30" fill="#26a69a" rx="1"/>
+
+          <!-- Entry zone highlight -->
+          <rect x="224" y="123" width="36" height="10" fill="rgba(33,150,243,0.25)"
+                stroke="#2196f3" stroke-width="1" rx="1"/>
+          <line x1="264" y1="128" x2="298" y2="128" stroke="#2196f3" stroke-width="1"
+                stroke-dasharray="3,2"/>
+          <text x="302" y="132" fill="#2196f3" font-size="10" font-family="sans-serif"
+                font-weight="600">Entry</text>
+
+          <!-- Candle 7: x=270 -->
+          <line x1="284" y1="72" x2="284" y2="104" stroke="#26a69a" stroke-width="1.5"/>
+          <rect x="270" y="75" width="28" height="26" fill="#26a69a" rx="1"/>
+
+          <!-- Candle 8: x=312 -->
+          <line x1="326" y1="48" x2="326" y2="80" stroke="#26a69a" stroke-width="1.5"/>
+          <rect x="312" y="50" width="28" height="26" fill="#26a69a" rx="1"/>
+
+          <!-- Up arrow -->
+          <path d="M420,165 L420,75" stroke="#26a69a" stroke-width="2"
+                marker-end="url(#arrowU)"/>
+          <text x="430" y="130" fill="#26a69a" font-size="10" font-family="sans-serif"
+                font-weight="700" writing-mode="tb">LONG</text>
+        </svg>
+        <p class="diagram-caption">Bullish zone rejection: price drops into a demand zone, produces a
+          hammer candle (long lower wick), then rallies. Entry at the close of the confirmation candle.</p>
+      </div>
+
+      <h3>The rejection candle — what it looks like</h3>
+      <div class="cards">
+        <div class="card bull">
+          <h4>Bullish rejection (demand zone)</h4>
+          <p>Long lower wick pointing down into the zone. Small body at the top.
+             Closes above the zone's upper boundary. Called a <em>hammer</em>.</p>
+        </div>
+        <div class="card bear">
+          <h4>Bearish rejection (supply zone)</h4>
+          <p>Long upper wick pointing up into the zone. Small body at the bottom.
+             Closes below the zone's lower boundary. Called a <em>shooting star</em>.</p>
+        </div>
+      </div>
+
+      <h3>What to look for</h3>
+      <ul class="checklist green">
+        <li>Order Block or FVG zone clearly identified on the chart</li>
+        <li>Price enters the zone (wick or body)</li>
+        <li>Rejection candle has wick ≥ 2× body length into the zone</li>
+        <li>Body closes back outside the zone</li>
+        <li>Next candle moves away from the zone (confirmation)</li>
+        <li>Higher-timeframe regime agrees with direction</li>
+      </ul>
+
+      <div class="callout warning">
+        <p><strong>Zone quality matters:</strong> Order blocks that caused a strong, fast
+          impulsive move away from them are higher quality than weak reactions. The system
+          scores OB quality automatically and includes it in the confidence score.</p>
+      </div>
+    </section>
+
+    <!-- ── Setup 3: BOS / CHoCH ──────────────────────────────────────────── -->
+    <section id="bos">
+      <span class="setup-badge s3">Setup 3</span>
+      <h2>Break of Structure &amp; Change of Character</h2>
+      <p><strong>Plain language:</strong> In a trending market, price makes a series of
+        higher highs and higher lows (uptrend) or lower highs and lower lows (downtrend).
+        A <strong>Break of Structure (BOS)</strong> is when price closes beyond the last
+        significant swing point in the direction of the trend — confirming continuation.
+        A <strong>Change of Character (CHoCH)</strong> is when price closes beyond a swing
+        point in the <em>opposite</em> direction — signaling a potential trend reversal.</p>
+
+      <div class="diagram">
+        <svg viewBox="0 0 480 200" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <marker id="arrowBU" markerWidth="7" markerHeight="7" refX="3.5" refY="3.5" orient="auto">
+              <path d="M0,0 L7,3.5 L0,7 Z" fill="#26a69a"/>
+            </marker>
+          </defs>
+
+          <!-- BOS label -->
+          <text x="14" y="18" fill="#26a69a" font-size="12" font-family="sans-serif"
+                font-weight="700">BREAK OF STRUCTURE — Trend Continuation</text>
+
+          <!-- Uptrend: series of higher highs and higher lows -->
+          <!-- HL1: x=18 -->
+          <line x1="32" y1="148" x2="32" y2="178" stroke="#26a69a" stroke-width="1.5"/>
+          <rect x="18" y="152" width="28" height="20" fill="#26a69a" rx="1"/>
+          <!-- HH1: x=60 -->
+          <line x1="74" y1="118" x2="74" y2="158" stroke="#26a69a" stroke-width="1.5"/>
+          <rect x="60" y="122" width="28" height="28" fill="#26a69a" rx="1"/>
+          <!-- Prior HH level -->
+          <line x1="10" y1="118" x2="200" y2="118" stroke="#ffb300" stroke-width="1"
+                stroke-dasharray="5,4" opacity="0.6"/>
+
+          <!-- HL2: x=102 -->
+          <line x1="116" y1="138" x2="116" y2="162" stroke="#26a69a" stroke-width="1.5"/>
+          <rect x="102" y="141" width="28" height="16" fill="#26a69a" rx="1"/>
+
+          <!-- HH2 — breaks prior HH: x=144 -->
+          <line x1="158" y1="88" x2="158" y2="146" stroke="#26a69a" stroke-width="1.5"/>
+          <rect x="144" y="93" width="28" height="40" fill="#26a69a" rx="1"/>
+
+          <!-- BOS arrow + label -->
+          <line x1="158" y1="88" x2="158" y2="115" stroke="#26a69a" stroke-width="1.5"
+                stroke-dasharray="3,2"/>
+          <text x="168" y="108" fill="#26a69a" font-size="11" font-family="sans-serif"
+                font-weight="700">BOS ↑</text>
+          <text x="168" y="120" fill="#26a69a" font-size="9" font-family="sans-serif"
+                opacity="0.8">Closes above prior HH</text>
+
+          <!-- Continuation candles: x=186,228,270 -->
+          <line x1="200" y1="70" x2="200" y2="100" stroke="#26a69a" stroke-width="1.5"/>
+          <rect x="186" y="73" width="28" height="22" fill="#26a69a" rx="1"/>
+          <line x1="242" y1="50" x2="242" y2="80" stroke="#26a69a" stroke-width="1.5"/>
+          <rect x="228" y="54" width="28" height="22" fill="#26a69a" rx="1"/>
+          <line x1="284" y1="32" x2="284" y2="60" stroke="#26a69a" stroke-width="1.5"/>
+          <rect x="270" y="36" width="28" height="20" fill="#26a69a" rx="1"/>
+
+          <!-- Entry zone -->
+          <rect x="182" y="92" width="36" height="10" fill="rgba(33,150,243,0.25)"
+                stroke="#2196f3" stroke-width="1" rx="1"/>
+          <text x="224" y="100" fill="#2196f3" font-size="10" font-family="sans-serif">Entry</text>
+        </svg>
+        <p class="diagram-caption">BOS (bullish): price closes above the prior swing high, confirming
+          the uptrend continues. Entry at the close of the breakout candle or the next candle open.</p>
+      </div>
+
+      <div class="diagram">
+        <svg viewBox="0 0 480 200" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <marker id="arrowCD" markerWidth="7" markerHeight="7" refX="3.5" refY="3.5" orient="auto">
+              <path d="M0,0 L7,3.5 L0,7 Z" fill="#ef5350"/>
+            </marker>
+          </defs>
+
+          <!-- CHoCH label -->
+          <text x="14" y="18" fill="#ffb300" font-size="12" font-family="sans-serif"
+                font-weight="700">CHANGE OF CHARACTER — Reversal Warning</text>
+
+          <!-- Uptrend first: HL1, HH1, HL2 -->
+          <line x1="32" y1="145" x2="32" y2="175" stroke="#26a69a" stroke-width="1.5"/>
+          <rect x="18" y="148" width="28" height="22" fill="#26a69a" rx="1"/>
+          <line x1="74" y1="105" x2="74" y2="150" stroke="#26a69a" stroke-width="1.5"/>
+          <rect x="60" y="108" width="28" height="36" fill="#26a69a" rx="1"/>
+          <line x1="116" y1="125" x2="116" y2="155" stroke="#26a69a" stroke-width="1.5"/>
+          <rect x="102" y="128" width="28" height="22" fill="#26a69a" rx="1"/>
+
+          <!-- LH: lower high — bearish candle -->
+          <line x1="158" y1="112" x2="158" y2="148" stroke="#ef5350" stroke-width="1.5"/>
+          <rect x="144" y="116" width="28" height="24" fill="#ef5350" rx="1"/>
+          <text x="155" y="108" fill="#ffb300" font-size="9" font-family="sans-serif"
+                text-anchor="middle">Lower High</text>
+
+          <!-- Prior HL level (swing low) -->
+          <line x1="10" y1="148" x2="310" y2="148" stroke="#ffb300" stroke-width="1"
+                stroke-dasharray="5,4" opacity="0.7"/>
+          <text x="315" y="152" fill="#ffb300" font-size="9" font-family="sans-serif">Prior HL</text>
+
+          <!-- CHoCH candle: closes BELOW prior HL -->
+          <line x1="200" y1="128" x2="200" y2="178" stroke="#ef5350" stroke-width="2"/>
+          <rect x="186" y="132" width="28" height="40" fill="#ef5350" rx="1"/>
+
+          <!-- CHoCH label -->
+          <text x="220" y="148" fill="#ffb300" font-size="12" font-family="sans-serif"
+                font-weight="700">CHoCH!</text>
+          <text x="220" y="162" fill="#ffb300" font-size="9" font-family="sans-serif"
+                opacity="0.8">Closes below prior swing low</text>
+
+          <!-- Entry zone -->
+          <rect x="182" y="168" width="36" height="10" fill="rgba(33,150,243,0.25)"
+                stroke="#2196f3" stroke-width="1" rx="1"/>
+          <text x="222" y="176" fill="#2196f3" font-size="10" font-family="sans-serif">Entry</text>
+
+          <!-- Downtrend begins -->
+          <line x1="242" y1="158" x2="242" y2="190" stroke="#ef5350" stroke-width="1.5"/>
+          <rect x="228" y="160" width="28" height="26" fill="#ef5350" rx="1"/>
+          <line x1="284" y1="172" x2="284" y2="195" stroke="#ef5350" stroke-width="1.5"/>
+          <rect x="270" y="175" width="28" height="18" fill="#ef5350" rx="1"/>
+        </svg>
+        <p class="diagram-caption">CHoCH (bearish): price fails to make a new high (lower high), then
+          closes below the most recent swing low. This breaks the uptrend structure — a reversal is
+          starting.</p>
+      </div>
+
+      <h3>BOS vs. CHoCH — quick comparison</h3>
+      <div class="cards">
+        <div class="card bull">
+          <h4>BOS — Break of Structure</h4>
+          <p><em>Trend continuation.</em> Price closes beyond a swing point in the
+             same direction as the current trend. Use it to enter or add to a
+             position in the direction of the trend.</p>
+        </div>
+        <div class="card amber">
+          <h4>CHoCH — Change of Character</h4>
+          <p><em>Reversal warning.</em> Price closes beyond a swing point against
+             the current trend. Use it to anticipate a trend flip. Higher risk —
+             wait for confirmation before entering.</p>
+        </div>
+      </div>
+
+      <div class="callout warning">
+        <p><strong>CHoCH confirmation:</strong> A CHoCH alert alone is not enough to
+          enter. Wait for price to pull back and show a zone rejection or sweep setup
+          in the new direction. Jumping in immediately on a CHoCH is high risk.</p>
+      </div>
+    </section>
+
+    <!-- ── Reading the Alerts ────────────────────────────────────────────── -->
+    <section id="alerts">
+      <h2>Reading the Alert Feed</h2>
+      <p>Every setup detected by the system appears as a card in the right-hand alert
+        panel. Here's how to read one:</p>
+
+      <!-- Mock alert card -->
+      <div class="alert-mock">
+        <div class="alert-mock-header">
+          <strong>MNQ</strong>
+          <span class="tag" style="color:#787b86;font-size:10px">5m</span>
+          <span class="tag">Zone Rej</span>
+          <span class="bull-col">▲</span>
+        </div>
+        <div style="font-size:11px;color:#787b86;margin-bottom:6px">
+          Zone rejection at demand — bullish wick, trend aligned · 15m stack
+        </div>
+        <div style="font-size:10px;color:#d1d4dc;margin-bottom:6px">
+          <span style="color:#787b86">Entry</span> 21405.25 &nbsp;
+          <span style="color:#ef9a9a">SL</span> <span style="color:#ef5350">21388.50</span> &nbsp;
+          <span style="color:#80cbc4">TP</span> <span style="color:#26a69a">21438.00</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;font-size:10px">
+          <span style="color:var(--accent);font-weight:700">82%</span>
+          <span style="color:#26a69a;font-weight:600">○ Open</span>
+          <span style="color:#787b86">$160</span>
+          <span style="margin-left:auto;color:#787b86">2:32 PM MT · 8m</span>
+        </div>
+      </div>
+
+      <div class="cards">
+        <div class="card">
+          <h4>Confidence % (82%)</h4>
+          <p>A composite score 0–100 based on: setup quality, body/wick ratio, regime
+          alignment, IOF zone confluence, and multi-timeframe stack. Higher = better.</p>
+        </div>
+        <div class="card">
+          <h4>Entry / SL / TP</h4>
+          <p>The system calculates entry at the setup level, stop-loss below/above
+          the invalidation point, and take-profit using your R:R ratio setting.</p>
+        </div>
+        <div class="card">
+          <h4>Outcome badge</h4>
+          <p><strong style="color:#26a69a">○ Open</strong> — trade still running.
+             <strong style="color:#26a69a">✓ WON</strong> — TP hit.
+             <strong style="color:#ef5350">✗ LOST</strong> — SL hit.</p>
+        </div>
+        <div class="card amber">
+          <h4>✦ AI button</h4>
+          <p>Click to request a plain-language AI commentary explaining the setup
+          quality, what to watch for, and where it's invalidated.</p>
+        </div>
+      </div>
+
+      <h3>Score breakdown tags</h3>
+      <p>Below the rationale line you may see small colored tags: <code>+R</code>
+        (regime bonus), <code>+A</code> (alignment bonus), <code>+IOF</code>
+        (IOF zone confluence), <code>+TFS</code> (multi-timeframe stack). These are
+        what pushed the confidence above the base score.</p>
+
+      <h3>Filtered and suppressed alerts</h3>
+      <p>An alert marked <strong>filtered</strong> (faded) means it fired while another
+        trade for the same instrument was already open. The system shows only one active
+        trade per instrument at a time to avoid overexposure. Filtered alerts may still
+        be valid — use your judgment.</p>
+    </section>
+
+    <!-- ── Risk Management ───────────────────────────────────────────────── -->
+    <section id="risk">
+      <h2>Risk Management Rules</h2>
+      <p>Good setups still lose. Risk management is what keeps you in the game.</p>
+
+      <div class="cards">
+        <div class="card">
+          <h4>Always use a stop-loss</h4>
+          <p>The system provides an invalidation level for every setup. Place your
+          stop there. Never move a stop against you.</p>
+        </div>
+        <div class="card bear">
+          <h4>Risk per trade</h4>
+          <p>The dollar risk display shows your exposure based on your contract count
+          and stop distance. If it shows red, the setup is outside your max-risk budget.</p>
+        </div>
+        <div class="card bull">
+          <h4>R:R Ratio</h4>
+          <p>Default is 2:1 (risk $1 to make $2). Higher R:R filters out more
+          setups but only shows higher quality. Adjustable in the filter panel.</p>
+        </div>
+        <div class="card amber">
+          <h4>One trade at a time</h4>
+          <p>The system enforces one open trade per instrument. Don't override
+          this with multiple simultaneous positions in the same direction.</p>
+        </div>
+      </div>
+
+      <div class="callout danger">
+        <p><strong>Never risk more than 1–2% of your account on a single trade.</strong>
+          Use the contract count and max risk settings to enforce this. If a setup would
+          require a stop that puts you over budget, skip it.</p>
+      </div>
+
+      <h3>Setup quality guidelines</h3>
+      <ul class="checklist green">
+        <li><strong>≥ 75%</strong> — High confidence. Check regime alignment, take if setup is clean.</li>
+        <li><strong>60–74%</strong> — Moderate. Verify higher-timeframe context before entering.</li>
+        <li><strong>Below 60%</strong> — Low confidence. Paper-trade or skip. Use as learning material.</li>
+      </ul>
+
+      <div class="callout">
+        <p><strong>Use the AI commentary:</strong> Click "✦ AI" on any alert to get a plain-language
+          assessment of the setup quality, what confirms it, and what invalidates it. This is
+          especially useful when you're unsure about a setup.</p>
+      </div>
+
+      <hr/>
+      <p style="color:var(--dim);font-size:12px;text-align:center">
+        FuturesEdge AI — Analysis support tool. Does not execute trades.<br/>
+        <a href="/" style="color:var(--accent)">← Back to Dashboard</a>
+      </p>
+    </section>
+
+  </main>
+</div>
+
+<script>
+  // Highlight active sidebar link on scroll
+  const sections = document.querySelectorAll('section[id]');
+  const links    = document.querySelectorAll('#sidebar a');
+  const obs = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        links.forEach(l => l.classList.remove('active'));
+        const active = document.querySelector(`#sidebar a[href="#${e.target.id}"]`);
+        if (active) active.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-30% 0px -60% 0px' });
+  sections.forEach(s => obs.observe(s));
+</script>
+</body>
+</html>
