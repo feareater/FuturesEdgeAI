@@ -5,7 +5,8 @@
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
-    "dev": "nodemon server/index.js"
+    "dev": "nodemon server/index.js",
+    "share": "node start-shared.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
