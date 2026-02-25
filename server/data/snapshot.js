@@ -15,7 +15,7 @@ const DATA_SOURCE  = process.env.DATA_SOURCE ?? 'seed';
 const SEED_DIR     = path.join(__dirname, '..', '..', 'data', 'seed');
 
 const VALID_SYMBOLS    = ['MNQ', 'MGC'];
-const VALID_TIMEFRAMES = ['1m', '2m', '3m', '5m', '15m'];
+const VALID_TIMEFRAMES = ['1m', '2m', '3m', '5m', '15m', '30m'];
 
 // ---------------------------------------------------------------------------
 // Public interface — these signatures stay constant regardless of data source
@@ -39,8 +39,8 @@ function getCandles(symbol, timeframe) {
 }
 
 /**
- * Returns candles for all five active timeframes for a symbol.
- * Shape: { '1m': [...], '2m': [...], '3m': [...], '5m': [...], '15m': [...] }
+ * Returns candles for all active timeframes for a symbol.
+ * Shape: { '1m': [...], '2m': [...], '3m': [...], '5m': [...], '15m': [...], '30m': [...] }
  */
 function getAllTimeframes(symbol) {
   if (!VALID_SYMBOLS.includes(symbol)) throw new Error(`Unknown symbol: ${symbol}`);
@@ -57,6 +57,15 @@ function _fromSeed(symbol, timeframe) {
   const filePath = path.join(SEED_DIR, `${symbol}_${timeframe}.json`);
 
   if (!fs.existsSync(filePath)) {
+    // Derived timeframes: compute on-the-fly from finer-grained seed data
+    if (timeframe === '3m') {
+      const oneM = _fromSeed(symbol, '1m');
+      return _aggregateCandles(oneM, 3);
+    }
+    if (timeframe === '30m') {
+      const fiveM = _fromSeed(symbol, '5m');
+      return _aggregateCandles(fiveM, 6);
+    }
     throw new Error(
       `Seed file not found: ${filePath}\n` +
       `Run "node server/data/seedFetch.js" to populate seed data.`
@@ -65,6 +74,24 @@ function _fromSeed(symbol, timeframe) {
 
   const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
   return data.candles;
+}
+
+// Aggregate n consecutive candles into one bar (used for derived timeframes)
+function _aggregateCandles(candles, n) {
+  const result = [];
+  for (let i = 0; i < candles.length; i += n) {
+    const slice = candles.slice(i, i + n);
+    if (!slice.length) continue;
+    result.push({
+      time:   slice[0].time,
+      open:   slice[0].open,
+      high:   Math.max(...slice.map(c => c.high)),
+      low:    Math.min(...slice.map(c => c.low)),
+      close:  slice[slice.length - 1].close,
+      volume: slice.reduce((sum, c) => sum + c.volume, 0),
+    });
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------

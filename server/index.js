@@ -410,7 +410,7 @@ function _applyTradeFilter(alerts) {
 // ---------------------------------------------------------------------------
 
 const SCAN_SYMBOLS    = ['MNQ', 'MGC'];
-const SCAN_TIMEFRAMES = ['1m', '2m', '3m', '5m', '15m'];
+const SCAN_TIMEFRAMES = ['1m', '2m', '3m', '5m', '15m', '30m'];
 
 /**
  * Run a full scan. Returns the count of NEW alerts added to the cache.

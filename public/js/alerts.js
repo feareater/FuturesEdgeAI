@@ -245,7 +245,7 @@
     _fetchTimer = setTimeout(async () => {
       try {
         const res = await fetch(
-          `/api/alerts?limit=50&minConfidence=${minConf}&symbol=${activeSymbol}&timeframe=${activeTf}`
+          `/api/alerts?limit=100&minConfidence=${minConf}&symbol=${activeSymbol}`
         );
         if (!res.ok) throw new Error(`/api/alerts ${res.status}`);
         const { alerts } = await res.json();
@@ -253,7 +253,7 @@
         _renderFeed();
         _updateStats();
         _syncChartMarkers();
-        console.log(`[alerts] ${alerts.length} alerts  sym=${activeSymbol}  tf=${activeTf}  minConf=${minConf}`);
+        console.log(`[alerts] ${alerts.length} alerts  sym=${activeSymbol}  minConf=${minConf}`);
       } catch (err) {
         console.error('[alerts] Fetch failed:', err.message);
         alertFeed.innerHTML =
@@ -267,8 +267,8 @@
     alertFeed.innerHTML = '';
     if (!currentAlerts.length) {
       const msg = minConf > 0
-        ? `No ${activeSymbol} ${activeTf} setups at ≥${minConf}% confidence.`
-        : `No ${activeSymbol} ${activeTf} setups detected yet.`;
+        ? `No ${activeSymbol} setups at ≥${minConf}% confidence.`
+        : `No ${activeSymbol} setups detected yet.`;
       alertFeed.innerHTML = `<p class="placeholder">${msg}</p>`;
       // Clear prev keys so next refresh can detect new alerts correctly
       _prevAlertKeys = new Set();

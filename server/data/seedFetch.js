@@ -20,13 +20,14 @@ const SYMBOLS = {
   MGC: 'GC=F',
 };
 
-// Yahoo Finance supports: 1m (max 7d), 2m (max 60d), 5m (max 60d), 15m (max 60d).
+// Yahoo Finance supports: 1m (max 7d), 2m (max 60d), 5m (max 60d), 15m/30m (max 60d).
 // 3m is not native — we derive it by aggregating 1m candles after the fetch.
 const TIMEFRAMES = [
   { tf: '1m',  yf: '1m',  range: '5d'  },
   { tf: '2m',  yf: '2m',  range: '5d'  },
   { tf: '5m',  yf: '5m',  range: '30d' },
   { tf: '15m', yf: '15m', range: '30d' },
+  { tf: '30m', yf: '30m', range: '60d' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -70,11 +71,11 @@ function normalize(symbol, timeframe, raw) {
   return { symbol, timeframe, candles };
 }
 
-// Aggregate fine candles into a coarser timeframe (e.g. 1m → 3m)
-function aggregate(symbol, sourceCandles, minutes) {
+// Aggregate fine candles into a coarser timeframe (e.g. 1m → 3m, 5m → 30m)
+function aggregate(symbol, timeframe, sourceCandles, n) {
   const result = [];
-  for (let i = 0; i < sourceCandles.length; i += minutes) {
-    const slice = sourceCandles.slice(i, i + minutes);
+  for (let i = 0; i < sourceCandles.length; i += n) {
+    const slice = sourceCandles.slice(i, i + n);
     if (slice.length === 0) continue;
     result.push({
       time:   slice[0].time,
@@ -85,7 +86,7 @@ function aggregate(symbol, sourceCandles, minutes) {
       volume: slice.reduce((sum, c) => sum + c.volume, 0),
     });
   }
-  return { symbol, timeframe: '3m', candles: result };
+  return { symbol, timeframe, candles: result };
 }
 
 // ---------------------------------------------------------------------------
@@ -112,10 +113,28 @@ async function fetchAll() {
     // Derive 3m by aggregating the 1m candles we just wrote
     const oneMPath   = path.join(SEED_DIR, `${symbol}_1m.json`);
     const oneM       = JSON.parse(fs.readFileSync(oneMPath, 'utf8'));
-    const threeM     = aggregate(symbol, oneM.candles, 3);
+    const threeM     = aggregate(symbol, '3m', oneM.candles, 3);
     const threeMPath = path.join(SEED_DIR, `${symbol}_3m.json`);
     fs.writeFileSync(threeMPath, JSON.stringify(threeM, null, 2));
     console.log(`[seedFetch] ${symbol} 3m  ${threeM.candles.length} candles → ${threeMPath} (derived)`);
+
+    // Also write 30m derived from 5m as a backup (in case Yahoo 30m returned empty)
+    const fiveMPath  = path.join(SEED_DIR, `${symbol}_5m.json`);
+    const fiveM      = JSON.parse(fs.readFileSync(fiveMPath, 'utf8'));
+    const thirtyMDer = aggregate(symbol, '30m', fiveM.candles, 6);
+    // Only overwrite if the native 30m file has fewer candles (Yahoo returned bad data)
+    const thirtyMPath = path.join(SEED_DIR, `${symbol}_30m.json`);
+    if (fs.existsSync(thirtyMPath)) {
+      const existing = JSON.parse(fs.readFileSync(thirtyMPath, 'utf8'));
+      if (existing.candles.length < thirtyMDer.candles.length) {
+        fs.writeFileSync(thirtyMPath, JSON.stringify(thirtyMDer, null, 2));
+        console.log(`[seedFetch] ${symbol} 30m  ${thirtyMDer.candles.length} candles → ${thirtyMPath} (replaced with derived — more candles)`);
+      }
+    } else {
+      // No native 30m was written (e.g. Yahoo returned 0 candles) — write derived
+      fs.writeFileSync(thirtyMPath, JSON.stringify(thirtyMDer, null, 2));
+      console.log(`[seedFetch] ${symbol} 30m  ${thirtyMDer.candles.length} candles → ${thirtyMPath} (derived from 5m)`);
+    }
   }
 }
 
