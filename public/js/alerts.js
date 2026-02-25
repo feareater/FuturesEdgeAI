@@ -41,9 +41,11 @@
   const mgcInput       = document.getElementById('mgc-contracts');
   const maxRiskInput   = document.getElementById('max-risk');
   const rrInput        = document.getElementById('rr-ratio');
-  const rrStatusEl     = document.getElementById('rr-status');
-  const sessionBadgeEl = document.getElementById('session-badge');
-  const dataAgeEl      = document.getElementById('data-age');
+  const rrStatusEl        = document.getElementById('rr-status');
+  const sessionBadgeEl    = document.getElementById('session-badge');
+  const dataAgeEl         = document.getElementById('data-age');
+  const refreshIntervalEl = document.getElementById('refresh-interval');
+  const refreshNowBtn     = document.getElementById('refresh-now-btn');
 
   // ── Data freshness display + countdown ────────────────────────────────────
 
@@ -123,8 +125,11 @@
     try {
       const hRes = await fetch('/api/health');
       if (hRes.ok) {
-        const { lastRefresh, nextRefresh } = await hRes.json();
+        const { lastRefresh, nextRefresh, refreshIntervalMins } = await hRes.json();
         _setRefreshTimes(lastRefresh, nextRefresh);
+        if (refreshIntervalMins && refreshIntervalEl) {
+          refreshIntervalEl.value = refreshIntervalMins;
+        }
       }
     } catch (_) {}
 
@@ -550,6 +555,38 @@
       clearTimeout(_rrTimer);
       _rrTimer = setTimeout(() => _postRatio(rr), 600);
     });
+
+    // Refresh interval — POST to server, no re-render needed (countdown resets via WS)
+    if (refreshIntervalEl) {
+      refreshIntervalEl.addEventListener('change', async () => {
+        const mins = parseInt(refreshIntervalEl.value);
+        try {
+          await fetch('/api/settings', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ refreshIntervalMins: mins }),
+          });
+          console.log(`[alerts] Refresh interval set to ${mins} min`);
+        } catch (_) {}
+      });
+    }
+
+    // Refresh now — immediate data fetch + reset interval countdown
+    if (refreshNowBtn) {
+      refreshNowBtn.addEventListener('click', async () => {
+        refreshNowBtn.disabled    = true;
+        refreshNowBtn.textContent = '…';
+        try {
+          const res = await fetch('/api/refresh', { method: 'POST' });
+          if (res.ok) {
+            const { ts, nextRefresh } = await res.json();
+            _setRefreshTimes(ts, nextRefresh);
+          }
+        } catch (_) {}
+        refreshNowBtn.disabled    = false;
+        refreshNowBtn.textContent = '↻ Now';
+      });
+    }
   }
 
   function _showRrStatus(msg, cls) {
@@ -623,6 +660,13 @@
           fetchAndRender();            // re-fetch alert feed (open outcomes may have resolved)
           _setRefreshTimes(msg.ts, msg.nextRefresh);
           if (msg.newAlerts > 0) _showNewAlertBanner(msg.newAlerts);
+        }
+        if (msg.type === 'refresh_schedule') {
+          // Server rescheduled the interval (e.g. settings change) — sync countdown + select
+          _setRefreshTimes(null, msg.nextRefresh);
+          if (refreshIntervalEl && msg.intervalMins) {
+            refreshIntervalEl.value = msg.intervalMins;
+          }
         }
       } catch (_) {}
     };

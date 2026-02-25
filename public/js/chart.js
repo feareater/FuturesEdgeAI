@@ -101,6 +101,21 @@
         timeVisible: true,
         secondsVisible: false,
         rightOffset: 8,
+        // Axis tick labels in 12-hour Mountain Time.
+        // tickMarkType: 0=Year, 1=Month, 2=DayOfMonth, 3=Time, 4=TimeWithSeconds
+        tickMarkFormatter: (time, tickMarkType) => {
+          const d = new Date(time * 1000);
+          if (tickMarkType >= 3) {
+            return d.toLocaleTimeString('en-US', {
+              hour: 'numeric', minute: '2-digit', hour12: true,
+              timeZone: 'America/Denver',
+            });
+          }
+          return d.toLocaleDateString('en-US', {
+            month: 'short', day: 'numeric',
+            timeZone: 'America/Denver',
+          });
+        },
       },
       // Display all chart times in Mountain Time (MST = UTC-7, MDT = UTC-6)
       localization: {

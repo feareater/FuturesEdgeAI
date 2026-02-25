@@ -26,8 +26,10 @@ const DATA_SOURCE = process.env.DATA_SOURCE || 'seed';
 // Live-mode integration point: replace the setInterval in start() with a broker
 // WebSocket candle-close subscription, then call _autoRefresh({ fetchData: false }).
 const REFRESH_INTERVAL_MS = 15 * 60 * 1000;
+let   refreshIntervalMs   = REFRESH_INTERVAL_MS; // mutable — changed via POST /api/settings
 let   lastRefreshTs       = null; // ISO string, exposed via /api/health
 let   nextRefreshTs       = null; // ISO string, set when schedule is established
+let   _refreshIntervalId  = null; // setInterval handle for rescheduling
 
 // ---------------------------------------------------------------------------
 // Alert cache — in-memory; survives until server restart
@@ -99,7 +101,8 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', dataSource: DATA_SOURCE, ts: new Date().toISOString(),
-             lastRefresh: lastRefreshTs, nextRefresh: nextRefreshTs });
+             lastRefresh: lastRefreshTs, nextRefresh: nextRefreshTs,
+             refreshIntervalMins: Math.round(refreshIntervalMs / 60000) });
 });
 
 // GET /api/candles?symbol=MNQ&timeframe=5m
@@ -165,8 +168,17 @@ app.get('/api/settings', (_req, res) => {
 // POST /api/settings — update in-memory risk params and re-scan.
 // Changing rrRatio invalidates all cached outcomes, so we clear + rescan.
 app.post('/api/settings', async (req, res) => {
-  const { rrRatio } = req.body;
+  const { rrRatio, refreshIntervalMins } = req.body;
   let needRescan = false;
+
+  if (refreshIntervalMins !== undefined) {
+    const mins = parseInt(refreshIntervalMins);
+    if (!isNaN(mins) && mins >= 1 && mins <= 60) {
+      refreshIntervalMs = mins * 60 * 1000;
+      _scheduleRefresh(); // always reschedule with the new interval
+      console.log(`[settings] Refresh interval updated to ${mins} min`);
+    }
+  }
 
   if (rrRatio !== undefined) {
     const parsed = parseFloat(rrRatio);
@@ -277,6 +289,18 @@ app.post('/api/trades', (req, res) => {
   saveTradeLog(tradeLog);
   console.log(`[trade] ${idx >= 0 ? 'Updated' : 'Saved'} trade for ${alertKey}`);
   res.json({ trade });
+});
+
+// POST /api/refresh — trigger an immediate data refresh and reset the interval timer
+app.post('/api/refresh', async (_req, res) => {
+  try {
+    await _autoRefresh();
+    _scheduleRefresh(); // always reset countdown from now
+    res.json({ status: 'ok', ts: lastRefreshTs, nextRefresh: nextRefreshTs });
+  } catch (err) {
+    console.error('[api] /refresh error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // GET /api/scan  — manually trigger a full re-scan (useful for seed mode refresh)
@@ -512,9 +536,24 @@ async function _autoRefresh({ fetchData = true } = {}) {
 
   const newCount = await runScan();
   lastRefreshTs  = new Date().toISOString();
-  nextRefreshTs  = new Date(Date.now() + REFRESH_INTERVAL_MS).toISOString();
+  nextRefreshTs  = new Date(Date.now() + refreshIntervalMs).toISOString();
   broadcast({ type: 'data_refresh', ts: lastRefreshTs, newAlerts: newCount, nextRefresh: nextRefreshTs });
   console.log(`[refresh] Done — ${newCount} new alerts, data as of ${lastRefreshTs}`);
+}
+
+/**
+ * (Re-)start the recurring auto-refresh interval using the current refreshIntervalMs.
+ * Cancels any existing interval first. Called at startup and when the interval changes.
+ */
+function _scheduleRefresh() {
+  if (_refreshIntervalId) clearInterval(_refreshIntervalId);
+  nextRefreshTs = new Date(Date.now() + refreshIntervalMs).toISOString();
+  _refreshIntervalId = setInterval(
+    () => _autoRefresh().catch(err => console.error('[refresh] Error:', err.message)),
+    refreshIntervalMs
+  );
+  console.log(`[refresh] Interval set to ${refreshIntervalMs / 60000} min, next: ${nextRefreshTs}`);
+  broadcast({ type: 'refresh_schedule', nextRefresh: nextRefreshTs, intervalMins: Math.round(refreshIntervalMs / 60000) });
 }
 
 // ---------------------------------------------------------------------------
@@ -561,15 +600,12 @@ async function start() {
       //   _autoRefresh({ fetchData: false })
       // The scan engine, alert cache, and broadcast logic remain unchanged.
       // ────────────────────────────────────────────────────────────────────────
-      nextRefreshTs = new Date(Date.now() + REFRESH_INTERVAL_MS).toISOString();
+      nextRefreshTs = new Date(Date.now() + refreshIntervalMs).toISOString();
       setTimeout(() => {
         _autoRefresh().catch(err => console.error('[refresh] Error:', err.message));
-        setInterval(
-          () => _autoRefresh().catch(err => console.error('[refresh] Error:', err.message)),
-          REFRESH_INTERVAL_MS
-        );
-      }, REFRESH_INTERVAL_MS);
-      console.log(`[startup] Auto-refresh scheduled every ${REFRESH_INTERVAL_MS / 60000} min`);
+        _scheduleRefresh(); // start the recurring interval from this point
+      }, refreshIntervalMs);
+      console.log(`[startup] Auto-refresh scheduled every ${refreshIntervalMs / 60000} min`);
     }
   });
 }

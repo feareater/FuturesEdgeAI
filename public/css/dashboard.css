@@ -753,3 +753,32 @@ html, body {
 }
 .tf-save   { background: var(--accent); color: #000; font-weight: 600; }
 .tf-cancel { background: #2a2e39; color: var(--text); }
+
+/* ── Refresh interval select + Now button ─────────────────────────────────── */
+
+.filter-select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.filter-select:focus { outline: none; border-color: var(--accent); }
+
+.refresh-now-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.12s, border-color 0.12s;
+}
+.refresh-now-btn:hover    { border-color: var(--accent); color: var(--text); }
+.refresh-now-btn:disabled { opacity: 0.45; cursor: default; }
