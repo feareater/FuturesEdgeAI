@@ -235,6 +235,24 @@ html, body {
   text-transform: none;
 }
 
+/* ── Guide button in alert panel header ─────────────────────────────────── */
+
+.guide-btn {
+  margin-left: 6px;
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 5px;
+  text-decoration: none;
+  white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  transition: color 0.12s, border-color 0.12s;
+}
+.guide-btn:hover { color: var(--accent); border-color: var(--accent); }
+
 /* ── Win-rate bar ────────────────────────────────────────────────────────── */
 
 #wr-bar {
