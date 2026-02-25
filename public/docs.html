@@ -59,7 +59,7 @@
                         background: rgba(33,150,243,0.06); }
 
     /* ── Main content ────────────────────────────────────────────────── */
-    #content { margin-left: 220px; padding: 40px 48px; max-width: 900px; }
+    #content { margin-left: 220px; padding: 40px 48px; max-width: 920px; }
 
     section { margin-bottom: 60px; scroll-margin-top: 64px; }
 
@@ -75,12 +75,12 @@
       background: #0d0f1a; border: 1px solid var(--border); border-radius: 6px;
       padding: 20px; margin: 24px 0; overflow-x: auto;
     }
-    .diagram svg { display: block; width: 100%; max-width: 480px; margin: 0 auto; }
+    .diagram svg { display: block; width: 100%; max-width: 520px; margin: 0 auto; }
     .diagram-caption { text-align: center; font-size: 11px; color: var(--dim);
                         margin-top: 10px; }
 
     /* ── Info cards ──────────────────────────────────────────────────── */
-    .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
              gap: 16px; margin: 20px 0; }
     .card {
       background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px;
@@ -89,6 +89,7 @@
     .card.bull  { border-top-color: var(--bull); }
     .card.bear  { border-top-color: var(--bear); }
     .card.amber { border-top-color: var(--amber); }
+    .card.purple { border-top-color: var(--purple); }
     .card h4 { font-size: 13px; font-weight: 700; margin-bottom: 8px; }
     .card p  { font-size: 12px; color: var(--dim); margin: 0; line-height: 1.5; }
 
@@ -111,6 +112,7 @@
       padding: 10px 14px; margin: 16px 0; font-size: 12px;
     }
     .alert-mock.bear { border-left-color: var(--bear); }
+    .alert-mock.amber { border-left-color: var(--amber); }
     .alert-mock-header { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
     .tag { background: var(--border); padding: 1px 5px; border-radius: 2px;
            font-size: 10px; color: var(--text); }
@@ -125,9 +127,11 @@
     }
     .callout.warning { border-left-color: var(--amber); background: rgba(255,179,0,0.06); }
     .callout.danger  { border-left-color: var(--bear);  background: rgba(239,83,80,0.06); }
+    .callout.success { border-left-color: var(--bull);  background: rgba(38,166,154,0.06); }
     .callout p { margin: 0; font-size: 13px; }
+    .callout p + p { margin-top: 8px; }
 
-    /* ── Phase badge ─────────────────────────────────────────────────── */
+    /* ── Setup badge ─────────────────────────────────────────────────── */
     .setup-badge {
       display: inline-block; font-size: 10px; font-weight: 700; padding: 2px 8px;
       border-radius: 10px; text-transform: uppercase; letter-spacing: 0.5px;
@@ -136,12 +140,38 @@
     .setup-badge.s1 { background: rgba(33,150,243,0.15); color: var(--accent); }
     .setup-badge.s2 { background: rgba(38,166,154,0.15); color: var(--bull); }
     .setup-badge.s3 { background: rgba(255,179,0,0.15);  color: var(--amber); }
+    .setup-badge.sq { background: rgba(171,71,188,0.15); color: var(--purple); }
 
     /* ── Two-col layout ──────────────────────────────────────────────── */
     .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin: 16px 0; }
     @media (max-width: 680px) { .two-col { grid-template-columns: 1fr; } }
 
+    /* ── Score table ─────────────────────────────────────────────────── */
+    .score-table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13px; }
+    .score-table th { text-align: left; padding: 8px 12px; font-size: 11px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.5px; color: var(--dim);
+      background: var(--bg-card); border-bottom: 1px solid var(--border); }
+    .score-table td { padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.03);
+      vertical-align: top; }
+    .score-table tr:last-child td { border-bottom: none; }
+    .score-table .pts { color: var(--accent); font-weight: 700; white-space: nowrap; }
+    .score-table .tag-inline { display: inline-block; background: var(--border);
+      padding: 0 5px; border-radius: 2px; font-size: 10px; }
+
+    /* ── Delay indicator ─────────────────────────────────────────────── */
+    .delay-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 12px; margin: 16px 0; }
+    @media (max-width: 680px) { .delay-grid { grid-template-columns: 1fr; } }
+    .delay-cell { background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 6px; padding: 14px; }
+    .delay-cell .tf { font-size: 22px; font-weight: 700; color: var(--accent); }
+    .delay-cell .lag { font-size: 11px; color: var(--dim); margin-top: 2px; }
+    .delay-cell .verdict { font-size: 12px; font-weight: 700; margin-top: 8px; }
+    .delay-cell.good .verdict  { color: var(--bull); }
+    .delay-cell.ok   .verdict  { color: var(--amber); }
+
     hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+    code { background: var(--bg-card); padding: 1px 5px; border-radius: 3px;
+           font-family: monospace; font-size: 12px; color: var(--amber); }
   </style>
 </head>
 <body>
@@ -163,11 +193,16 @@
     <a href="#intro">Introduction</a>
     <a href="#candlesticks">Reading Candlesticks</a>
     <a href="#key-concepts">Key Concepts</a>
+    <a href="#delay">The 15-Min Delay</a>
 
-    <div class="nav-section">The Three Setups</div>
-    <a href="#sweep">1 · Liquidity Sweep</a>
-    <a href="#zone">2 · Zone Rejection</a>
-    <a href="#bos">3 · BOS / CHoCH</a>
+    <div class="nav-section">The Three Alert Types</div>
+    <a href="#zone">1 · Zone Rejection</a>
+    <a href="#pdh">2 · PDH / PDL Breakout</a>
+    <a href="#trendline">3 · Trendline Break</a>
+    <a href="#bos">BOS / CHoCH (Qualifiers)</a>
+
+    <div class="nav-section">Confidence Score</div>
+    <a href="#scoring">How Scoring Works</a>
 
     <div class="nav-section">Using the Dashboard</div>
     <a href="#alerts">Reading the Alerts</a>
@@ -181,31 +216,37 @@
     <section id="intro">
       <h1>Setup Guide</h1>
       <p class="lead">This guide explains the three trade setup patterns that FuturesEdge AI
-        detects in real time — what they mean, what they look like on a chart, and how
-        to act on them. No experience required.</p>
+        detects in real time — what they mean, how the confidence score is calculated,
+        and how to act on them given that market data arrives with a 15-minute delay.</p>
 
       <div class="cards">
         <div class="card">
           <h4>What FuturesEdge AI does</h4>
-          <p>Scans MNQ and MGC futures across five timeframes (1m–15m), detects
-          high-probability setups, and scores their quality from 0–100%.</p>
+          <p>Scans MNQ and MGC futures on the 5m, 15m, and 30m timeframes, detects
+          high-probability setups, and scores their quality 0–100%.</p>
         </div>
         <div class="card amber">
           <h4>What it does NOT do</h4>
-          <p>It never executes trades. It surfaces information to help you make
+          <p>It never executes trades. It surfaces high-quality setups to help you make
           better decisions — the final call is always yours.</p>
         </div>
         <div class="card bull">
-          <h4>Three setup types</h4>
-          <p>Liquidity Sweep Reversal, Zone Rejection, and Break of
-          Structure / Change of Character. All three are explained below.</p>
+          <h4>Three alert types</h4>
+          <p>Zone Rejection, PDH/PDL Breakout, and Trendline Break. All are explained
+          below with diagrams and entry criteria.</p>
+        </div>
+        <div class="card">
+          <h4>15-minute data lag</h4>
+          <p>Seed-mode data is at least 15 minutes old. The alert types and timeframes
+          are specifically chosen to remain actionable despite this delay.</p>
         </div>
       </div>
 
       <div class="callout">
-        <p><strong>How to use this guide:</strong> Read the candlestick basics first if
-        you're new to charts. Then study each setup. When an alert fires on the dashboard,
-        come back here to remind yourself what the pattern means and what confirms it.</p>
+        <p><strong>How to use this guide:</strong> Read the candlestick and key-concepts
+        sections first, then the 15-minute delay section. That context makes the setup
+        explanations much more useful. When a live alert fires, click "✦ AI" on the card
+        for a plain-language assessment of that specific setup.</p>
       </div>
     </section>
 
@@ -213,23 +254,15 @@
     <section id="candlesticks">
       <h2>Reading Candlesticks</h2>
       <p>Every bar on the chart is a <strong>candlestick</strong> — a compact summary of
-        price action over one time period (1 minute, 5 minutes, etc.).</p>
+        price action over one time period (5 minutes, 15 minutes, 30 minutes).</p>
 
       <div class="diagram">
         <svg viewBox="0 0 420 175" xmlns="http://www.w3.org/2000/svg">
-          <defs>
-            <marker id="arr" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
-              <path d="M0,0 L6,3 L0,6 Z" fill="#787b86"/>
-            </marker>
-          </defs>
           <!-- Bullish candle -->
           <text x="90" y="18" fill="#26a69a" font-size="12" font-family="sans-serif"
                 text-anchor="middle" font-weight="700">BULLISH</text>
-          <!-- wick -->
           <line x1="90" y1="28" x2="90" y2="155" stroke="#26a69a" stroke-width="2"/>
-          <!-- body: close higher than open -->
           <rect x="72" y="65" width="36" height="55" fill="#26a69a" rx="1"/>
-          <!-- labels -->
           <line x1="110" y1="28" x2="150" y2="28" stroke="#787b86" stroke-width="1"/>
           <text x="155" y="32" fill="#787b86" font-size="11" font-family="sans-serif">High</text>
           <line x1="110" y1="65" x2="150" y2="65" stroke="#787b86" stroke-width="1"/>
@@ -238,49 +271,38 @@
           <text x="155" y="124" fill="#26a69a" font-size="11" font-family="sans-serif">Open</text>
           <line x1="110" y1="155" x2="150" y2="155" stroke="#787b86" stroke-width="1"/>
           <text x="155" y="159" fill="#787b86" font-size="11" font-family="sans-serif">Low</text>
-
           <!-- Bearish candle -->
           <text x="310" y="18" fill="#ef5350" font-size="12" font-family="sans-serif"
                 text-anchor="middle" font-weight="700">BEARISH</text>
-          <!-- wick -->
           <line x1="310" y1="28" x2="310" y2="155" stroke="#ef5350" stroke-width="2"/>
-          <!-- body: close lower than open -->
           <rect x="292" y="65" width="36" height="55" fill="#ef5350" rx="1"/>
-          <!-- labels left side -->
           <line x1="292" y1="28" x2="252" y2="28" stroke="#787b86" stroke-width="1"/>
-          <text x="248" y="32" fill="#787b86" font-size="11" font-family="sans-serif"
-                text-anchor="end">High</text>
+          <text x="248" y="32" fill="#787b86" font-size="11" font-family="sans-serif" text-anchor="end">High</text>
           <line x1="292" y1="65" x2="252" y2="65" stroke="#787b86" stroke-width="1"/>
-          <text x="248" y="69" fill="#ef5350" font-size="11" font-family="sans-serif"
-                text-anchor="end">Open</text>
+          <text x="248" y="69" fill="#ef5350" font-size="11" font-family="sans-serif" text-anchor="end">Open</text>
           <line x1="292" y1="120" x2="252" y2="120" stroke="#787b86" stroke-width="1"/>
-          <text x="248" y="124" fill="#ef5350" font-size="11" font-family="sans-serif"
-                text-anchor="end">Close (down)</text>
+          <text x="248" y="124" fill="#ef5350" font-size="11" font-family="sans-serif" text-anchor="end">Close (down)</text>
           <line x1="292" y1="155" x2="252" y2="155" stroke="#787b86" stroke-width="1"/>
-          <text x="248" y="159" fill="#787b86" font-size="11" font-family="sans-serif"
-                text-anchor="end">Low</text>
+          <text x="248" y="159" fill="#787b86" font-size="11" font-family="sans-serif" text-anchor="end">Low</text>
         </svg>
-        <p class="diagram-caption">A green (bullish) candle closed higher than it opened.
-          A red (bearish) candle closed lower. The thin lines are "wicks" showing the
-          highest and lowest price reached during that period.</p>
+        <p class="diagram-caption">A green (bullish) candle closed higher than it opened. A red (bearish)
+          candle closed lower. The thin lines are "wicks" — the highest and lowest price touched, but not held.</p>
       </div>
 
       <div class="two-col">
         <div>
           <h3>Body vs. Wick</h3>
-          <p>The <strong>body</strong> (the thick rectangle) shows where price opened
-          and closed. The <strong>wick</strong> (the thin line) shows the extremes reached
-          during the candle — but price didn't stay there.</p>
-          <p>A <strong>long wick</strong> with a small body is called a <em>hammer</em> or
-          <em>shooting star</em> — it means price was rejected at that level.</p>
+          <p>The <strong>body</strong> shows where price opened and closed. The
+          <strong>wick</strong> shows the extreme reached during the candle — price got
+          there but was immediately rejected. A long wick with a small body means strong
+          rejection at that level.</p>
         </div>
         <div>
-          <h3>Timeframes</h3>
-          <p>Each candle represents one time period. On the <strong>1-minute</strong> chart,
-          each candle = 1 minute. On the <strong>15-minute</strong> chart, each candle =
-          15 minutes.</p>
-          <p>Higher timeframes (15m) show the big picture. Lower timeframes (1m, 5m)
-          show the entry trigger. FuturesEdge AI monitors all five simultaneously.</p>
+          <h3>Timeframes — Why We Use 5m / 15m / 30m</h3>
+          <p>Higher timeframes show bigger, slower moves with more institutional weight.
+          5m is the fastest we scan — each candle spans 5 minutes. 30m candles each
+          represent half an hour of market activity. With 15-min delayed data, these
+          slower timeframes keep setups actionable.</p>
         </div>
       </div>
     </section>
@@ -288,175 +310,135 @@
     <!-- ── Key Concepts ──────────────────────────────────────────────────── -->
     <section id="key-concepts">
       <h2>Key Concepts</h2>
-      <p>Before diving into the setups, here are the building blocks you'll see
-        referenced in every alert.</p>
+      <p>These terms appear in every alert rationale and the confidence score breakdown.</p>
 
       <h3>Swing Highs and Swing Lows</h3>
-      <p>A <strong>swing high</strong> is a peak — a candle whose high is higher than the
-        candles on either side. A <strong>swing low</strong> is a valley. These are the
-        natural turning points in price and act as reference levels for every setup.</p>
+      <p>A <strong>swing high</strong> is a price peak where the candle's high is higher
+        than the candles on both sides — a local maximum. A <strong>swing low</strong> is
+        the opposite. These are natural turning points and serve as the reference for trendlines,
+        zone boundaries, and structural breaks.</p>
+
+      <h3>Trendlines</h3>
+      <p>The system automatically draws two trendlines per timeframe:</p>
+      <ul class="checklist green">
+        <li><strong>Support line</strong> — anchored at the lowest low in the window, sloping upward. Connects rising swing lows.</li>
+        <li><strong>Resistance line</strong> — anchored at the highest high, sloping downward. Connects falling swing highs.</li>
+      </ul>
+      <p>The more times price has touched a trendline and bounced (more "touches"), the stronger
+        and more meaningful a break of that line becomes. The system requires ≥3 touches before
+        treating a crossover as a Trendline Break alert.</p>
 
       <h3>Order Blocks (OB)</h3>
-      <p>An <strong>order block</strong> is the last opposing candle before a strong,
-        impulsive price move. For example, the last bearish candle before a big rally
-        upward. Institutional traders often leave large pending orders at these levels —
-        when price returns to them, it frequently reacts strongly. The system marks them
-        as <em>untested</em>, <em>tested</em>, or <em>mitigated</em>.</p>
+      <p>An <strong>order block</strong> is the last opposing candle before a strong impulsive
+        price move. For example: the last bearish candle before a big rally upward. Large
+        institutions leave pending orders at these levels. When price returns, they often
+        defend them — creating zone rejections.</p>
 
       <h3>Fair Value Gaps (FVG)</h3>
-      <p>A <strong>fair value gap</strong> is a three-candle sequence where price moves
-        so fast that a visible gap is left between candle 1's high and candle 3's low
-        (bullish FVG) or between candle 1's low and candle 3's high (bearish FVG). Markets
-        tend to return to fill these gaps before continuing. An <em>open</em> FVG means
-        price hasn't returned yet.</p>
+      <p>A <strong>fair value gap</strong> appears in a 3-candle sequence where price moves
+        so fast that a visible gap remains between candle 1's extreme and candle 3's extreme.
+        Markets tend to return to fill these gaps. When a zone rejection occurs at an open FVG,
+        the confidence score receives an IOF (Institutional Order Flow) bonus.</p>
 
       <h3>Market Regime</h3>
-      <p>The system classifies each timeframe as either <strong>trend</strong> (price is
-        making consistent higher highs/lows or lower highs/lows) or <strong>range</strong>
-        (price is bouncing between support and resistance). Setups that align with the
-        regime score higher confidence.</p>
+      <p>Each timeframe is classified as <strong>trend</strong> (consistent directional movement)
+        or <strong>range</strong> (bouncing between levels), and the direction labeled
+        <strong>bullish</strong>, <strong>bearish</strong>, or <strong>neutral</strong>.
+        Setups that trade <em>with</em> the regime earn +15 confidence points. Setups that
+        trade <em>against</em> a confirmed trend are suppressed entirely — except when a
+        CHoCH has confirmed the trend is changing.</p>
+
+      <h3>Multi-Timeframe Alignment</h3>
+      <p>When the 5m and 15m regime agree on direction, the system flags alignment as true.
+        This earns an additional +10 confidence bonus. The best setups almost always have
+        both timeframes pointing the same way.</p>
 
       <div class="callout">
-        <p><strong>Multi-timeframe alignment:</strong> The best setups occur when the 15m
-        and 5m timeframes agree on direction. The system flags this as an alignment bonus
-        in the confidence score.</p>
+        <p><strong>Regime gate explained:</strong> If the market is in a bullish trend and
+        alignment is true (5m + 15m both bullish), the system will only show bullish zone
+        rejections. Bearish setups against a confirmed bullish regime are suppressed —
+        they historically lose at a high rate and represent counter-trend noise.</p>
+        <p>Exception: if a CHoCH (Change of Character) has fired in the bearish direction,
+        it means the structure has actually shifted. In that case, a counter-trend setup
+        passes the gate.</p>
       </div>
     </section>
 
-    <!-- ── Setup 1: Liquidity Sweep ─────────────────────────────────────── -->
-    <section id="sweep">
-      <span class="setup-badge s1">Setup 1</span>
-      <h2>Liquidity Sweep Reversal</h2>
-      <p><strong>Plain language:</strong> Price briefly spikes past a known swing high or
-        swing low — grabbing the stop-loss orders sitting just beyond it — then immediately
-        reverses direction and closes back inside the range. This spike is the "sweep."</p>
-      <p>Retail traders place their stops just above swing highs and just below swing lows.
-        Institutional players know this, and they briefly push price to those levels to
-        trigger a flood of orders, fill their own positions at better prices, and then
-        let price move the other direction.</p>
+    <!-- ── The 15-Minute Delay ───────────────────────────────────────────── -->
+    <section id="delay">
+      <h2>The 15-Minute Data Delay</h2>
+      <p>In seed mode, market data is at least 15 minutes old. This means every alert
+        you see triggered 15+ minutes ago. Understanding this changes how you act on them.</p>
 
-      <!-- Bearish sweep diagram -->
-      <div class="diagram">
-        <svg viewBox="0 0 480 195" xmlns="http://www.w3.org/2000/svg">
-          <defs>
-            <marker id="arrowD" markerWidth="7" markerHeight="7" refX="3.5" refY="3.5" orient="auto">
-              <path d="M0,0 L7,3.5 L0,7 Z" fill="#ef5350"/>
-            </marker>
-            <marker id="arrowA" markerWidth="7" markerHeight="7" refX="3.5" refY="3.5" orient="auto">
-              <path d="M0,0 L7,3.5 L0,7 Z" fill="#2196f3"/>
-            </marker>
-          </defs>
-
-          <!-- Swing high reference line -->
-          <line x1="10" y1="72" x2="295" y2="72" stroke="#ffb300" stroke-width="1.2"
-                stroke-dasharray="6,4" opacity="0.9"/>
-          <text x="300" y="76" fill="#ffb300" font-size="10" font-family="sans-serif">Swing High</text>
-          <text x="300" y="88" fill="#ffb300" font-size="9" font-family="sans-serif"
-                opacity="0.7">(stop cluster)</text>
-
-          <!-- Candle 1: bull x=18 -->
-          <line x1="32" y1="90" x2="32" y2="135" stroke="#26a69a" stroke-width="1.5"/>
-          <rect x="18" y="100" width="28" height="20" fill="#26a69a" rx="1"/>
-
-          <!-- Candle 2: bear x=60 -->
-          <line x1="74" y1="94" x2="74" y2="133" stroke="#ef5350" stroke-width="1.5"/>
-          <rect x="60" y="100" width="28" height="18" fill="#ef5350" rx="1"/>
-
-          <!-- Candle 3: bull x=102 -->
-          <line x1="116" y1="88" x2="116" y2="130" stroke="#26a69a" stroke-width="1.5"/>
-          <rect x="102" y="97" width="28" height="20" fill="#26a69a" rx="1"/>
-
-          <!-- Candle 4: small bear x=144 -->
-          <line x1="158" y1="91" x2="158" y2="128" stroke="#ef5350" stroke-width="1.5"/>
-          <rect x="144" y="100" width="28" height="15" fill="#ef5350" rx="1"/>
-
-          <!-- Candle 5: SWEEP x=186 — amber, huge upper wick, closes back below line -->
-          <line x1="200" y1="36" x2="200" y2="130" stroke="#ffb300" stroke-width="2"/>
-          <rect x="186" y="108" width="28" height="18" fill="#ffb300" rx="1"/>
-          <!-- Sweep label -->
-          <text x="220" y="42" fill="#ffb300" font-size="11" font-family="sans-serif"
-                font-weight="700">↑ Sweep!</text>
-          <text x="220" y="55" fill="#ffb300" font-size="9" font-family="sans-serif"
-                opacity="0.8">Stops triggered</text>
-
-          <!-- Candle 6: Entry — strong bear x=228 -->
-          <line x1="242" y1="104" x2="242" y2="160" stroke="#ef5350" stroke-width="2"/>
-          <rect x="228" y="107" width="28" height="40" fill="#ef5350" rx="1"/>
-
-          <!-- Entry annotation -->
-          <rect x="224" y="101" width="36" height="10" fill="rgba(33,150,243,0.25)"
-                stroke="#2196f3" stroke-width="1" rx="1"/>
-          <line x1="264" y1="106" x2="295" y2="106" stroke="#2196f3" stroke-width="1"
-                marker-end="url(#arrowA)" stroke-dasharray="3,2"/>
-          <text x="300" y="110" fill="#2196f3" font-size="10" font-family="sans-serif"
-                font-weight="600">Entry</text>
-
-          <!-- Candle 7: follow-through x=270 -->
-          <line x1="284" y1="145" x2="284" y2="168" stroke="#ef5350" stroke-width="1.5"/>
-          <rect x="270" y="147" width="28" height="17" fill="#ef5350" rx="1"/>
-
-          <!-- Candle 8: x=312 -->
-          <line x1="326" y1="160" x2="326" y2="180" stroke="#ef5350" stroke-width="1.5"/>
-          <rect x="312" y="162" width="28" height="14" fill="#ef5350" rx="1"/>
-
-          <!-- Direction arrow -->
-          <path d="M420,85 L420,175" stroke="#ef5350" stroke-width="2"
-                marker-end="url(#arrowD)"/>
-          <text x="430" y="135" fill="#ef5350" font-size="10" font-family="sans-serif"
-                font-weight="700" writing-mode="tb">SHORT</text>
-        </svg>
-        <p class="diagram-caption">Bearish sweep: price spikes above the swing high (amber candle),
-          triggers stops, then reverses sharply. Entry on the next bearish candle.</p>
-      </div>
-
-      <div class="two-col">
-        <div>
-          <h3>What to look for (Bearish)</h3>
-          <ul class="checklist green">
-            <li>Clear swing high visible on chart</li>
-            <li>Price wicks above that high (even briefly)</li>
-            <li>Closes back below the swing high in same candle</li>
-            <li>Next candle confirms with bearish body</li>
-            <li>15m or 5m regime is bearish or neutral</li>
-          </ul>
+      <div class="delay-grid">
+        <div class="delay-cell ok">
+          <div class="tf">5m</div>
+          <div class="lag">~3 candles past trigger</div>
+          <div class="verdict">Marginal — check current price</div>
         </div>
-        <div>
-          <h3>What to look for (Bullish)</h3>
-          <ul class="checklist green">
-            <li>Clear swing low visible on chart</li>
-            <li>Price wicks below that low (stop run)</li>
-            <li>Closes back above the swing low</li>
-            <li>Next candle confirms with bullish body</li>
-            <li>Demand zone or FVG nearby adds confidence</li>
-          </ul>
+        <div class="delay-cell good">
+          <div class="tf">15m</div>
+          <div class="lag">~1 candle past trigger</div>
+          <div class="verdict">Actionable</div>
+        </div>
+        <div class="delay-cell good">
+          <div class="tf">30m</div>
+          <div class="lag">~0.5 candle past trigger</div>
+          <div class="verdict">Most delay-tolerant</div>
         </div>
       </div>
 
-      <h3>What invalidates this setup</h3>
-      <ul class="checklist red">
-        <li>Price does not close back inside the range after the sweep</li>
-        <li>Multiple candles close beyond the swing level (breakout, not sweep)</li>
-        <li>The stop-loss level is breached before entry is triggered</li>
+      <h3>What to check before entering a delayed alert</h3>
+      <ul class="checklist amber">
+        <li>Look at current price on the chart — has it moved significantly past the entry level?</li>
+        <li>If price has run far from entry, the original R:R no longer applies — skip or wait for a re-entry candle</li>
+        <li>If price is still near the entry level, the setup may still be valid</li>
+        <li>For PDH breakouts: check whether the trend has continued or reversed; breakouts that ran 30 min ago often still have momentum</li>
+        <li>For trendline breaks: check if price is still above (bullish) or below (bearish) the broken trendline — if it's back inside, the break failed</li>
       </ul>
 
+      <h3>Why these alert types work despite the delay</h3>
+      <div class="cards">
+        <div class="card bull">
+          <h4>Zone Rejection (5m / 15m / 30m)</h4>
+          <p>After a strong zone rejection, price typically moves away from the zone for
+          multiple candles before reaching the TP. A 15-min delay means you may still be
+          in the first third of the move.</p>
+        </div>
+        <div class="card bull">
+          <h4>PDH/PDL Breakout</h4>
+          <p>Institutional acceptance of a new price range plays out over hours, not minutes.
+          Entering a PDH breakout 15 minutes late is often still well inside the potential
+          move — especially on MNQ with its 2:1 R:R target.</p>
+        </div>
+        <div class="card bull">
+          <h4>Trendline Break</h4>
+          <p>Trendline breaks on 5m/15m/30m typically launch multi-candle trend moves.
+          Entering 15 minutes after a confirmed trendline break is similar to entering on
+          the second candle after a breakout — often the best entry anyway.</p>
+        </div>
+      </div>
+
       <div class="callout warning">
-        <p><strong>Key insight:</strong> The sweep candle itself is NOT the entry. Wait for
-          the confirmation candle that closes in the direction of the reversal. Chasing
-          the sweep candle is a common mistake.</p>
+        <p><strong>1m, 2m, and 3m charts are for visualization only.</strong> The alert feed
+        does not scan those timeframes. By the time a 1-minute setup appears, it has already
+        resolved (won or lost) 15 times over. The chart still displays those timeframes so
+        you can see fine-grained price action — but no alerts are generated from them.</p>
       </div>
     </section>
 
-    <!-- ── Setup 2: Zone Rejection ───────────────────────────────────────── -->
+    <!-- ── Setup 1: Zone Rejection ───────────────────────────────────────── -->
     <section id="zone">
-      <span class="setup-badge s2">Setup 2</span>
+      <span class="setup-badge s1">Alert Type 1</span>
       <h2>Supply / Demand Zone Rejection</h2>
       <p><strong>Plain language:</strong> Price enters a previously identified area where
-        large institutional orders were placed (an Order Block or Fair Value Gap), then
-        shows a clear rejection — a candle with a long wick pointing into the zone and a
-        small body closing back outside it.</p>
-      <p>These zones represent levels where big buyers (demand) or big sellers (supply)
-        previously stepped in. When price returns to the same level, those same institutions
-        often re-enter, causing a sharp reaction.</p>
+        large institutional orders sit (an Order Block or Fair Value Gap), shows a clear
+        rejection — a candle with a long wick pointing into the zone and a small body
+        closing back outside — and the system fires an alert.</p>
+      <p>These zones represent levels where large buyers (demand) or large sellers (supply)
+        previously stepped in with size. When price returns, those same institutions typically
+        defend those levels again, creating a sharp, fast reaction that is visible on any
+        timeframe.</p>
 
       <div class="diagram">
         <svg viewBox="0 0 480 200" xmlns="http://www.w3.org/2000/svg">
@@ -465,361 +447,557 @@
               <path d="M0,0 L7,3.5 L0,7 Z" fill="#26a69a"/>
             </marker>
           </defs>
-
-          <!-- Demand zone (Order Block) shaded rectangle -->
-          <rect x="10" y="130" width="360" height="35" fill="rgba(38,166,154,0.12)"
+          <!-- Demand zone shaded rectangle -->
+          <rect x="10" y="130" width="370" height="38" fill="rgba(38,166,154,0.12)"
                 stroke="#26a69a" stroke-width="1" stroke-dasharray="4,3" rx="2"/>
-          <text x="16" y="144" fill="#26a69a" font-size="10" font-family="sans-serif"
-                font-weight="600">Demand Zone (Order Block)</text>
-          <text x="16" y="158" fill="#26a69a" font-size="9" font-family="sans-serif"
-                opacity="0.7">Institutional buy orders clustered here</text>
-
-          <!-- Prior context candles (trending down into zone) -->
-          <!-- Candle 1: bear x=18, up high -->
+          <text x="16" y="144" fill="#26a69a" font-size="10" font-family="sans-serif" font-weight="600">Demand Zone (Order Block / FVG)</text>
+          <text x="16" y="158" fill="#26a69a" font-size="9" font-family="sans-serif" opacity="0.7">Institutional buy orders clustered here</text>
+          <!-- Trending down candles -->
           <line x1="32" y1="25" x2="32" y2="70" stroke="#ef5350" stroke-width="1.5"/>
           <rect x="18" y="28" width="28" height="28" fill="#ef5350" rx="1"/>
-
-          <!-- Candle 2: bear x=60 -->
           <line x1="74" y1="52" x2="74" y2="92" stroke="#ef5350" stroke-width="1.5"/>
           <rect x="60" y="55" width="28" height="24" fill="#ef5350" rx="1"/>
-
-          <!-- Candle 3: bear x=102 -->
           <line x1="116" y1="74" x2="116" y2="112" stroke="#ef5350" stroke-width="1.5"/>
           <rect x="102" y="77" width="28" height="22" fill="#ef5350" rx="1"/>
-
-          <!-- Candle 4: enters zone x=144 -->
           <line x1="158" y1="96" x2="158" y2="148" stroke="#ef5350" stroke-width="1.5"/>
-          <rect x="144" y="100" width="28" height="32" fill="#ef5350" rx="1"/>
-
-          <!-- Candle 5: REJECTION (hammer) x=186 — long lower wick, tiny body at top of zone -->
-          <line x1="200" y1="110" x2="200" y2="162" stroke="#26a69a" stroke-width="2"/>
+          <rect x="144" y="100" width="28" height="34" fill="#ef5350" rx="1"/>
+          <!-- REJECTION hammer candle -->
+          <line x1="200" y1="110" x2="200" y2="164" stroke="#26a69a" stroke-width="2"/>
           <rect x="186" y="112" width="28" height="12" fill="#26a69a" rx="1"/>
-          <!-- Label -->
-          <text x="220" y="125" fill="#26a69a" font-size="11" font-family="sans-serif"
-                font-weight="700">Rejection!</text>
-          <text x="220" y="138" fill="#26a69a" font-size="9" font-family="sans-serif"
-                opacity="0.8">Long wick → buyers stepped in</text>
-
-          <!-- Candle 6: Entry — strong bull x=228 -->
+          <text x="220" y="118" fill="#26a69a" font-size="11" font-family="sans-serif" font-weight="700">Rejection!</text>
+          <text x="220" y="131" fill="#26a69a" font-size="9" font-family="sans-serif" opacity="0.8">Long wick — buyers stepped in</text>
+          <!-- Confirmation + continuation -->
           <line x1="242" y1="96" x2="242" y2="132" stroke="#26a69a" stroke-width="2"/>
           <rect x="228" y="98" width="28" height="30" fill="#26a69a" rx="1"/>
-
-          <!-- Entry zone highlight -->
-          <rect x="224" y="123" width="36" height="10" fill="rgba(33,150,243,0.25)"
-                stroke="#2196f3" stroke-width="1" rx="1"/>
-          <line x1="264" y1="128" x2="298" y2="128" stroke="#2196f3" stroke-width="1"
-                stroke-dasharray="3,2"/>
-          <text x="302" y="132" fill="#2196f3" font-size="10" font-family="sans-serif"
-                font-weight="600">Entry</text>
-
-          <!-- Candle 7: x=270 -->
+          <rect x="224" y="124" width="36" height="10" fill="rgba(33,150,243,0.25)" stroke="#2196f3" stroke-width="1" rx="1"/>
+          <line x1="264" y1="129" x2="300" y2="129" stroke="#2196f3" stroke-width="1" stroke-dasharray="3,2"/>
+          <text x="304" y="133" fill="#2196f3" font-size="10" font-family="sans-serif" font-weight="600">Entry</text>
           <line x1="284" y1="72" x2="284" y2="104" stroke="#26a69a" stroke-width="1.5"/>
           <rect x="270" y="75" width="28" height="26" fill="#26a69a" rx="1"/>
-
-          <!-- Candle 8: x=312 -->
           <line x1="326" y1="48" x2="326" y2="80" stroke="#26a69a" stroke-width="1.5"/>
           <rect x="312" y="50" width="28" height="26" fill="#26a69a" rx="1"/>
-
-          <!-- Up arrow -->
-          <path d="M420,165 L420,75" stroke="#26a69a" stroke-width="2"
-                marker-end="url(#arrowU)"/>
-          <text x="430" y="130" fill="#26a69a" font-size="10" font-family="sans-serif"
-                font-weight="700" writing-mode="tb">LONG</text>
+          <path d="M420,165 L420,75" stroke="#26a69a" stroke-width="2" marker-end="url(#arrowU)"/>
+          <text x="430" y="130" fill="#26a69a" font-size="10" font-family="sans-serif" font-weight="700" writing-mode="tb">LONG</text>
         </svg>
-        <p class="diagram-caption">Bullish zone rejection: price drops into a demand zone, produces a
-          hammer candle (long lower wick), then rallies. Entry at the close of the confirmation candle.</p>
+        <p class="diagram-caption">Bullish zone rejection: price drops into a demand zone, prints a
+          hammer (long lower wick), then rallies. Entry at the close of the rejection candle.</p>
       </div>
 
-      <h3>The rejection candle — what it looks like</h3>
-      <div class="cards">
-        <div class="card bull">
-          <h4>Bullish rejection (demand zone)</h4>
-          <p>Long lower wick pointing down into the zone. Small body at the top.
-             Closes above the zone's upper boundary. Called a <em>hammer</em>.</p>
+      <div class="two-col">
+        <div>
+          <h3>What to look for (Bullish)</h3>
+          <ul class="checklist green">
+            <li>Demand zone (Order Block or FVG) visible on chart</li>
+            <li>Price drops into the zone — wick or body enters</li>
+            <li>Rejection candle: lower wick ≥ 45% of total range</li>
+            <li>Candle body closes back above the zone top</li>
+            <li>Regime is bullish or neutral (not bearish + aligned)</li>
+          </ul>
         </div>
-        <div class="card bear">
-          <h4>Bearish rejection (supply zone)</h4>
-          <p>Long upper wick pointing up into the zone. Small body at the bottom.
-             Closes below the zone's lower boundary. Called a <em>shooting star</em>.</p>
+        <div>
+          <h3>What to look for (Bearish)</h3>
+          <ul class="checklist green">
+            <li>Supply zone (Order Block or FVG) visible on chart</li>
+            <li>Price spikes up into the zone</li>
+            <li>Rejection candle: upper wick ≥ 45% of total range</li>
+            <li>Candle body closes back below the zone bottom</li>
+            <li>Regime is bearish or neutral (not bullish + aligned)</li>
+          </ul>
         </div>
       </div>
 
-      <h3>What to look for</h3>
-      <ul class="checklist green">
-        <li>Order Block or FVG zone clearly identified on the chart</li>
-        <li>Price enters the zone (wick or body)</li>
-        <li>Rejection candle has wick ≥ 2× body length into the zone</li>
-        <li>Body closes back outside the zone</li>
-        <li>Next candle moves away from the zone (confirmation)</li>
-        <li>Higher-timeframe regime agrees with direction</li>
+      <h3>What invalidates this setup</h3>
+      <ul class="checklist red">
+        <li>Price closes through the zone with a full body — that's a breakout, not a rejection</li>
+        <li>The stop-loss level is hit before any move in your direction</li>
+        <li>Regime is trending strongly against your trade direction (regime gate will suppress this alert)</li>
+        <li>Zone has already been tested multiple times and lost its "freshness"</li>
       </ul>
 
-      <div class="callout warning">
-        <p><strong>Zone quality matters:</strong> Order blocks that caused a strong, fast
-          impulsive move away from them are higher quality than weak reactions. The system
-          scores OB quality automatically and includes it in the confidence score.</p>
+      <div class="callout success">
+        <p><strong>Highest-probability version:</strong> A bullish zone rejection on MNQ where
+        (1) the zone is an untested Order Block, (2) an open FVG overlaps the zone (+IOF bonus),
+        (3) a BOS or CHoCH fired in the bullish direction in the prior 24 hours (+BOS qualifier),
+        and (4) the 5m and 15m are both bullish (+alignment). This combination historically
+        shows 77%+ win rate.</p>
       </div>
     </section>
 
-    <!-- ── Setup 3: BOS / CHoCH ──────────────────────────────────────────── -->
-    <section id="bos">
-      <span class="setup-badge s3">Setup 3</span>
-      <h2>Break of Structure &amp; Change of Character</h2>
-      <p><strong>Plain language:</strong> In a trending market, price makes a series of
-        higher highs and higher lows (uptrend) or lower highs and lower lows (downtrend).
-        A <strong>Break of Structure (BOS)</strong> is when price closes beyond the last
-        significant swing point in the direction of the trend — confirming continuation.
-        A <strong>Change of Character (CHoCH)</strong> is when price closes beyond a swing
-        point in the <em>opposite</em> direction — signaling a potential trend reversal.</p>
+    <!-- ── Setup 2: PDH / PDL Breakout ───────────────────────────────────── -->
+    <section id="pdh">
+      <span class="setup-badge s2">Alert Type 2</span>
+      <h2>Prior Day High / Prior Day Low Breakout</h2>
+      <p><strong>Plain language:</strong> The Prior Day High (PDH) and Prior Day Low (PDL) are
+        the highest and lowest prices reached during the previous trading day. These levels act
+        as significant psychological and institutional reference points. When price closes beyond
+        the PDH for the first time in the current session, it signals that the market has accepted
+        a new, higher price range — a breakout continuation trade.</p>
+      <p>PDH/PDL breakouts are momentum trades. Institutional and algorithmic systems trigger
+        above these levels (buy stops, momentum algos), adding fuel to the move. The key is that
+        price must <em>close</em> beyond the level — a wick above does not confirm.</p>
 
       <div class="diagram">
-        <svg viewBox="0 0 480 200" xmlns="http://www.w3.org/2000/svg">
+        <svg viewBox="0 0 500 195" xmlns="http://www.w3.org/2000/svg">
           <defs>
-            <marker id="arrowBU" markerWidth="7" markerHeight="7" refX="3.5" refY="3.5" orient="auto">
+            <marker id="arrowPDH" markerWidth="7" markerHeight="7" refX="3.5" refY="3.5" orient="auto">
               <path d="M0,0 L7,3.5 L0,7 Z" fill="#26a69a"/>
             </marker>
           </defs>
-
-          <!-- BOS label -->
-          <text x="14" y="18" fill="#26a69a" font-size="12" font-family="sans-serif"
-                font-weight="700">BREAK OF STRUCTURE — Trend Continuation</text>
-
-          <!-- Uptrend: series of higher highs and higher lows -->
-          <!-- HL1: x=18 -->
-          <line x1="32" y1="148" x2="32" y2="178" stroke="#26a69a" stroke-width="1.5"/>
-          <rect x="18" y="152" width="28" height="20" fill="#26a69a" rx="1"/>
-          <!-- HH1: x=60 -->
-          <line x1="74" y1="118" x2="74" y2="158" stroke="#26a69a" stroke-width="1.5"/>
-          <rect x="60" y="122" width="28" height="28" fill="#26a69a" rx="1"/>
-          <!-- Prior HH level -->
-          <line x1="10" y1="118" x2="200" y2="118" stroke="#ffb300" stroke-width="1"
-                stroke-dasharray="5,4" opacity="0.6"/>
-
-          <!-- HL2: x=102 -->
-          <line x1="116" y1="138" x2="116" y2="162" stroke="#26a69a" stroke-width="1.5"/>
-          <rect x="102" y="141" width="28" height="16" fill="#26a69a" rx="1"/>
-
-          <!-- HH2 — breaks prior HH: x=144 -->
-          <line x1="158" y1="88" x2="158" y2="146" stroke="#26a69a" stroke-width="1.5"/>
-          <rect x="144" y="93" width="28" height="40" fill="#26a69a" rx="1"/>
-
-          <!-- BOS arrow + label -->
-          <line x1="158" y1="88" x2="158" y2="115" stroke="#26a69a" stroke-width="1.5"
-                stroke-dasharray="3,2"/>
-          <text x="168" y="108" fill="#26a69a" font-size="11" font-family="sans-serif"
-                font-weight="700">BOS ↑</text>
-          <text x="168" y="120" fill="#26a69a" font-size="9" font-family="sans-serif"
-                opacity="0.8">Closes above prior HH</text>
-
-          <!-- Continuation candles: x=186,228,270 -->
-          <line x1="200" y1="70" x2="200" y2="100" stroke="#26a69a" stroke-width="1.5"/>
-          <rect x="186" y="73" width="28" height="22" fill="#26a69a" rx="1"/>
-          <line x1="242" y1="50" x2="242" y2="80" stroke="#26a69a" stroke-width="1.5"/>
-          <rect x="228" y="54" width="28" height="22" fill="#26a69a" rx="1"/>
-          <line x1="284" y1="32" x2="284" y2="60" stroke="#26a69a" stroke-width="1.5"/>
-          <rect x="270" y="36" width="28" height="20" fill="#26a69a" rx="1"/>
-
-          <!-- Entry zone -->
-          <rect x="182" y="92" width="36" height="10" fill="rgba(33,150,243,0.25)"
-                stroke="#2196f3" stroke-width="1" rx="1"/>
-          <text x="224" y="100" fill="#2196f3" font-size="10" font-family="sans-serif">Entry</text>
+          <!-- PDH dashed line -->
+          <line x1="10" y1="90" x2="380" y2="90" stroke="#ffb300" stroke-width="1.5" stroke-dasharray="7,4"/>
+          <text x="385" y="94" fill="#ffb300" font-size="10" font-family="sans-serif" font-weight="700">PDH</text>
+          <text x="385" y="106" fill="#ffb300" font-size="9" font-family="sans-serif" opacity="0.7">Prior Day High</text>
+          <!-- Candles approaching PDH -->
+          <line x1="32"  y1="110" x2="32"  y2="155" stroke="#26a69a" stroke-width="1.5"/>
+          <rect x="18"  y="113" width="28" height="28" fill="#26a69a" rx="1"/>
+          <line x1="74"  y1="96"  x2="74"  y2="138" stroke="#26a69a" stroke-width="1.5"/>
+          <rect x="60"  y="99"  width="28" height="28" fill="#26a69a" rx="1"/>
+          <line x1="116" y1="84"  x2="116" y2="120" stroke="#26a69a" stroke-width="1.5"/>
+          <rect x="102" y="87"  width="28" height="26" fill="#26a69a" rx="1"/>
+          <!-- Candle just below PDH — previous close at or below -->
+          <line x1="158" y1="82" x2="158" y2="118" stroke="#ef5350" stroke-width="1.5"/>
+          <rect x="144" y="85" width="28" height="22" fill="#ef5350" rx="1"/>
+          <!-- BREAKOUT candle — closes above PDH -->
+          <line x1="200" y1="62" x2="200" y2="102" stroke="#26a69a" stroke-width="2.5"/>
+          <rect x="186" y="65" width="28" height="30" fill="#26a69a" rx="1"/>
+          <text x="220" y="60" fill="#26a69a" font-size="11" font-family="sans-serif" font-weight="700">Breakout!</text>
+          <text x="220" y="73" fill="#26a69a" font-size="9" font-family="sans-serif" opacity="0.8">Close above PDH accepted</text>
+          <!-- Entry band -->
+          <rect x="182" y="91" width="36" height="10" fill="rgba(33,150,243,0.25)" stroke="#2196f3" stroke-width="1" rx="1"/>
+          <line x1="222" y1="96" x2="265" y2="96" stroke="#2196f3" stroke-width="1" stroke-dasharray="3,2"/>
+          <text x="268" y="100" fill="#2196f3" font-size="10" font-family="sans-serif" font-weight="600">Entry</text>
+          <!-- Continuation candles -->
+          <line x1="242" y1="42" x2="242" y2="72" stroke="#26a69a" stroke-width="1.5"/>
+          <rect x="228" y="45" width="28" height="24" fill="#26a69a" rx="1"/>
+          <line x1="284" y1="24" x2="284" y2="52" stroke="#26a69a" stroke-width="1.5"/>
+          <rect x="270" y="27" width="28" height="22" fill="#26a69a" rx="1"/>
+          <line x1="326" y1="14" x2="326" y2="36" stroke="#26a69a" stroke-width="1.5"/>
+          <rect x="312" y="17" width="28" height="18" fill="#26a69a" rx="1"/>
+          <path d="M430,130 L430,25" stroke="#26a69a" stroke-width="2" marker-end="url(#arrowPDH)"/>
+          <text x="440" y="90" fill="#26a69a" font-size="10" font-family="sans-serif" font-weight="700" writing-mode="tb">LONG</text>
         </svg>
-        <p class="diagram-caption">BOS (bullish): price closes above the prior swing high, confirming
-          the uptrend continues. Entry at the close of the breakout candle or the next candle open.</p>
+        <p class="diagram-caption">Bullish PDH breakout: price closes above the Prior Day High for the first
+          time this session. The close signals institutional acceptance. Enter on the breakout candle's close.</p>
       </div>
 
-      <div class="diagram">
-        <svg viewBox="0 0 480 200" xmlns="http://www.w3.org/2000/svg">
-          <defs>
-            <marker id="arrowCD" markerWidth="7" markerHeight="7" refX="3.5" refY="3.5" orient="auto">
-              <path d="M0,0 L7,3.5 L0,7 Z" fill="#ef5350"/>
-            </marker>
-          </defs>
+      <h3>Rules — PDH Breakout</h3>
+      <ul class="checklist green">
+        <li>Price closes above PDH (or below PDL for bearish) — a wick does not count</li>
+        <li>The prior candle's close was at or below PDH — this is the "first cross"</li>
+        <li>Only during RTH (Regular Trading Hours): 9:30 AM – 5:00 PM ET</li>
+        <li>Pre-market and after-hours PDH breaks are not flagged (institutional context doesn't apply)</li>
+      </ul>
 
-          <!-- CHoCH label -->
-          <text x="14" y="18" fill="#ffb300" font-size="12" font-family="sans-serif"
-                font-weight="700">CHANGE OF CHARACTER — Reversal Warning</text>
-
-          <!-- Uptrend first: HL1, HH1, HL2 -->
-          <line x1="32" y1="145" x2="32" y2="175" stroke="#26a69a" stroke-width="1.5"/>
-          <rect x="18" y="148" width="28" height="22" fill="#26a69a" rx="1"/>
-          <line x1="74" y1="105" x2="74" y2="150" stroke="#26a69a" stroke-width="1.5"/>
-          <rect x="60" y="108" width="28" height="36" fill="#26a69a" rx="1"/>
-          <line x1="116" y1="125" x2="116" y2="155" stroke="#26a69a" stroke-width="1.5"/>
-          <rect x="102" y="128" width="28" height="22" fill="#26a69a" rx="1"/>
-
-          <!-- LH: lower high — bearish candle -->
-          <line x1="158" y1="112" x2="158" y2="148" stroke="#ef5350" stroke-width="1.5"/>
-          <rect x="144" y="116" width="28" height="24" fill="#ef5350" rx="1"/>
-          <text x="155" y="108" fill="#ffb300" font-size="9" font-family="sans-serif"
-                text-anchor="middle">Lower High</text>
-
-          <!-- Prior HL level (swing low) -->
-          <line x1="10" y1="148" x2="310" y2="148" stroke="#ffb300" stroke-width="1"
-                stroke-dasharray="5,4" opacity="0.7"/>
-          <text x="315" y="152" fill="#ffb300" font-size="9" font-family="sans-serif">Prior HL</text>
-
-          <!-- CHoCH candle: closes BELOW prior HL -->
-          <line x1="200" y1="128" x2="200" y2="178" stroke="#ef5350" stroke-width="2"/>
-          <rect x="186" y="132" width="28" height="40" fill="#ef5350" rx="1"/>
-
-          <!-- CHoCH label -->
-          <text x="220" y="148" fill="#ffb300" font-size="12" font-family="sans-serif"
-                font-weight="700">CHoCH!</text>
-          <text x="220" y="162" fill="#ffb300" font-size="9" font-family="sans-serif"
-                opacity="0.8">Closes below prior swing low</text>
-
-          <!-- Entry zone -->
-          <rect x="182" y="168" width="36" height="10" fill="rgba(33,150,243,0.25)"
-                stroke="#2196f3" stroke-width="1" rx="1"/>
-          <text x="222" y="176" fill="#2196f3" font-size="10" font-family="sans-serif">Entry</text>
-
-          <!-- Downtrend begins -->
-          <line x1="242" y1="158" x2="242" y2="190" stroke="#ef5350" stroke-width="1.5"/>
-          <rect x="228" y="160" width="28" height="26" fill="#ef5350" rx="1"/>
-          <line x1="284" y1="172" x2="284" y2="195" stroke="#ef5350" stroke-width="1.5"/>
-          <rect x="270" y="175" width="28" height="18" fill="#ef5350" rx="1"/>
-        </svg>
-        <p class="diagram-caption">CHoCH (bearish): price fails to make a new high (lower high), then
-          closes below the most recent swing low. This breaks the uptrend structure — a reversal is
-          starting.</p>
-      </div>
-
-      <h3>BOS vs. CHoCH — quick comparison</h3>
+      <h3>Symbol-specific R:R targets</h3>
       <div class="cards">
         <div class="card bull">
-          <h4>BOS — Break of Structure</h4>
-          <p><em>Trend continuation.</em> Price closes beyond a swing point in the
-             same direction as the current trend. Use it to enter or add to a
-             position in the direction of the trend.</p>
+          <h4>MNQ — 2:1 R:R</h4>
+          <p>Nasdaq micro futures have larger ATR swings. PDH breakouts on MNQ tend
+          to run significantly, making 2:1 R:R achievable and historically profitable
+          (backtest: PF 5.36).</p>
         </div>
         <div class="card amber">
-          <h4>CHoCH — Change of Character</h4>
-          <p><em>Reversal warning.</em> Price closes beyond a swing point against
-             the current trend. Use it to anticipate a trend flip. Higher risk —
-             wait for confirmation before entering.</p>
+          <h4>MGC — 1:1 R:R</h4>
+          <p>Gold micro futures have tighter average ranges. MGC PDH breakouts reach
+          1:1 more reliably than 2:1. Taking profit sooner on MGC prevents giveback
+          (backtest: PF 4.02).</p>
         </div>
       </div>
 
       <div class="callout warning">
-        <p><strong>CHoCH confirmation:</strong> A CHoCH alert alone is not enough to
-          enter. Wait for price to pull back and show a zone rejection or sweep setup
-          in the new direction. Jumping in immediately on a CHoCH is high risk.</p>
+        <p><strong>Delayed data advantage:</strong> PDH breakouts are the most delay-tolerant
+        alert type. Institutional momentum from a clean PDH break typically runs for 30–90
+        minutes. Seeing a PDH breakout alert 15 minutes late often still presents a valid entry,
+        especially if price has only extended modestly past the level and volume is expanding.</p>
+      </div>
+    </section>
+
+    <!-- ── Setup 3: Trendline Break ───────────────────────────────────────── -->
+    <section id="trendline">
+      <span class="setup-badge s3">Alert Type 3</span>
+      <h2>Trendline Break</h2>
+      <p><strong>Plain language:</strong> Price has been respecting a diagonal line — bouncing
+        off it repeatedly (each bounce is a "touch"). When price finally closes on the other
+        side of that line for the first time, it signals that the force maintaining that trend
+        has broken down. What follows is often a sustained directional move as stop-losses
+        trigger and new positions pile in.</p>
+      <p>The strength of a trendline break depends on how many times price respected the line
+        before breaking it. A line with 5 touches is far more significant than one with 2. The
+        system requires at least <strong>3 touches</strong> before generating an alert.</p>
+
+      <div class="diagram">
+        <svg viewBox="0 0 520 210" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <marker id="arrowTL" markerWidth="7" markerHeight="7" refX="3.5" refY="3.5" orient="auto">
+              <path d="M0,0 L7,3.5 L0,7 Z" fill="#26a69a"/>
+            </marker>
+          </defs>
+          <!-- Downward resistance trendline (5 touches) -->
+          <line x1="20" y1="40" x2="340" y2="125" stroke="#ef5350" stroke-width="2" stroke-dasharray="0"/>
+          <text x="250" y="38" fill="#ef5350" font-size="10" font-family="sans-serif" opacity="0.8">Resistance trendline (5 touches)</text>
+          <!-- Touch markers on the line -->
+          <circle cx="20"  cy="40"  r="4" fill="none" stroke="#ef5350" stroke-width="1.5"/>
+          <circle cx="80"  cy="56"  r="4" fill="none" stroke="#ef5350" stroke-width="1.5"/>
+          <circle cx="145" cy="73"  r="4" fill="none" stroke="#ef5350" stroke-width="1.5"/>
+          <circle cx="215" cy="92"  r="4" fill="none" stroke="#ef5350" stroke-width="1.5"/>
+          <circle cx="280" cy="108" r="4" fill="none" stroke="#ef5350" stroke-width="1.5"/>
+          <!-- Candles below line (bouncing off it) -->
+          <line x1="32"  y1="42" x2="32"  y2="90" stroke="#ef5350" stroke-width="1.5"/>
+          <rect x="18"  y="44" width="28" height="26" fill="#ef5350" rx="1"/>
+          <line x1="80"  y1="58" x2="80"  y2="108" stroke="#26a69a" stroke-width="1.5"/>
+          <rect x="66"  y="65" width="28" height="28" fill="#26a69a" rx="1"/>
+          <line x1="130" y1="75" x2="130" y2="118" stroke="#ef5350" stroke-width="1.5"/>
+          <rect x="116" y="78" width="28" height="26" fill="#ef5350" rx="1"/>
+          <line x1="180" y1="94" x2="180" y2="138" stroke="#26a69a" stroke-width="1.5"/>
+          <rect x="166" y="97" width="28" height="26" fill="#26a69a" rx="1"/>
+          <line x1="238" y1="95" x2="238" y2="138" stroke="#ef5350" stroke-width="1.5"/>
+          <rect x="224" y="98" width="28" height="26" fill="#ef5350" rx="1"/>
+          <line x1="288" y1="110" x2="288" y2="150" stroke="#26a69a" stroke-width="1.5"/>
+          <rect x="274" y="112" width="28" height="24" fill="#26a69a" rx="1"/>
+          <!-- BREAKOUT candle — closes ABOVE resistance line -->
+          <line x1="338" y1="90" x2="338" y2="145" stroke="#26a69a" stroke-width="2.5"/>
+          <rect x="324" y="93" width="28" height="38" fill="#26a69a" rx="1"/>
+          <!-- Line projected to breakout bar -->
+          <line x1="340" y1="125" x2="395" y2="140" stroke="#ef5350" stroke-width="1" stroke-dasharray="5,4" opacity="0.5"/>
+          <text x="355" y="86" fill="#26a69a" font-size="11" font-family="sans-serif" font-weight="700">Break!</text>
+          <!-- Entry -->
+          <rect x="320" y="128" width="36" height="10" fill="rgba(33,150,243,0.25)" stroke="#2196f3" stroke-width="1" rx="1"/>
+          <line x1="358" y1="133" x2="396" y2="133" stroke="#2196f3" stroke-width="1" stroke-dasharray="3,2"/>
+          <text x="398" y="137" fill="#2196f3" font-size="10" font-family="sans-serif" font-weight="600">Entry</text>
+          <!-- Continuation -->
+          <line x1="380" y1="72" x2="380" y2="104" stroke="#26a69a" stroke-width="1.5"/>
+          <rect x="366" y="75" width="28" height="26" fill="#26a69a" rx="1"/>
+          <line x1="420" y1="52" x2="420" y2="84" stroke="#26a69a" stroke-width="1.5"/>
+          <rect x="406" y="55" width="28" height="26" fill="#26a69a" rx="1"/>
+          <path d="M490,170 L490,50" stroke="#26a69a" stroke-width="2" marker-end="url(#arrowTL)"/>
+          <text x="500" y="120" fill="#26a69a" font-size="10" font-family="sans-serif" font-weight="700" writing-mode="tb">LONG</text>
+        </svg>
+        <p class="diagram-caption">Bullish trendline break: price has touched the resistance trendline 5 times
+          (empty circles), each time retreating. The next candle finally closes above it — triggering the alert.</p>
+      </div>
+
+      <h3>Why trendline breaks work with delayed data</h3>
+      <p>Unlike a zone rejection (which happens in one candle and can resolve in minutes on fast
+        timeframes), a trendline break launches a directional move that typically lasts many candles.
+        By the time you see the alert 15 minutes later, you're often entering at the best possible
+        point — after the initial volatile "break" candle, with confirmation that price is sustaining
+        above (or below) the line.</p>
+
+      <div class="two-col">
+        <div>
+          <h3>Bullish trendline break</h3>
+          <ul class="checklist green">
+            <li>Resistance line has ≥ 3 prior touches</li>
+            <li>This candle closes ABOVE the projected line value</li>
+            <li>Prior candle closed AT or BELOW the line (fresh cross)</li>
+            <li>Best when regime is bullish or a CHoCH recently fired</li>
+          </ul>
+        </div>
+        <div>
+          <h3>Bearish trendline break</h3>
+          <ul class="checklist green">
+            <li>Support line has ≥ 3 prior touches</li>
+            <li>This candle closes BELOW the projected line value</li>
+            <li>Prior candle closed AT or ABOVE the line (fresh cross)</li>
+            <li>Best when regime is bearish or a CHoCH recently fired</li>
+          </ul>
+        </div>
+      </div>
+
+      <h3>What invalidates a trendline break</h3>
+      <ul class="checklist red">
+        <li>Price closes back through the broken trendline within 1–2 candles (false break)</li>
+        <li>The breakout candle is small and indecisive — the system scores break size, low scores flag marginal crosses</li>
+        <li>No volume expansion on the break (in live data mode)</li>
+      </ul>
+
+      <div class="callout">
+        <p><strong>When to enter with a delay:</strong> Pull up the current chart. If price has
+        cleanly broken the trendline and is trading above/below it (not immediately back-testing
+        it), enter at market. If price has shot far away from the trendline and the move looks
+        extended, wait for a pullback to the trendline itself — that retest is often the cleanest
+        entry anyway.</p>
+      </div>
+    </section>
+
+    <!-- ── BOS / CHoCH ───────────────────────────────────────────────────── -->
+    <section id="bos">
+      <span class="setup-badge sq">Qualifier Signal</span>
+      <h2>BOS &amp; CHoCH — Structure Break Qualifiers</h2>
+      <p>Break of Structure (BOS) and Change of Character (CHoCH) are <strong>not traded as
+        standalone alerts</strong> — they are internal signals that improve zone rejection
+        quality. They add +15 confidence points to any zone rejection that fires in the same
+        direction within the following 24 hours.</p>
+
+      <div class="cards">
+        <div class="card bull">
+          <h4>BOS — Break of Structure</h4>
+          <p><em>Trend continuation.</em> Price closes beyond the last swing high (bullish BOS)
+          or swing low (bearish BOS) in the direction of the current trend. Confirms momentum.</p>
+        </div>
+        <div class="card amber">
+          <h4>CHoCH — Change of Character</h4>
+          <p><em>Reversal warning.</em> Price closes beyond a swing point <em>against</em> the
+          current trend. Signals the trend may be reversing. Unlocks counter-trend zone rejections
+          when the regime gate would otherwise suppress them.</p>
+        </div>
+      </div>
+
+      <h3>How they appear in alerts</h3>
+      <p>When you see <strong>· BOS qualified</strong> or <strong>· CHoCH qualified</strong>
+        in an alert rationale, it means a structural break fired in the same direction recently,
+        and that context was used to boost the zone rejection's confidence by +15 points.
+        These are among the highest-quality setups the system produces.</p>
+
+      <div class="callout warning">
+        <p><strong>CHoCH and the regime gate:</strong> If the 5m regime is strongly bullish and
+        aligned, the system normally suppresses bearish zone rejections. But if a bearish CHoCH
+        fired recently, that suppression is lifted — the CHoCH is evidence that the structure
+        has actually changed. A zone rejection tagged "CHoCH qualified" in a counter-trend
+        direction is still a valid, high-quality setup.</p>
+      </div>
+    </section>
+
+    <!-- ── How Scoring Works ─────────────────────────────────────────────── -->
+    <section id="scoring">
+      <h2>How the Confidence Score Works</h2>
+      <p>Every alert is scored 0–100% based on the confluence of factors present at the time
+        the setup triggered. The score determines alert quality — not just whether to trade,
+        but <em>how much confidence to place in it</em>. Alerts below 65% are hidden by default
+        because the noise-to-signal ratio below that threshold is too high.</p>
+
+      <h3>Score components — Zone Rejection</h3>
+      <table class="score-table">
+        <thead>
+          <tr><th>Factor</th><th>Points</th><th>What it means</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Base score</td><td class="pts">30</td><td>Every zone rejection starts here</td></tr>
+          <tr><td>Wick quality <span class="tag-inline">+W</span></td><td class="pts">+14 to +24</td><td>Wick ratio as % of total candle range × 30. A 80% wick gets +24, a 45% wick gets +14. Long wicks mean stronger rejection.</td></tr>
+          <tr><td>Full-size candle <span class="tag-inline">+Sz</span></td><td class="pts">+10</td><td>Candle is ≥ 0.5 × ATR(14). Small indecisive candles don't score this.</td></tr>
+          <tr><td>Regime aligned <span class="tag-inline">+R</span></td><td class="pts">+15</td><td>Setup direction matches the current regime direction (bullish zone in bullish regime).</td></tr>
+          <tr><td>TF alignment <span class="tag-inline">+A</span></td><td class="pts">+10</td><td>5m and 15m regimes agree on direction.</td></tr>
+          <tr><td>IOF confluence <span class="tag-inline">+IOF</span></td><td class="pts">+10 to +20</td><td>An open FVG (+10) or active Order Block (+10) near the zone, or both (+20).</td></tr>
+          <tr><td>BOS/CHoCH qualified <span class="tag-inline">+BQ</span></td><td class="pts">+15</td><td>A structural break fired in the same direction in the prior 24 hours (30-min minimum separation).</td></tr>
+          <tr><td>MNQ TF stack <span class="tag-inline">+TFS</span></td><td class="pts">+15</td><td>MNQ only. The zone's key level aligns with an open IOF zone on a higher timeframe (15m or 30m). Capped at 1 confirming TF.</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Score components — PDH/PDL Breakout</h3>
+      <table class="score-table">
+        <thead>
+          <tr><th>Factor</th><th>Points</th><th>What it means</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Base score</td><td class="pts">45</td><td>PDH/PDL setups start higher — the level is objectively significant</td></tr>
+          <tr><td>Decisive break <span class="tag-inline">+Br</span></td><td class="pts">+8 to +15</td><td>How far beyond PDH the close landed as a fraction of ATR. A strong push adds points; a borderline tick-above does not.</td></tr>
+          <tr><td>Regime aligned <span class="tag-inline">+R</span></td><td class="pts">+15</td><td>Breakout direction matches regime direction.</td></tr>
+          <tr><td>TF alignment <span class="tag-inline">+A</span></td><td class="pts">+10</td><td>5m and 15m regimes agree.</td></tr>
+          <tr><td>IOF confluence <span class="tag-inline">+IOF</span></td><td class="pts">+10 to +20</td><td>FVG or OB near the breakout level.</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Score components — Trendline Break</h3>
+      <table class="score-table">
+        <thead>
+          <tr><th>Factor</th><th>Points</th><th>What it means</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Base score</td><td class="pts">45</td><td>Trendline breaks start higher — a confirmed multi-touch break is a significant event</td></tr>
+          <tr><td>Break size <span class="tag-inline">+Br</span></td><td class="pts">+1 to +10</td><td>How far price closed beyond the trendline as a fraction of ATR. Decisive breaks score more.</td></tr>
+          <tr><td>Touch count <span class="tag-inline">+T</span></td><td class="pts">+5 or +10</td><td>3–4 touches = +5. 5+ touches = +10. A 6-touch trendline break is far more significant than a 3-touch one.</td></tr>
+          <tr><td>Regime aligned <span class="tag-inline">+R</span></td><td class="pts">+15</td><td>Break direction matches regime direction.</td></tr>
+          <tr><td>TF alignment <span class="tag-inline">+A</span></td><td class="pts">+10</td><td>5m and 15m regimes agree.</td></tr>
+          <tr><td>IOF confluence <span class="tag-inline">+IOF</span></td><td class="pts">+10 to +20</td><td>FVG or OB near the breakout level.</td></tr>
+        </tbody>
+      </table>
+
+      <h3>What the confidence levels mean in practice</h3>
+      <div class="cards">
+        <div class="card bear">
+          <h4>Below 65% — Not shown</h4>
+          <p>Counter-trend setups, marginal wick quality, no confluence. These historically
+          produce noise, not edge. Hidden by default.</p>
+        </div>
+        <div class="card amber">
+          <h4>65–74% — Moderate</h4>
+          <p>Regime-aligned with some confluence. Worth watching but verify the
+          higher-timeframe context manually before entering.</p>
+        </div>
+        <div class="card bull">
+          <h4>75–89% — High quality</h4>
+          <p>Regime + alignment + usually IOF or BOS/CHoCH qualifier. These are
+          the bread-and-butter setups. Take these with appropriate sizing.</p>
+        </div>
+        <div class="card">
+          <h4>90–100% — Elite</h4>
+          <p>Full confluence stack. All scoring factors firing. Historically highest
+          win rate. Consider maximum allowed sizing within your risk rules.</p>
+        </div>
+      </div>
+
+      <div class="callout">
+        <p><strong>You can lower the filter:</strong> The minimum confidence filter in the panel
+        defaults to 65%. You can lower it to 0 to see everything, but expect to see more
+        counter-trend and low-quality setups mixed in. Use the score breakdown tags on each
+        card to quickly judge what's driving the confidence number.</p>
       </div>
     </section>
 
     <!-- ── Reading the Alerts ────────────────────────────────────────────── -->
     <section id="alerts">
       <h2>Reading the Alert Feed</h2>
-      <p>Every setup detected by the system appears as a card in the right-hand alert
-        panel. Here's how to read one:</p>
+      <p>Every detected setup appears as a card in the right-hand panel. The feed shows all
+        timeframes (5m, 15m, 30m) for the active symbol together, newest first.</p>
 
-      <!-- Mock alert card -->
       <div class="alert-mock">
         <div class="alert-mock-header">
           <strong>MNQ</strong>
-          <span class="tag" style="color:#787b86;font-size:10px">5m</span>
+          <span class="tag" style="color:#787b86;font-size:10px">15m</span>
           <span class="tag">Zone Rej</span>
           <span class="bull-col">▲</span>
         </div>
-        <div style="font-size:11px;color:#787b86;margin-bottom:6px">
-          Zone rejection at demand — bullish wick, trend aligned · 15m stack
+        <div style="font-size:11px;color:#787b86;margin-bottom:4px">
+          Bullish rejection at demand 24992.00 — 78% lower wick · IOF confluence · BOS qualified
+        </div>
+        <div style="font-size:10px;color:#d1d4dc;margin-bottom:4px">
+          <span style="background:#2a2e39;padding:1px 4px;border-radius:2px;font-size:9px">30</span>
+          <span style="color:#26a69a;font-size:9px;margin-left:4px">+W23</span>
+          <span style="color:#26a69a;font-size:9px;margin-left:4px">+Sz10</span>
+          <span style="color:#ffb300;font-size:9px;margin-left:4px">+R15</span>
+          <span style="color:#2196f3;font-size:9px;margin-left:4px">+A10</span>
+          <span style="color:#ab47bc;font-size:9px;margin-left:4px">+IOF10</span>
+          <span style="color:#ffb300;font-size:9px;margin-left:4px">+BQ15</span>
         </div>
         <div style="font-size:10px;color:#d1d4dc;margin-bottom:6px">
-          <span style="color:#787b86">Entry</span> 21405.25 &nbsp;
-          <span style="color:#ef9a9a">SL</span> <span style="color:#ef5350">21388.50</span> &nbsp;
-          <span style="color:#80cbc4">TP</span> <span style="color:#26a69a">21438.00</span>
+          <span style="color:#787b86">Entry</span> 25058.00 &nbsp;
+          <span style="color:#ef9a9a">SL</span> <span style="color:#ef5350">24982.70</span> &nbsp;
+          <span style="color:#80cbc4">TP</span> <span style="color:#26a69a">25133.30</span>
         </div>
         <div style="display:flex;align-items:center;gap:10px;font-size:10px">
-          <span style="color:var(--accent);font-weight:700">82%</span>
-          <span style="color:#26a69a;font-weight:600">○ Open</span>
-          <span style="color:#787b86">$160</span>
-          <span style="margin-left:auto;color:#787b86">2:32 PM MT · 8m</span>
+          <span style="color:var(--accent);font-weight:700">100%</span>
+          <span style="color:#26a69a;font-weight:600">✓ WON</span>
+          <span style="color:#787b86">$150</span>
+          <span style="margin-left:auto;color:#787b86">11:30 AM MT · 2h</span>
         </div>
       </div>
 
+      <h3>Card fields explained</h3>
       <div class="cards">
         <div class="card">
-          <h4>Confidence % (82%)</h4>
-          <p>A composite score 0–100 based on: setup quality, body/wick ratio, regime
-          alignment, IOF zone confluence, and multi-timeframe stack. Higher = better.</p>
+          <h4>Symbol + Timeframe + Type</h4>
+          <p>Which instrument, which chart timeframe, and which setup type triggered.
+          <code>Zone Rej</code>, <code>PDH Brk</code>, or <code>TL Break</code>.</p>
+        </div>
+        <div class="card">
+          <h4>Confidence % + Score tags</h4>
+          <p>The 0–100 composite score and the breakdown tags showing exactly which
+          factors contributed. <code>+R</code> regime, <code>+A</code> alignment,
+          <code>+IOF</code> order flow, <code>+BQ</code> structure qualifier,
+          <code>+TFS</code> TF stack, <code>+T</code> trendline touches,
+          <code>+Br</code> break size.</p>
         </div>
         <div class="card">
           <h4>Entry / SL / TP</h4>
-          <p>The system calculates entry at the setup level, stop-loss below/above
-          the invalidation point, and take-profit using your R:R ratio setting.</p>
+          <p>Calculated at the time the alert triggered. Entry = setup candle close.
+          SL = invalidation level (below zone or beyond structure break).
+          TP = Entry ± (risk × R:R ratio).</p>
         </div>
         <div class="card">
-          <h4>Outcome badge</h4>
-          <p><strong style="color:#26a69a">○ Open</strong> — trade still running.
-             <strong style="color:#26a69a">✓ WON</strong> — TP hit.
-             <strong style="color:#ef5350">✗ LOST</strong> — SL hit.</p>
+          <h4>Outcome + Dollar Risk</h4>
+          <p><strong style="color:#26a69a">✓ WON</strong> / <strong style="color:#ef5350">✗ LOST</strong> / <strong>○ Open</strong>.
+          Dollar risk calculated from your contract count setting × tick value × stop distance.</p>
         </div>
         <div class="card amber">
           <h4>✦ AI button</h4>
-          <p>Click to request a plain-language AI commentary explaining the setup
-          quality, what to watch for, and where it's invalidated.</p>
+          <p>Request a plain-language AI assessment of the specific setup — quality analysis,
+          what to watch for, and where the trade is invalidated.</p>
+        </div>
+        <div class="card">
+          <h4>Take / TAKEN badge</h4>
+          <p>Mark a trade you took. It moves to the "Taken Trades" section at the bottom
+          of the feed and opens a trade journal form to log your actual entry, exit, and notes.</p>
         </div>
       </div>
 
-      <h3>Score breakdown tags</h3>
-      <p>Below the rationale line you may see small colored tags: <code>+R</code>
-        (regime bonus), <code>+A</code> (alignment bonus), <code>+IOF</code>
-        (IOF zone confluence), <code>+TFS</code> (multi-timeframe stack). These are
-        what pushed the confidence above the base score.</p>
+      <h3>Filtered alerts (suppressed)</h3>
+      <p>An alert marked <strong>filtered</strong> (faded, dim border) means it fired while
+        another trade for the same instrument was already open. The system shows only one
+        active trade per instrument to avoid overexposure. Filtered alerts can still be valid
+        — review them after the current trade resolves.</p>
 
-      <h3>Filtered and suppressed alerts</h3>
-      <p>An alert marked <strong>filtered</strong> (faded) means it fired while another
-        trade for the same instrument was already open. The system shows only one active
-        trade per instrument at a time to avoid overexposure. Filtered alerts may still
-        be valid — use your judgment.</p>
+      <h3>Chart markers</h3>
+      <p>Each alert also places a colored arrow on the chart at the trigger candle:
+        <span style="color:#2196f3;font-weight:700">● Blue</span> = open trade,
+        <span style="color:#26a69a;font-weight:700">● Teal</span> = won,
+        <span style="color:#ef5350;font-weight:700">● Red</span> = lost,
+        <span style="color:#ffb300;font-weight:700">● Gold</span> = taken by you.
+        Labels are <code>ZR</code> (zone rejection), <code>PDH</code> (breakout),
+        <code>TL</code> (trendline break). Clicking an arrow scrolls the feed to that card.</p>
     </section>
 
     <!-- ── Risk Management ───────────────────────────────────────────────── -->
     <section id="risk">
       <h2>Risk Management Rules</h2>
-      <p>Good setups still lose. Risk management is what keeps you in the game.</p>
+      <p>Even high-confidence setups fail. Risk management is what keeps you in the game
+        long enough for your edge to compound.</p>
 
       <div class="cards">
         <div class="card">
           <h4>Always use a stop-loss</h4>
-          <p>The system provides an invalidation level for every setup. Place your
-          stop there. Never move a stop against you.</p>
+          <p>Every alert includes an SL level. Place your stop there on entry.
+          Never move a stop against you — moving stops is how losing trades become
+          account-threatening trades.</p>
         </div>
         <div class="card bear">
-          <h4>Risk per trade</h4>
-          <p>The dollar risk display shows your exposure based on your contract count
-          and stop distance. If it shows red, the setup is outside your max-risk budget.</p>
+          <h4>Dollar risk display</h4>
+          <p>The dollar risk shown on each card is (stop distance ÷ tick size) × tick value
+          × contracts. If it shows in red, the setup exceeds your max-risk budget —
+          reduce contracts or skip.</p>
         </div>
         <div class="card bull">
           <h4>R:R Ratio</h4>
-          <p>Default is 2:1 (risk $1 to make $2). Higher R:R filters out more
-          setups but only shows higher quality. Adjustable in the filter panel.</p>
+          <p>Default 2:1 (risk $1 to make $2). Adjustable per trade in the filter panel.
+          Note: MGC PDH breakouts use a fixed 1:1 internally regardless of your setting —
+          gold's range is tighter and 2:1 on MGC PDH produces worse outcomes.</p>
         </div>
         <div class="card amber">
           <h4>One trade at a time</h4>
-          <p>The system enforces one open trade per instrument. Don't override
-          this with multiple simultaneous positions in the same direction.</p>
+          <p>The system enforces one open trade per instrument. Don't stack multiple
+          positions in the same direction — a directional move that reverses will
+          hit all of them simultaneously.</p>
         </div>
       </div>
 
-      <div class="callout danger">
-        <p><strong>Never risk more than 1–2% of your account on a single trade.</strong>
-          Use the contract count and max risk settings to enforce this. If a setup would
-          require a stop that puts you over budget, skip it.</p>
-      </div>
-
-      <h3>Setup quality guidelines</h3>
+      <h3>Confidence thresholds as a position-sizing guide</h3>
       <ul class="checklist green">
-        <li><strong>≥ 75%</strong> — High confidence. Check regime alignment, take if setup is clean.</li>
-        <li><strong>60–74%</strong> — Moderate. Verify higher-timeframe context before entering.</li>
-        <li><strong>Below 60%</strong> — Low confidence. Paper-trade or skip. Use as learning material.</li>
+        <li><strong>90–100%</strong> — Elite setup. Full allowed size. All confluences present.</li>
+        <li><strong>75–89%</strong> — High quality. Standard size. Regime + alignment + some confluence.</li>
+        <li><strong>65–74%</strong> — Moderate. Half size or wait for additional confirmation. Check context manually.</li>
+        <li><strong>Below 65%</strong> — Hidden by default. Use for study only — not trading size.</li>
       </ul>
 
+      <h3>Accounting for delayed data in risk management</h3>
+      <ul class="checklist amber">
+        <li>Compare current price to the card's Entry level before entering</li>
+        <li>If price has already moved 50%+ of the way to TP, the setup has partly played out — skip or take a reduced position</li>
+        <li>If price has reversed past the SL level already, the trade is over — don't enter a dead setup</li>
+        <li>For trendline breaks: if price is back inside the broken trendline, the break failed — do not enter</li>
+        <li>15-min delay affects 5m setups most — always verify current chart before entering a 5m alert</li>
+      </ul>
+
+      <div class="callout danger">
+        <p><strong>Never risk more than 1–2% of your account on a single trade.</strong>
+          Use the contract count and max-risk settings to enforce this. Position sizing
+          discipline is more important than setup quality — a single over-sized trade
+          can erase weeks of gains.</p>
+      </div>
+
       <div class="callout">
-        <p><strong>Use the AI commentary:</strong> Click "✦ AI" on any alert to get a plain-language
-          assessment of the setup quality, what confirms it, and what invalidates it. This is
-          especially useful when you're unsure about a setup.</p>
+        <p><strong>Use the AI commentary:</strong> Click "✦ AI" on any alert to get a
+          plain-language assessment: what the setup quality is, what would confirm it,
+          what level invalidates it, and what the current market context suggests. This
+          is especially useful when you're unsure about acting on a delayed alert.</p>
       </div>
 
       <hr/>
