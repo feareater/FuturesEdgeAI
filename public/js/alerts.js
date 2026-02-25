@@ -3,6 +3,7 @@
 // Supports confidence filtering, per-symbol dollar risk calculation, and
 // win-rate stats that update in real-time as the confidence threshold changes.
 // Click a card to highlight the setup on the chart.
+// Features: symbol+TF sync filter, refresh countdown, new-alert highlight, trade log.
 
 (function () {
 
@@ -16,8 +17,18 @@
   let cfg = { mnqContracts: 5, mgcContracts: 3, maxRiskDollars: 200, rrRatio: 2.0 };
   let minConf = 0;
 
+  // ── Active chart view — synced from chart.js via chartViewChange event ──────
+  let activeSymbol = 'MNQ';
+  let activeTf     = '5m';
+
   // Raw alerts from the last fetch (one per confidence threshold query)
   let currentAlerts = [];
+
+  // ── Trade log (alertKey → trade object) ───────────────────────────────────
+  const takenTrades = new Map();
+
+  // ── New-alert highlighting state ──────────────────────────────────────────
+  let _prevAlertKeys = new Set();
 
   // ── DOM refs ───────────────────────────────────────────────────────────────
   const alertFeed      = document.getElementById('alert-feed');
@@ -34,15 +45,34 @@
   const sessionBadgeEl = document.getElementById('session-badge');
   const dataAgeEl      = document.getElementById('data-age');
 
-  // ── Data freshness display ─────────────────────────────────────────────────
+  // ── Data freshness display + countdown ────────────────────────────────────
 
-  function _updateDataAge(ts) {
-    if (!dataAgeEl || !ts) return;
-    const t = new Date(ts).toLocaleTimeString('en-US', {
-      hour: '2-digit', minute: '2-digit', hour12: false,
-      timeZone: 'America/Denver',
-    });
-    dataAgeEl.textContent = `Data: ${t} MT`;
+  let _lastRefreshTs = null;
+  let _nextRefreshTs = null;
+
+  function _setRefreshTimes(lastTs, nextTs) {
+    if (lastTs) _lastRefreshTs = lastTs;
+    if (nextTs) _nextRefreshTs = nextTs;
+    _tickDataAge();
+  }
+
+  function _tickDataAge() {
+    if (!dataAgeEl) return;
+    let text = '—';
+    if (_lastRefreshTs) {
+      const t = new Date(_lastRefreshTs).toLocaleTimeString('en-US', {
+        hour: 'numeric', minute: '2-digit', hour12: true,
+        timeZone: 'America/Denver',
+      });
+      text = `Data: ${t} MT`;
+    }
+    if (_nextRefreshTs) {
+      const secsLeft = Math.max(0, Math.round((new Date(_nextRefreshTs) - Date.now()) / 1000));
+      const m = Math.floor(secsLeft / 60);
+      const s = secsLeft % 60;
+      text += ` · ${m}:${s.toString().padStart(2, '0')}`;
+    }
+    dataAgeEl.textContent = text;
   }
 
   // ── Session badge ──────────────────────────────────────────────────────────
@@ -59,6 +89,24 @@
     }
   }
 
+  // ── Alert key helper ───────────────────────────────────────────────────────
+
+  function _alertKey(a) {
+    return `${a.symbol}:${a.timeframe}:${a.setup.type}:${a.setup.time}`;
+  }
+
+  // ── New alert banner ───────────────────────────────────────────────────────
+
+  function _showNewAlertBanner(count) {
+    const existing = document.querySelector('.new-alert-banner');
+    if (existing) existing.remove();
+    const banner = document.createElement('div');
+    banner.className   = 'new-alert-banner';
+    banner.textContent = `🔔 ${count} new setup${count > 1 ? 's' : ''} — check alert feed`;
+    document.body.appendChild(banner);
+    setTimeout(() => banner.remove(), 6000);
+  }
+
   // ── Boot ────────────────────────────────────────────────────────────────────
 
   async function boot() {
@@ -71,14 +119,25 @@
       }
     } catch (_) {}
 
-    // Load initial data-age from health endpoint
+    // Load initial data-age + nextRefresh from health endpoint
     try {
       const hRes = await fetch('/api/health');
-      if (hRes.ok) { const { lastRefresh } = await hRes.json(); _updateDataAge(lastRefresh); }
+      if (hRes.ok) {
+        const { lastRefresh, nextRefresh } = await hRes.json();
+        _setRefreshTimes(lastRefresh, nextRefresh);
+      }
+    } catch (_) {}
+
+    // Load trade log
+    try {
+      const tr = await fetch('/api/trades');
+      if (tr.ok) {
+        const { trades } = await tr.json();
+        trades.forEach(t => takenTrades.set(t.alertKey, t));
+      }
     } catch (_) {}
 
     // Restore any locally saved overrides (client-only: contracts, maxRisk, minConf)
-    // rrRatio is server-authoritative; localStorage value is display-only until server restarts
     const saved = _loadLocal();
     if (saved) {
       cfg.mnqContracts   = saved.mnqContracts   ?? cfg.mnqContracts;
@@ -99,6 +158,14 @@
     _wireInputs();
     _updateSessionBadge();
     setInterval(_updateSessionBadge, 60_000);
+    setInterval(_tickDataAge, 1000);  // live countdown
+
+    // Listen for chart symbol/TF changes (dispatched by chart.js after each loadData)
+    document.addEventListener('chartViewChange', (e) => {
+      activeSymbol = e.detail.symbol;
+      activeTf     = e.detail.tf;
+      fetchAndRender();
+    });
   }
 
   // ── Fetch + render ─────────────────────────────────────────────────────────
@@ -109,13 +176,15 @@
     clearTimeout(_fetchTimer);
     _fetchTimer = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/alerts?limit=50&minConfidence=${minConf}`);
+        const res = await fetch(
+          `/api/alerts?limit=50&minConfidence=${minConf}&symbol=${activeSymbol}&timeframe=${activeTf}`
+        );
         if (!res.ok) throw new Error(`/api/alerts ${res.status}`);
         const { alerts } = await res.json();
         currentAlerts = alerts;
         _renderFeed();
         _updateStats();
-        console.log(`[alerts] ${alerts.length} alerts  minConf=${minConf}`);
+        console.log(`[alerts] ${alerts.length} alerts  sym=${activeSymbol}  tf=${activeTf}  minConf=${minConf}`);
       } catch (err) {
         console.error('[alerts] Fetch failed:', err.message);
         alertFeed.innerHTML =
@@ -129,12 +198,23 @@
     alertFeed.innerHTML = '';
     if (!currentAlerts.length) {
       const msg = minConf > 0
-        ? `No setups at ≥${minConf}% confidence — try lowering Min Conf.`
-        : 'Scanning… no setups detected yet.';
+        ? `No ${activeSymbol} ${activeTf} setups at ≥${minConf}% confidence.`
+        : `No ${activeSymbol} ${activeTf} setups detected yet.`;
       alertFeed.innerHTML = `<p class="placeholder">${msg}</p>`;
+      // Clear prev keys so next refresh can detect new alerts correctly
+      _prevAlertKeys = new Set();
       return;
     }
-    currentAlerts.forEach(a => alertFeed.appendChild(_buildCard(a)));
+    currentAlerts.forEach(a => {
+      const card = _buildCard(a);
+      // Highlight cards that weren't present before the last refresh
+      if (_prevAlertKeys.size > 0 && !_prevAlertKeys.has(_alertKey(a))) {
+        card.classList.add('is-new');
+        setTimeout(() => card.classList.remove('is-new'), 10_000);
+      }
+      alertFeed.appendChild(card);
+    });
+    _prevAlertKeys = new Set(); // clear after render
   }
 
   // ── Win-rate stats ─────────────────────────────────────────────────────────
@@ -197,7 +277,7 @@
     const fmtP = n => (n != null ? n.toFixed(2) : '—');
     // Display time + age in Mountain Time (MST/MDT)
     const time = new Date(setup.time * 1000).toLocaleTimeString('en-US', {
-      hour: '2-digit', minute: '2-digit', hour12: false,
+      hour: 'numeric', minute: '2-digit', hour12: true,
       timeZone: 'America/Denver',
     });
     const ageMins = Math.round((Date.now() - setup.time * 1000) / 60000);
@@ -213,10 +293,11 @@
     const outcomeLabel = { won: '✓ WON', lost: '✗ LOST', open: '○ Open' }[setup.outcome] || '—';
     const outcomeClass = setup.outcome || 'open';
 
+    const isTaken = takenTrades.has(`${symbol}:${timeframe}:${setup.type}:${setup.time}`);
+    const aiKey   = `${symbol}:${timeframe}:${setup.type}:${setup.time}`;
+
     const card = document.createElement('div');
     card.className = `alert-card ${dirClass}${suppressed ? ' suppressed' : ''}${overBudget ? ' over-budget' : ''}`;
-
-    const aiKey = `${symbol}:${timeframe}:${setup.type}:${setup.time}`;
 
     card.innerHTML = [
       `<div class="alert-header">`,
@@ -238,9 +319,15 @@
       `  <span class="alert-outcome ${outcomeClass}">${outcomeLabel}</span>`,
       `  <span class="alert-risk ${riskClass}">${riskText}</span>`,
       !suppressed ? `  <button class="ai-btn" data-key="${aiKey}" title="Get AI analysis">✦ AI</button>` : '',
+      !suppressed && !isTaken
+        ? `  <button class="take-btn" data-key="${aiKey}" title="Mark as taken">Take</button>`
+        : isTaken
+          ? `  <span class="taken-badge" data-key="${aiKey}" title="View/edit trade">TAKEN</span>`
+          : '',
       `  <span class="alert-time">${time} MT</span><span class="alert-age">${ageText}</span>`,
       `</div>`,
       `<div class="alert-commentary"></div>`,
+      `<div class="trade-form" style="display:none"></div>`,
     ].join('');
 
     if (!suppressed) {
@@ -252,7 +339,7 @@
         window.ChartAPI?.highlightSetup(alert);
       });
 
-      const aiBtn       = card.querySelector('.ai-btn');
+      const aiBtn        = card.querySelector('.ai-btn');
       const commentaryEl = card.querySelector('.alert-commentary');
 
       aiBtn.addEventListener('click', async (e) => {
@@ -316,6 +403,103 @@
           aiBtn.textContent = '✦ AI';
         }
       });
+
+      // ── Trade journal form ─────────────────────────────────────────────────
+      const tradeFormEl = card.querySelector('.trade-form');
+      const takeBtn     = card.querySelector('.take-btn');
+      const takenBadge  = card.querySelector('.taken-badge');
+
+      function _openTradeForm(existing) {
+        const t = existing || {};
+        tradeFormEl.innerHTML = `
+          <div class="trade-form-inner">
+            <div class="tf-row">
+              <label>Entry</label>
+              <input class="tf-entry" type="number" step="0.25" value="${t.actualEntry ?? fmtP(setup.entry ?? setup.price)}">
+              <label>SL</label>
+              <input class="tf-sl" type="number" step="0.25" value="${t.actualSL ?? fmtP(setup.sl)}">
+              <label>TP</label>
+              <input class="tf-tp" type="number" step="0.25" value="${t.actualTP ?? fmtP(setup.tp)}">
+            </div>
+            <div class="tf-row">
+              <label>Exit</label>
+              <input class="tf-exit" type="number" step="0.25" value="${t.actualExit ?? ''}">
+              <label>Notes</label>
+              <input class="tf-notes" type="text" value="${t.notes ?? ''}" placeholder="Optional notes">
+            </div>
+            <div class="tf-btns">
+              <button class="tf-save">Save</button>
+              <button class="tf-cancel">Cancel</button>
+            </div>
+          </div>`;
+        tradeFormEl.style.display = 'block';
+
+        tradeFormEl.querySelector('.tf-cancel').addEventListener('click', (e) => {
+          e.stopPropagation();
+          tradeFormEl.style.display = 'none';
+        });
+
+        tradeFormEl.querySelector('.tf-save').addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const body = {
+            alertKey:    aiKey,
+            symbol,
+            timeframe,
+            setupType:   setup.type,
+            actualEntry: tradeFormEl.querySelector('.tf-entry').value,
+            actualSL:    tradeFormEl.querySelector('.tf-sl').value,
+            actualTP:    tradeFormEl.querySelector('.tf-tp').value,
+            actualExit:  tradeFormEl.querySelector('.tf-exit').value || null,
+            notes:       tradeFormEl.querySelector('.tf-notes').value,
+          };
+          try {
+            const res = await fetch('/api/trades', {
+              method:  'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body:    JSON.stringify(body),
+            });
+            if (!res.ok) throw new Error(res.status);
+            const { trade } = await res.json();
+            takenTrades.set(aiKey, trade);
+            tradeFormEl.style.display = 'none';
+
+            // Swap Take button → TAKEN badge without full re-render
+            if (takeBtn) {
+              const badge = document.createElement('span');
+              badge.className  = 'taken-badge';
+              badge.dataset.key = aiKey;
+              badge.title       = 'View/edit trade';
+              badge.textContent = 'TAKEN';
+              badge.addEventListener('click', (ev) => {
+                ev.stopPropagation();
+                const isOpen = tradeFormEl.style.display !== 'none';
+                tradeFormEl.style.display = isOpen ? 'none' : 'block';
+                if (!isOpen) _openTradeForm(takenTrades.get(aiKey));
+              });
+              takeBtn.replaceWith(badge);
+            }
+          } catch (err) {
+            console.error('[trade] Save failed:', err.message);
+          }
+        });
+      }
+
+      if (takeBtn) {
+        takeBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const isOpen = tradeFormEl.style.display !== 'none';
+          tradeFormEl.style.display = isOpen ? 'none' : 'block';
+          if (!isOpen) _openTradeForm();
+        });
+      }
+      if (takenBadge) {
+        takenBadge.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const isOpen = tradeFormEl.style.display !== 'none';
+          tradeFormEl.style.display = isOpen ? 'none' : 'block';
+          if (!isOpen) _openTradeForm(takenTrades.get(aiKey));
+        });
+      }
     }
 
     return card;
@@ -429,11 +613,16 @@
     ws.onmessage = event => {
       try {
         const msg = JSON.parse(event.data);
-        if (msg.type === 'setup') fetchAndRender(); // re-fetch to keep trade filter accurate
+        if (msg.type === 'setup') {
+          fetchAndRender(); // re-fetch to keep trade filter accurate
+        }
         if (msg.type === 'data_refresh') {
-          window.ChartAPI?.reload(); // re-fetch chart candles + indicators
-          fetchAndRender();          // re-fetch alert feed (open outcomes may have resolved)
-          _updateDataAge(msg.ts);    // update "Data: HH:MM MT" display
+          // Snapshot prev keys before refetch so new cards can be highlighted
+          _prevAlertKeys = new Set(currentAlerts.map(_alertKey));
+          window.ChartAPI?.reload();   // re-fetch chart candles + indicators
+          fetchAndRender();            // re-fetch alert feed (open outcomes may have resolved)
+          _setRefreshTimes(msg.ts, msg.nextRefresh);
+          if (msg.newAlerts > 0) _showNewAlertBanner(msg.newAlerts);
         }
       } catch (_) {}
     };

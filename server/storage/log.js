@@ -71,4 +71,38 @@ function loadCommentaryCache() {
   }
 }
 
-module.exports = { saveAlertCache, loadAlertCache, saveCommentaryCache, loadCommentaryCache };
+// ── Trade log ─────────────────────────────────────────────────────────────────
+
+const TRADES_FILE = path.join(LOG_DIR, 'trades.json');
+
+/**
+ * Write the full tradeLog array to disk.
+ */
+function saveTradeLog(trades) {
+  try {
+    _ensureDir();
+    fs.writeFileSync(TRADES_FILE, JSON.stringify(trades, null, 2));
+  } catch (err) {
+    console.error('[log] saveTradeLog failed:', err.message);
+  }
+}
+
+/**
+ * Load the trade log from disk.
+ * Returns [] if the file does not exist or cannot be parsed.
+ */
+function loadTradeLog() {
+  try {
+    if (!fs.existsSync(TRADES_FILE)) return [];
+    return JSON.parse(fs.readFileSync(TRADES_FILE, 'utf8'));
+  } catch (err) {
+    console.error('[log] loadTradeLog failed:', err.message);
+    return [];
+  }
+}
+
+module.exports = {
+  saveAlertCache, loadAlertCache,
+  saveCommentaryCache, loadCommentaryCache,
+  saveTradeLog, loadTradeLog,
+};

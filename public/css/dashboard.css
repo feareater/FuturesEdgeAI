@@ -653,3 +653,103 @@ html, body {
   color: var(--text-dim);
   margin-left: 2px;
 }
+
+/* ── New alert pulse (fires after data_refresh brings new setups) ─────────── */
+
+@keyframes newAlertPulse {
+  0%   { box-shadow: 0 0 0 0 rgba(255, 179, 0, 0.7); }
+  70%  { box-shadow: 0 0 0 10px rgba(255, 179, 0, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 179, 0, 0); }
+}
+.alert-card.is-new {
+  animation: newAlertPulse 1.2s ease-out 3;
+  border-color: #ffb300 !important;
+}
+
+/* ── New alert toast banner ─────────────────────────────────────────────────── */
+
+.new-alert-banner {
+  position: fixed;
+  top: 48px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #ffb300;
+  color: #000;
+  font-weight: 700;
+  font-size: 13px;
+  padding: 8px 20px;
+  border-radius: 4px;
+  z-index: 1000;
+  pointer-events: none;
+  white-space: nowrap;
+  animation: bannerFadeOut 6s forwards;
+}
+@keyframes bannerFadeOut {
+  0%   { opacity: 1; }
+  70%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* ── Take / Taken trade buttons ─────────────────────────────────────────────── */
+
+.take-btn {
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  border-radius: 3px;
+  padding: 1px 6px;
+  font-size: 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.take-btn:hover { background: var(--accent); color: #000; }
+
+.taken-badge {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--bull);
+  border: 1px solid var(--bull);
+  border-radius: 3px;
+  padding: 1px 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* ── Inline trade entry form ──────────────────────────────────────────────── */
+
+.trade-form { margin-top: 6px; }
+.trade-form-inner {
+  background: #1a1d27;
+  border: 1px solid #2a2e39;
+  border-radius: 4px;
+  padding: 8px;
+}
+.tf-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-bottom: 5px;
+}
+.tf-row label { font-size: 10px; color: var(--text-dim); white-space: nowrap; }
+.tf-row input {
+  width: 70px;
+  background: #0d0f1a;
+  border: 1px solid #2a2e39;
+  color: var(--text);
+  border-radius: 3px;
+  padding: 2px 4px;
+  font-size: 11px;
+}
+.tf-row input[type="text"] { width: 120px; }
+.tf-btns { display: flex; gap: 6px; margin-top: 4px; }
+.tf-btns button {
+  flex: 1;
+  padding: 3px 0;
+  border-radius: 3px;
+  font-size: 11px;
+  cursor: pointer;
+  border: none;
+}
+.tf-save   { background: var(--accent); color: #000; font-weight: 600; }
+.tf-cancel { background: #2a2e39; color: var(--text); }

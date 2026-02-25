@@ -14,7 +14,8 @@ const { detectSetups }      = require('./analysis/setups');
 const { detectTrendlines }  = require('./analysis/trendlines');
 const { generateCommentary, generateSingle } = require('./ai/commentary');
 const { checkTFZoneStack }  = require('./analysis/confluence');
-const { saveAlertCache, loadAlertCache, saveCommentaryCache, loadCommentaryCache } = require('./storage/log');
+const { saveAlertCache, loadAlertCache, saveCommentaryCache, loadCommentaryCache,
+        saveTradeLog, loadTradeLog } = require('./storage/log');
 const { fetchAll }          = require('./data/seedFetch');
 const settings              = require('../config/settings.json');
 
@@ -26,6 +27,7 @@ const DATA_SOURCE = process.env.DATA_SOURCE || 'seed';
 // WebSocket candle-close subscription, then call _autoRefresh({ fetchData: false }).
 const REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 let   lastRefreshTs       = null; // ISO string, exposed via /api/health
+let   nextRefreshTs       = null; // ISO string, set when schedule is established
 
 // ---------------------------------------------------------------------------
 // Alert cache — in-memory; survives until server restart
@@ -40,6 +42,9 @@ const MAX_ALERTS = 100;
 // Holds the last successful AI commentary run.
 // { generated: ISO string, items: [{ symbol, timeframe, setupTime, commentary, alert }] }
 let commentaryCache = { generated: null, items: [] };
+
+// ── Trade log ─────────────────────────────────────────────────────────────────
+let tradeLog = []; // persisted to data/logs/trades.json
 
 const COMMENTARY_TOP_N = 5; // number of setups sent to Claude per run
 
@@ -67,6 +72,12 @@ function _loadPersistedData() {
     commentaryCache = savedCommentary;
     console.log(`[storage] Loaded commentary cache (${commentaryCache.items.length} items, generated ${commentaryCache.generated})`);
   }
+
+  const savedTrades = loadTradeLog();
+  if (savedTrades.length) {
+    tradeLog = savedTrades;
+    console.log(`[storage] Loaded ${tradeLog.length} trade(s) from disk`);
+  }
 }
 
 function _cacheAlert(alert) {
@@ -87,7 +98,8 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
 app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', dataSource: DATA_SOURCE, ts: new Date().toISOString(), lastRefresh: lastRefreshTs });
+  res.json({ status: 'ok', dataSource: DATA_SOURCE, ts: new Date().toISOString(),
+             lastRefresh: lastRefreshTs, nextRefresh: nextRefreshTs });
 });
 
 // GET /api/candles?symbol=MNQ&timeframe=5m
@@ -180,15 +192,17 @@ app.post('/api/settings', async (req, res) => {
   res.json({ status: 'ok', risk: settings.risk });
 });
 
-// GET /api/alerts?limit=20&minConfidence=0
-// minConfidence is applied BEFORE the one-trade filter so WR stats are accurate.
+// GET /api/alerts?limit=20&minConfidence=0&symbol=MNQ&timeframe=5m
+// symbol + timeframe filters applied first, then confidence, then trade filter.
 app.get('/api/alerts', (req, res) => {
-  const limit   = Math.min(parseInt(req.query.limit) || 50, MAX_ALERTS);
-  const minConf = parseInt(req.query.minConfidence) || 0;
+  const limit     = Math.min(parseInt(req.query.limit) || 50, MAX_ALERTS);
+  const minConf   = parseInt(req.query.minConfidence) || 0;
+  const { symbol, timeframe } = req.query;
 
-  const qualifying = minConf > 0
-    ? alertCache.filter(a => a.setup.confidence >= minConf)
-    : alertCache;
+  let qualifying = alertCache;
+  if (symbol)    qualifying = qualifying.filter(a => a.symbol    === symbol);
+  if (timeframe) qualifying = qualifying.filter(a => a.timeframe === timeframe);
+  if (minConf > 0) qualifying = qualifying.filter(a => a.setup.confidence >= minConf);
 
   const filtered = _applyTradeFilter(qualifying);
   // Sort: unsuppressed first, then by confidence desc
@@ -233,6 +247,36 @@ app.post('/api/commentary/single', async (req, res) => {
     console.error('[api] /commentary/single error:', err.message);
     res.status(500).json({ error: err.message });
   }
+});
+
+// GET /api/trades — return all saved trade log entries
+app.get('/api/trades', (_req, res) => {
+  res.json({ trades: tradeLog });
+});
+
+// POST /api/trades — create or update a trade entry
+app.post('/api/trades', (req, res) => {
+  const { alertKey, symbol, timeframe, setupType,
+          actualEntry, actualSL, actualTP, actualExit, notes } = req.body;
+  if (!alertKey || actualEntry == null || actualSL == null || actualTP == null) {
+    return res.status(400).json({ error: 'alertKey, actualEntry, actualSL, actualTP required' });
+  }
+  const trade = {
+    id:          Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    alertKey,    symbol, timeframe, setupType,
+    takenAt:     new Date().toISOString(),
+    actualEntry: Number(actualEntry),
+    actualSL:    Number(actualSL),
+    actualTP:    Number(actualTP),
+    actualExit:  actualExit != null && actualExit !== '' ? Number(actualExit) : null,
+    notes:       notes || '',
+  };
+  const idx = tradeLog.findIndex(t => t.alertKey === alertKey);
+  if (idx >= 0) tradeLog[idx] = trade;
+  else tradeLog.push(trade);
+  saveTradeLog(tradeLog);
+  console.log(`[trade] ${idx >= 0 ? 'Updated' : 'Saved'} trade for ${alertKey}`);
+  res.json({ trade });
 });
 
 // GET /api/scan  — manually trigger a full re-scan (useful for seed mode refresh)
@@ -468,7 +512,8 @@ async function _autoRefresh({ fetchData = true } = {}) {
 
   const newCount = await runScan();
   lastRefreshTs  = new Date().toISOString();
-  broadcast({ type: 'data_refresh', ts: lastRefreshTs, newAlerts: newCount });
+  nextRefreshTs  = new Date(Date.now() + REFRESH_INTERVAL_MS).toISOString();
+  broadcast({ type: 'data_refresh', ts: lastRefreshTs, newAlerts: newCount, nextRefresh: nextRefreshTs });
   console.log(`[refresh] Done — ${newCount} new alerts, data as of ${lastRefreshTs}`);
 }
 
@@ -516,6 +561,7 @@ async function start() {
       //   _autoRefresh({ fetchData: false })
       // The scan engine, alert cache, and broadcast logic remain unchanged.
       // ────────────────────────────────────────────────────────────────────────
+      nextRefreshTs = new Date(Date.now() + REFRESH_INTERVAL_MS).toISOString();
       setTimeout(() => {
         _autoRefresh().catch(err => console.error('[refresh] Error:', err.message));
         setInterval(

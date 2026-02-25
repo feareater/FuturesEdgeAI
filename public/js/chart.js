@@ -105,7 +105,7 @@
       // Display all chart times in Mountain Time (MST = UTC-7, MDT = UTC-6)
       localization: {
         timeFormatter: (ts) => new Date(ts * 1000).toLocaleTimeString('en-US', {
-          hour: '2-digit', minute: '2-digit', hour12: false,
+          hour: 'numeric', minute: '2-digit', hour12: true,
           timeZone: 'America/Denver',
         }),
       },
@@ -209,6 +209,14 @@
     if (pendingOverlay) { _drawSetupOverlay(pendingOverlay); pendingOverlay = null; }
 
     console.log(`[chart] Rendered ${candles.length} candles  ATR:${indicators.atrCurrent?.toFixed(2)}`);
+    _notifyView();
+  }
+
+  /** Broadcast current symbol+TF to other modules via a DOM custom event. */
+  function _notifyView() {
+    document.dispatchEvent(new CustomEvent('chartViewChange', {
+      detail: { symbol: activeSymbol, tf: activeTf },
+    }));
   }
 
   // ── Indicator rendering ────────────────────────────────────────────────────
