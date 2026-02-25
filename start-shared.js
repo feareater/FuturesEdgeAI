@@ -1,12 +1,12 @@
 'use strict';
-// start-shared.js — starts the FuturesEdge server + a Cloudflare public tunnel.
+// start-shared.js — starts the FuturesEdge server + an ngrok public tunnel.
 // Run with:  node start-shared.js   OR   npm run share
 // Press Ctrl+C to stop both.
 //
 // Smart behaviour:
 //   • If nothing is on :3000, starts the server then opens the tunnel.
 //   • If a server is already running on :3000, skips spawning and just tunnels.
-//   • Tunnel never opens unless /api/health responds 200.
+//   • URL is read from ngrok's local API (http://localhost:4040/api/tunnels).
 
 const { spawn } = require('child_process');
 const http      = require('http');
@@ -14,18 +14,17 @@ const http      = require('http');
 let server, tunnel;
 let _tunnelStarted = false;
 
-// ── health check ─────────────────────────────────────────────────────────────
+// ── helpers ───────────────────────────────────────────────────────────────────
 
 function checkHealth(cb) {
   const req = http.get('http://localhost:3000/api/health', (res) => {
-    res.resume();                    // drain body
+    res.resume();
     cb(res.statusCode === 200);
   });
   req.on('error', () => cb(false));
   req.setTimeout(2000, () => { req.destroy(); cb(false); });
 }
 
-// Retry health check every 500 ms for up to `maxMs` milliseconds.
 function waitForHealth(maxMs, cb) {
   const deadline = Date.now() + maxMs;
   function attempt() {
@@ -38,44 +37,59 @@ function waitForHealth(maxMs, cb) {
   attempt();
 }
 
+// Poll ngrok's local API until we get the HTTPS public URL.
+function waitForNgrokUrl(maxMs, cb) {
+  const deadline = Date.now() + maxMs;
+  function attempt() {
+    const req = http.get('http://127.0.0.1:4040/api/tunnels', (res) => {
+      let body = '';
+      res.on('data', d => body += d);
+      res.on('end', () => {
+        try {
+          const { tunnels } = JSON.parse(body);
+          const t = tunnels.find(t => t.proto === 'https');
+          if (t) return cb(t.public_url);
+        } catch (_) {}
+        if (Date.now() >= deadline) return cb(null);
+        setTimeout(attempt, 1000);
+      });
+    });
+    req.on('error', () => {
+      if (Date.now() >= deadline) return cb(null);
+      setTimeout(attempt, 1000);
+    });
+    req.setTimeout(2000, () => { req.destroy(); });
+  }
+  setTimeout(attempt, 1500);   // give ngrok a moment to start its API
+}
+
 // ── tunnel ────────────────────────────────────────────────────────────────────
 
 function startTunnel() {
   if (_tunnelStarted) return;
   _tunnelStarted = true;
 
-  console.log('[launcher] Opening Cloudflare tunnel to port 3000…\n');
-  tunnel = spawn('cloudflared', ['tunnel', '--url', 'http://localhost:3000'], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  console.log('[launcher] Starting ngrok tunnel to port 3000…');
+  tunnel = spawn('ngrok', ['http', '3000'], { stdio: 'ignore' });
 
-  function handleOutput(data) {
-    const text = data.toString();
-
-    text.split('\n').forEach(line => {
-      if (line.includes('trycloudflare.com') || line.includes('ERR') || line.includes('Registered')) {
-        process.stdout.write(line + '\n');
-      }
-    });
-
-    const match = text.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
-    if (match) {
-      const url = match[0];
-      console.log('\n' + '═'.repeat(60));
-      console.log('  ✅  DASHBOARD IS PUBLIC');
-      console.log('');
-      console.log(`  Share this URL with anyone:  ${url}`);
-      console.log('');
-      console.log('  ⚠  URL changes each time this script restarts.');
-      console.log('  Press Ctrl+C to stop and close the tunnel.');
-      console.log('═'.repeat(60) + '\n');
-    }
-  }
-
-  tunnel.stdout.on('data', handleOutput);
-  tunnel.stderr.on('data', handleOutput);
   tunnel.on('exit', (code) => {
     if (code !== null) console.log(`[launcher] Tunnel closed (code ${code})`);
+  });
+
+  console.log('[launcher] Waiting for ngrok URL…');
+  waitForNgrokUrl(20_000, (url) => {
+    if (!url) {
+      console.error('[launcher] Could not retrieve ngrok URL. Is ngrok authenticated? Run: ngrok config add-authtoken <token>');
+      return;
+    }
+    console.log('\n' + '═'.repeat(60));
+    console.log('  ✅  DASHBOARD IS PUBLIC');
+    console.log('');
+    console.log(`  Share this URL with anyone:  ${url}`);
+    console.log('');
+    console.log('  ⚠  URL changes each time this script restarts.');
+    console.log('  Press Ctrl+C to stop and close the tunnel.');
+    console.log('═'.repeat(60) + '\n');
   });
 }
 
@@ -87,7 +101,6 @@ function startServer() {
 
   server.on('exit', (code) => {
     if (code === 1) {
-      // Likely EADDRINUSE — check whether an existing server is healthy
       console.log('[launcher] Server spawn failed — checking for existing server on :3000…');
       checkHealth((ok) => {
         if (ok) {
@@ -104,13 +117,11 @@ function startServer() {
     }
   });
 
-  // Wait up to 10 s for the server to become healthy before opening the tunnel.
   console.log('[launcher] Waiting for server to be ready…');
   waitForHealth(10_000, (ok) => {
     if (ok) {
       startTunnel();
     } else {
-      // server.on('exit') will handle the failure path (e.g. EADDRINUSE)
       console.log('[launcher] Server not yet ready — waiting for exit event…');
     }
   });
