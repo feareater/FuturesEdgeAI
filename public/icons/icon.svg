@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192">
+  <rect width="192" height="192" fill="#0d0f1a"/>
+  <!-- baseline rule -->
+  <line x1="23" y1="134" x2="169" y2="134" stroke="#1e233c" stroke-width="2"/>
+  <!-- left candle (small) -->
+  <line x1="54" y1="92" x2="54" y2="134" stroke="#26a69a" stroke-width="2"/>
+  <rect x="47" y="100" width="14" height="26" fill="#26a69a"/>
+  <!-- middle candle -->
+  <line x1="96" y1="73" x2="96" y2="121" stroke="#26a69a" stroke-width="2"/>
+  <rect x="89" y="81" width="14" height="31" fill="#26a69a"/>
+  <!-- right candle (tall bull) -->
+  <line x1="138" y1="42" x2="138" y2="111" stroke="#26a69a" stroke-width="2"/>
+  <rect x="131" y="50" width="14" height="55" fill="#26a69a"/>
+</svg>

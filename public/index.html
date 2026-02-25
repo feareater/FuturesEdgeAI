@@ -2,9 +2,17 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>FuturesEdge AI</title>
   <link rel="stylesheet" href="/css/dashboard.css" />
+  <!-- PWA manifest + theme -->
+  <link rel="manifest" href="/manifest.json" />
+  <meta name="theme-color" content="#0d0f1a" />
+  <!-- iOS PWA support -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="FuturesEdge" />
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
   <!-- TradingView Lightweight Charts v4 — loaded before our scripts -->
   <script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
 </head>
@@ -60,6 +68,16 @@
       </div>
 
       <aside id="right-panel">
+
+        <!-- ── Slide-up drawer handle (mobile only, hidden on desktop) ── -->
+        <div id="drawer-handle">
+          <div id="drawer-grab"></div>
+          <div id="drawer-summary">
+            <span id="drawer-data-age"></span>
+            <span id="drawer-alert-count"></span>
+          </div>
+          <button id="drawer-toggle-btn" aria-label="Toggle alert panel">⌃</button>
+        </div>
 
         <!-- ── Layer toggles ───────────────────────────────────────────── -->
         <div class="panel-section">
@@ -187,5 +205,15 @@
   <!-- layers.js second — reads window.ChartAPI immediately -->
   <script src="/js/layers.js"></script>
   <script src="/js/alerts.js"></script>
+  <!-- PWA service worker registration -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+          .then(reg => console.log('[SW] Registered:', reg.scope))
+          .catch(err => console.warn('[SW] Registration failed:', err));
+      });
+    }
+  </script>
 </body>
 </html>

@@ -47,6 +47,13 @@
   const refreshIntervalEl = document.getElementById('refresh-interval');
   const refreshNowBtn     = document.getElementById('refresh-now-btn');
 
+  // ── Drawer handle DOM refs (mobile only — null on desktop) ───────────────
+  const drawerHandleEl   = document.getElementById('drawer-handle');
+  const drawerToggleBtn  = document.getElementById('drawer-toggle-btn');
+  const drawerDataAgeEl  = document.getElementById('drawer-data-age');
+  const drawerAlertCount = document.getElementById('drawer-alert-count');
+  const rightPanel       = document.getElementById('right-panel');
+
   // ── Data freshness display + countdown ────────────────────────────────────
 
   let _lastRefreshTs = null;
@@ -74,7 +81,8 @@
       const s = secsLeft % 60;
       text += ` · ${m}:${s.toString().padStart(2, '0')}`;
     }
-    dataAgeEl.textContent = text;
+    if (dataAgeEl) dataAgeEl.textContent = text;
+    if (drawerDataAgeEl) drawerDataAgeEl.textContent = text;  // mirror to drawer handle
   }
 
   // ── Session badge ──────────────────────────────────────────────────────────
@@ -107,6 +115,33 @@
     banner.textContent = `🔔 ${count} new setup${count > 1 ? 's' : ''} — check alert feed`;
     document.body.appendChild(banner);
     setTimeout(() => banner.remove(), 6000);
+  }
+
+  // ── Drawer toggle (mobile slide-up panel) ────────────────────────────────────
+
+  function _initDrawer() {
+    if (!drawerHandleEl || !rightPanel) return;
+
+    function _toggle() {
+      const isOpen = rightPanel.classList.toggle('drawer-open');
+      if (drawerToggleBtn) {
+        drawerToggleBtn.textContent = isOpen ? '⌄' : '⌃';
+        drawerToggleBtn.setAttribute('aria-expanded', String(isOpen));
+      }
+      // Fire resize after CSS transition ends (300ms) so TradingView chart
+      // recalculates its container dimensions correctly.
+      setTimeout(() => window.dispatchEvent(new Event('resize')), 310);
+    }
+
+    drawerHandleEl.addEventListener('click', _toggle);
+
+    // Prevent tap on the toggle button from bubbling to the handle (double-toggle)
+    if (drawerToggleBtn) {
+      drawerToggleBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        _toggle();
+      });
+    }
   }
 
   // ── Boot ────────────────────────────────────────────────────────────────────
@@ -161,6 +196,7 @@
     await fetchAndRender();
     connectWS();
     _wireInputs();
+    _initDrawer();
     _updateSessionBadge();
     setInterval(_updateSessionBadge, 60_000);
     setInterval(_tickDataAge, 1000);  // live countdown
@@ -238,6 +274,12 @@
     wrOpen.textContent = `O ${open}`;
     wrPct.textContent  = wr !== null ? `${wr}% WR` : '— WR';
     wrPct.className    = 'wr-pct' + (wr === null ? '' : wr >= 50 ? ' good' : wr >= 40 ? ' neutral' : ' bad');
+
+    // Mirror alert count to drawer handle summary (mobile)
+    if (drawerAlertCount) {
+      const n = currentAlerts.filter(a => !a.suppressed).length;
+      drawerAlertCount.textContent = n > 0 ? `${n} alert${n !== 1 ? 's' : ''}` : 'No alerts';
+    }
   }
 
   // ── Dollar risk (tick-based calculation) ───────────────────────────────────
