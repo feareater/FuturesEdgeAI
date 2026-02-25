@@ -1037,3 +1037,48 @@ html, body {
 @media (min-width: 768px) {
   #drawer-handle { display: none; }
 }
+
+
+/* ── Taken Trades section ────────────────────────────────────────────────────── */
+
+.taken-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--bull);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 10px 12px 5px;
+  margin-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.taken-count {
+  background: var(--bull);
+  color: #000;
+  border-radius: 9px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.alert-card.is-taken-card {
+  opacity: 0.65;
+  border-left: 2px solid var(--bull);
+}
+.alert-card.is-taken-card:hover { opacity: 0.85; }
+
+
+/* ── Chart marker → alert card highlight ─────────────────────────────────────── */
+
+@keyframes markerHighlight {
+  0%   { box-shadow: 0 0 0 0 rgba(33, 150, 243, 0.8); }
+  70%  { box-shadow: 0 0 0 10px rgba(33, 150, 243, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(33, 150, 243, 0); }
+}
+.alert-card.marker-highlight {
+  animation: markerHighlight 0.7s ease-out 3;
+  border-color: var(--accent) !important;
+}

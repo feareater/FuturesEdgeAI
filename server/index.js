@@ -35,8 +35,9 @@ let   _refreshIntervalId  = null; // setInterval handle for rescheduling
 // Alert cache — in-memory; survives until server restart
 // ---------------------------------------------------------------------------
 
-const alertCache = [];            // newest-first ordered alert objects
-const alertSeenKeys = new Set();  // dedup: symbol:tf:type:time
+const alertCache    = [];           // newest-first ordered alert objects
+const alertSeenKeys = new Set();   // dedup: symbol:tf:type:time
+const reEvalKeys    = new Set();   // open-outcome keys being re-evaluated (not "new")
 
 const MAX_ALERTS = 100;
 
@@ -83,12 +84,13 @@ function _loadPersistedData() {
 }
 
 function _cacheAlert(alert) {
-  const key = `${alert.symbol}:${alert.timeframe}:${alert.setup.type}:${alert.setup.time}`;
+  const key      = `${alert.symbol}:${alert.timeframe}:${alert.setup.type}:${alert.setup.time}`;
+  const isReEval = reEvalKeys.delete(key); // consume: true if this was an open-outcome re-eval
   if (alertSeenKeys.has(key)) return false;
   alertSeenKeys.add(key);
   alertCache.unshift(alert);
   if (alertCache.length > MAX_ALERTS) alertCache.pop();
-  return true; // was new
+  return !isReEval; // not "new" if re-evaluating an open outcome — avoids false-positive toasts
 }
 
 // ---------------------------------------------------------------------------
@@ -217,10 +219,10 @@ app.get('/api/alerts', (req, res) => {
   if (minConf > 0) qualifying = qualifying.filter(a => a.setup.confidence >= minConf);
 
   const filtered = _applyTradeFilter(qualifying);
-  // Sort: unsuppressed first, then by confidence desc
+  // Sort: unsuppressed first, then by newest candle time
   filtered.sort((a, b) => {
     if (a.suppressed !== b.suppressed) return a.suppressed ? 1 : -1;
-    return b.setup.confidence - a.setup.confidence;
+    return b.setup.time - a.setup.time;
   });
   res.json({ alerts: filtered.slice(0, limit) });
 });
@@ -526,6 +528,8 @@ async function _autoRefresh({ fetchData = true } = {}) {
       .filter(a => a.setup.outcome === 'open')
       .map(a => `${a.symbol}:${a.timeframe}:${a.setup.type}:${a.setup.time}`)
   );
+  // Track which keys are re-evaluations so _cacheAlert won't count them as new alerts.
+  for (const k of openKeys) reEvalKeys.add(k);
   for (const k of openKeys) alertSeenKeys.delete(k);
   for (let i = alertCache.length - 1; i >= 0; i--) {
     if (alertCache[i].setup.outcome === 'open') alertCache.splice(i, 1);

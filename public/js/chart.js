@@ -48,6 +48,8 @@
   let swingLowMarkers  = [];
   let trendlineMarkers = [];   // TF endpoint labels
   let setupEntryMkr    = null;
+  let alertMarkers     = [];   // alert setup arrows
+  let alertMarkersData = [];   // parallel alert objects (for click lookup)
 
   // Active candle times (sorted) for snapping trendline timestamps
   let activeCandleTimes = [];
@@ -189,6 +191,16 @@
         width:  chartContainer.clientWidth,
         height: chartContainer.clientHeight,
       });
+    });
+
+    // Alert marker click — find alerts at the clicked bar time, dispatch to alerts.js
+    chart.subscribeClick(param => {
+      if (!param.time || !alertMarkersData.length) return;
+      const hit = alertMarkersData.filter(a => a.setup.time === param.time);
+      if (hit.length === 0) return;
+      document.dispatchEvent(new CustomEvent('chartMarkerClick', {
+        detail: { alerts: hit },
+      }));
     });
   }
 
@@ -438,6 +450,7 @@
       ...(vis.swingHighLow ? swingHighMarkers : []),
       ...(vis.swingHighLow ? swingLowMarkers  : []),
       ...(vis.trendlines   ? trendlineMarkers : []),
+      ...alertMarkers,                              // alert setup arrows (always visible)
       ...(setupEntryMkr    ? [setupEntryMkr]  : []),
     ].sort((a, b) => a.time - b.time);
     candleSeries.setMarkers(markers);
@@ -545,6 +558,34 @@
     reload() {
       loadData(activeSymbol, activeTf)
         .catch(err => console.error('[chart] reload:', err.message));
+    },
+
+    // Plot colored alert arrows on the chart for the current symbol + TF.
+    // Called by alerts.js after every fetch. Colors: blue=open, teal=won, red=lost, gold=taken.
+    setAlertMarkers(alerts, symbol, tf) {
+      const relevant = alerts.filter(
+        a => a.symbol === symbol && a.timeframe === tf && !a.suppressed
+      );
+      alertMarkersData = relevant;
+      alertMarkers = relevant.map(a => {
+        const isBull  = a.setup.direction === 'bullish';
+        const takenKey = `${a.symbol}:${a.timeframe}:${a.setup.type}:${a.setup.time}`;
+        const isTaken = typeof window._isTaken === 'function' && window._isTaken(takenKey);
+        const color = isTaken                      ? '#ffb300'
+                    : a.setup.outcome === 'won'    ? '#26a69a'
+                    : a.setup.outcome === 'lost'   ? '#ef5350'
+                    :                                '#2196f3';
+        const label = a.setup.type === 'zone_rejection' ? 'ZR' : 'PDH';
+        return {
+          time:     a.setup.time,
+          position: isBull ? 'belowBar' : 'aboveBar',
+          color,
+          shape:    isBull ? 'arrowUp' : 'arrowDown',
+          text:     label,
+          size:     1,
+        };
+      });
+      updateMarkers();
     },
   };
 

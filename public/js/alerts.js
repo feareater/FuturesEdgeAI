@@ -26,6 +26,8 @@
 
   // ── Trade log (alertKey → trade object) ───────────────────────────────────
   const takenTrades = new Map();
+  // Bridge for chart.js (which loads first) to check taken state
+  window._isTaken = (key) => takenTrades.has(key);
 
   // ── New-alert highlighting state ──────────────────────────────────────────
   let _prevAlertKeys = new Set();
@@ -207,6 +209,27 @@
       activeTf     = e.detail.tf;
       fetchAndRender();
     });
+
+    // Listen for chart marker clicks — scroll to and highlight the matching alert card
+    document.addEventListener('chartMarkerClick', (e) => {
+      const alert = e.detail.alerts[0];
+      if (!alert) return;
+      const key = _alertKey(alert);
+
+      // On mobile: open the drawer first, then scroll after the animation
+      if (rightPanel && window.matchMedia('(max-width: 767px)').matches) {
+        if (!rightPanel.classList.contains('drawer-open')) {
+          rightPanel.classList.add('drawer-open');
+          if (drawerToggleBtn) {
+            drawerToggleBtn.textContent = '⌄';
+            drawerToggleBtn.setAttribute('aria-expanded', 'true');
+          }
+          setTimeout(() => _scrollToAlert(key), 320);
+          return;
+        }
+      }
+      _scrollToAlert(key);
+    });
   }
 
   // ── Fetch + render ─────────────────────────────────────────────────────────
@@ -225,6 +248,7 @@
         currentAlerts = alerts;
         _renderFeed();
         _updateStats();
+        _syncChartMarkers();
         console.log(`[alerts] ${alerts.length} alerts  sym=${activeSymbol}  tf=${activeTf}  minConf=${minConf}`);
       } catch (err) {
         console.error('[alerts] Fetch failed:', err.message);
@@ -246,7 +270,12 @@
       _prevAlertKeys = new Set();
       return;
     }
-    currentAlerts.forEach(a => {
+
+    const active = currentAlerts.filter(a => !takenTrades.has(_alertKey(a)));
+    const taken  = currentAlerts.filter(a =>  takenTrades.has(_alertKey(a)));
+
+    // ── Active + suppressed alerts ──────────────────────────────────────────
+    for (const a of active) {
       const card = _buildCard(a);
       // Highlight cards that weren't present before the last refresh
       if (_prevAlertKeys.size > 0 && !_prevAlertKeys.has(_alertKey(a))) {
@@ -254,8 +283,37 @@
         setTimeout(() => card.classList.remove('is-new'), 10_000);
       }
       alertFeed.appendChild(card);
-    });
+    }
+
+    // ── Taken Trades section ────────────────────────────────────────────────
+    if (taken.length > 0) {
+      const sep = document.createElement('div');
+      sep.className = 'taken-section-header';
+      sep.innerHTML = `<span>Taken Trades</span><span class="taken-count">${taken.length}</span>`;
+      alertFeed.appendChild(sep);
+
+      for (const a of taken) {
+        const card = _buildCard(a);
+        card.classList.add('is-taken-card');
+        alertFeed.appendChild(card);
+      }
+    }
+
     _prevAlertKeys = new Set(); // clear after render
+  }
+
+  // ── Chart marker sync ──────────────────────────────────────────────────────
+
+  function _syncChartMarkers() {
+    window.ChartAPI?.setAlertMarkers(currentAlerts, activeSymbol, activeTf);
+  }
+
+  function _scrollToAlert(key) {
+    const card = alertFeed.querySelector(`[data-alert-key="${key}"]`);
+    if (!card) return;
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    card.classList.add('marker-highlight');
+    setTimeout(() => card.classList.remove('marker-highlight'), 3000);
   }
 
   // ── Win-rate stats ─────────────────────────────────────────────────────────
@@ -345,6 +403,7 @@
 
     const card = document.createElement('div');
     card.className = `alert-card ${dirClass}${suppressed ? ' suppressed' : ''}${overBudget ? ' over-budget' : ''}`;
+    card.dataset.alertKey = aiKey;  // used by chart marker click handler
 
     card.innerHTML = [
       `<div class="alert-header">`,
