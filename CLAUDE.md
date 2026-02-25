@@ -136,16 +136,23 @@ PORT=3000
 
 ### Setup Detection (active types — backtest-validated)
 
-| Type | Code | Role | Backtest (Feb 2026, 45 resolved) |
+| Type | Code | Role | Notes |
 |---|---|---|---|
-| Supply/Demand Zone Rejection | `zone_rejection` | Primary signal | 72.7% WR — dominant positive edge |
-| PDH/PDL Breakout | `pdh_breakout` | Primary signal | 66.7% WR (regime-dependent) |
-| BOS / CHoCH | `bos` / `choch` | Confidence qualifier only (+10–15 pts) | Not traded standalone |
+| Supply/Demand Zone Rejection | `zone_rejection` | Primary signal | 72.7% WR — regime-gated (see below) |
+| PDH/PDL Breakout | `pdh_breakout` | Primary signal | 66.7% WR, delay-tolerant momentum trade |
+| Trendline Break | `trendline_break` | Primary signal | New — ≥3 touches required |
+| BOS / CHoCH | `bos` / `choch` | Confidence qualifier only (+15 pts) | Not traded standalone; CHoCH also unlocks counter-trend zones |
 | ~~Liquidity Sweep + Reversal~~ | ~~`liquidity_sweep_reversal`~~ | **Removed** | 43% WR, PF 0.68 — negative edge |
 
-**Zone Rejection** — price enters a Supply/Demand zone, produces a significant wick, closes back outside with body in rejection direction. BOS/CHoCH within the scan window adds +10–15 confidence pts.
+**Zone Rejection** — price enters a Supply/Demand zone, produces a significant wick, closes back outside with body in rejection direction. BOS/CHoCH within the scan window adds +15 confidence pts. **Regime gate applied**: counter-trend zone rejections are suppressed unless a CHoCH confirmed a trend shift in that direction.
 
-**PDH/PDL Breakout** — close beyond the prior-day high (bullish) or prior-day low (bearish) with momentum confirmation. RTH-gated (UTC 13:00–21:00).
+**PDH/PDL Breakout** — close beyond the prior-day high (bullish) or prior-day low (bearish) with momentum confirmation. RTH-gated (UTC 13:00–21:00). Delay-tolerant: breakout momentum persists well past the 15-min data lag.
+
+**Trendline Break** — candle closes on the opposite side of the established support (bearish break) or resistance (bullish break) trendline for the first time. Only fires if the trendline has ≥3 confirmed touches. Scored on break decisiveness, touch count, regime alignment, and IOF confluence. Highly delay-tolerant — trend momentum from a clean trendline break lasts 15+ minutes.
+
+**Scan timeframes: 5m, 15m, 30m only.** 1m/2m/3m removed — with 15-min delayed data, fast-TF alerts are stale by the time they appear. 5m/15m/30m give actionable signals accounting for the lag.
+
+**Minimum confidence: 65%** — default filter in the UI. Alerts below 65% are predominantly counter-trend noise or marginal wicks with no confluence.
 
 ### Signal Scoring — Backtest Findings (Feb 2026)
 

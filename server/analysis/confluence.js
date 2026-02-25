@@ -9,12 +9,14 @@
 // Usage: called by the scan engine in index.js after detectSetups() returns.
 
 // For each base TF, which TFs count as "higher"
+// 30m added as top of stack — 5m and 15m setups can now confirm against it.
 const TF_HIGHER = {
-  '1m':  ['5m', '15m'],
-  '2m':  ['5m', '15m'],
-  '3m':  ['5m', '15m'],
-  '5m':  ['15m'],
-  '15m': [],
+  '1m':  ['5m', '15m', '30m'],
+  '2m':  ['5m', '15m', '30m'],
+  '3m':  ['5m', '15m', '30m'],
+  '5m':  ['15m', '30m'],
+  '15m': ['30m'],
+  '30m': [],
 };
 
 // Backtest findings (Feb 2026, 45 resolved zone rejections):

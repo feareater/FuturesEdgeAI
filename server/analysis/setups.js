@@ -11,7 +11,8 @@
 
 const { iofConfluenceScore } = require('./iof');
 
-const SCAN_WINDOW = 100; // how many recent candles to examine
+const SCAN_WINDOW           = 100; // how many recent candles to examine
+const TRENDLINE_SCAN_WINDOW = 10;  // only look at last N candles for fresh trendline breaks
 
 // BOS qualifier window: a BOS/CHoCH that fired in the same direction at least
 // BOS_QUAL_MIN seconds ago (not concurrent) but within BOS_QUAL_MAX seconds
@@ -42,8 +43,9 @@ function detectSetups(candles, indicators, regime, opts = {}) {
   const { swingHighs, swingLows, atrCurrent, pdh, pdl, fvgs = [], orderBlocks = [] } = indicators;
   if (!atrCurrent || !swingHighs.length || !swingLows.length) return [];
 
-  const rrRatio = opts.rrRatio || 1.0;
-  const symbol  = opts.symbol  || '';
+  const rrRatio    = opts.rrRatio    || 1.0;
+  const symbol     = opts.symbol     || '';
+  const trendlines = opts.trendlines || null;
 
   // Examine only the most recent SCAN_WINDOW candles, but use all known swings
   const scanStart   = Math.max(0, candles.length - SCAN_WINDOW);
@@ -57,19 +59,31 @@ function detectSetups(candles, indicators, regime, opts = {}) {
 
   // Zone rejections are the primary signal (backtest: 72.7% WR, PF 5.52).
   // Boost any zone that follows a prior BOS/CHoCH in the same direction.
+  // Regime gate: only fire counter-trend if a CHoCH confirmed the trend shift.
   const rawZones   = _zoneRejection(scanCandles, candles, swingHighs, swingLows, atrCurrent, regime, fvgs, orderBlocks, rrRatio);
-  const zoneSetups = _applyBosQualifier(rawZones, bosSetups);
+  const zoneSetups = _applyBosQualifier(rawZones, bosSetups)
+    .filter(z => _regimeGate(z, regime));
+
+  // Trendline breaks — only when trendlines have been computed and passed in.
+  // Requires ≥3 touches; fires only on the first candle that crosses the line.
+  const tlSetups = trendlines
+    ? _trendlineBreak(scanCandles, candles, trendlines, atrCurrent, regime, fvgs, orderBlocks, rrRatio)
+    : [];
 
   // PDH/PDL breakouts always included (max 2: one bull, one bear).
-  // Remaining slots filled by highest-confidence zone setups.
+  // Remaining slots filled by highest-confidence zone setups, then trendline breaks.
   zoneSetups.sort((a, b) => b.confidence - a.confidence);
-  const remaining = Math.max(0, 10 - pdhSetups.length);
-  const top = [...pdhSetups, ...zoneSetups.slice(0, remaining)];
+  tlSetups.sort((a, b) => b.confidence - a.confidence);
+
+  const remaining  = Math.max(0, 10 - pdhSetups.length);
+  const top        = [...pdhSetups, ...zoneSetups.slice(0, remaining)];
+  const tlSlots    = Math.min(2, Math.max(0, 10 - top.length));
+  top.push(...tlSetups.slice(0, tlSlots));
 
   const bosQual = zoneSetups.filter(z => (z.scoreBreakdown?.bos || 0) > 0).length;
   console.log(
-    `[setups]  found=${pdhSetups.length + zoneSetups.length}  returned=${top.length}  rr=${rrRatio}:1  ` +
-    `(zone=${zoneSetups.length}[bq=${bosQual}] bos_detected=${bosSetups.length} pdh=${pdhSetups.length})`
+    `[setups]  found=${pdhSetups.length + zoneSetups.length + tlSetups.length}  returned=${top.length}  rr=${rrRatio}:1  ` +
+    `(zone=${zoneSetups.length}[bq=${bosQual}] bos_detected=${bosSetups.length} pdh=${pdhSetups.length} tl=${tlSetups.length})`
   );
 
   return top;
@@ -193,6 +207,7 @@ function _applyBosQualifier(zones, bosSetups) {
       ...z,
       confidence:     Math.min(100, z.confidence + BOS_QUAL_BONUS),
       isBosQualified: true,
+      bosQualType:    isCHoCH ? 'choch' : 'bos',   // used by regime gate
       scoreBreakdown: { ...z.scoreBreakdown, bos: BOS_QUAL_BONUS },
       rationale:      z.rationale + (isCHoCH ? ' · CHoCH qualified' : ' · BOS qualified'),
     };
@@ -540,5 +555,149 @@ function _pdhConf({ closeOver, atrCurrent, regime, direction, iofBonus }) {
   score += bd.iof;
   return { score: Math.round(Math.max(0, Math.min(100, score))), breakdown: bd };
 }
+
+// ---------------------------------------------------------------------------
+// Regime gate — prevents counter-trend zone rejections
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns true if this setup should be shown given the current regime.
+ *
+ * Policy:
+ *   • Direction matches regime → always allow.
+ *   • Counter-trend WITH a CHoCH qualifier → allow (CHoCH confirms actual trend shift).
+ *   • Counter-trend with no qualifier, or only BOS-qualified → suppress.
+ *
+ * If regime is neutral or missing, all setups pass (no false negatives).
+ */
+function _regimeGate(setup, regime) {
+  if (!regime || !regime.direction || regime.direction === 'neutral') return true;
+  if (setup.direction === regime.direction) return true;
+  // Counter-trend: only pass if a CHoCH (actual trend change) confirmed the shift
+  return setup.isBosQualified && setup.bosQualType === 'choch';
+}
+
+// ---------------------------------------------------------------------------
+// Setup 5: Trendline Break
+// ---------------------------------------------------------------------------
+// A trendline break fires when price closes on the opposite side of an
+// established trendline for the first time (confirmed close, not just a wick).
+// Only trendlines with ≥3 touches are considered — weak 1-2 touch lines are noise.
+// Checks only the last TRENDLINE_SCAN_WINDOW candles to avoid stale signals.
+// Works well with delayed data because momentum from a clean trendline break
+// persists well beyond the 15-min data lag.
+
+function _trendlineBreak(scanCandles, allCandles, trendlines, atrCurrent, regime, fvgs, orderBlocks, rrRatio) {
+  const { support, resistance } = trendlines;
+  const found = [];
+  const seen  = new Set();
+
+  // Restrict to most-recent candles for freshness (stale breaks are not actionable)
+  const recentStart   = Math.max(0, scanCandles.length - TRENDLINE_SCAN_WINDOW);
+  const recentCandles = scanCandles.slice(recentStart);
+
+  for (let idx = 1; idx < recentCandles.length; idx++) {
+    const c    = recentCandles[idx];
+    const prev = recentCandles[idx - 1];
+
+    // ── Bullish: close breaks ABOVE resistance trendline ──────────────────────
+    if (resistance && resistance.touches >= 3) {
+      const dt = resistance.endTime - resistance.startTime;
+      if (dt > 0) {
+        const slope    = (resistance.endPrice - resistance.startPrice) / dt;
+        const lineNow  = resistance.startPrice + slope * (c.time    - resistance.startTime);
+        const linePrev = resistance.startPrice + slope * (prev.time - resistance.startTime);
+
+        // Fresh cross: this bar closed above, prior bar closed at or below
+        if (c.close > lineNow && prev.close <= linePrev) {
+          const breakKey = `bull_tl_resist_${resistance.startTime}`;
+          if (!seen.has(breakKey)) {
+            seen.add(breakKey);
+            const entry     = c.close;
+            const sl        = lineNow - atrCurrent * 0.30;
+            const { tp }    = _tp(entry, sl, 'bullish', rrRatio);
+            const breakSize = (c.close - lineNow) / atrCurrent;
+            const iofBonus  = iofConfluenceScore(entry, 'bullish', fvgs, orderBlocks, atrCurrent);
+            const { score: conf, breakdown: scoreBreakdown } = _trendlineConf({
+              breakSize, touches: resistance.touches, regime, direction: 'bullish', iofBonus,
+            });
+            const { outcome, outcomeTime } = _evaluateOutcome(allCandles, c.time, { direction: 'bullish', sl, tp });
+
+            found.push({
+              type: 'trendline_break', direction: 'bullish',
+              time: c.time, price: c.close,
+              entry, sl, tp, riskPoints: Math.abs(entry - sl), outcome, outcomeTime,
+              trendlineLevel:   +lineNow.toFixed(4),
+              trendlineTouches: resistance.touches,
+              confidence: conf, iofBonus, scoreBreakdown,
+              rationale: `Bullish trendline break above resistance — ${resistance.touches} touches` +
+                (iofBonus >= 10 ? ' · IOF confluence' : ''),
+            });
+          }
+        }
+      }
+    }
+
+    // ── Bearish: close breaks BELOW support trendline ─────────────────────────
+    if (support && support.touches >= 3) {
+      const dt = support.endTime - support.startTime;
+      if (dt > 0) {
+        const slope    = (support.endPrice - support.startPrice) / dt;
+        const lineNow  = support.startPrice + slope * (c.time    - support.startTime);
+        const linePrev = support.startPrice + slope * (prev.time - support.startTime);
+
+        // Fresh cross: this bar closed below, prior bar closed at or above
+        if (c.close < lineNow && prev.close >= linePrev) {
+          const breakKey = `bear_tl_support_${support.startTime}`;
+          if (!seen.has(breakKey)) {
+            seen.add(breakKey);
+            const entry     = c.close;
+            const sl        = lineNow + atrCurrent * 0.30;
+            const { tp }    = _tp(entry, sl, 'bearish', rrRatio);
+            const breakSize = (lineNow - c.close) / atrCurrent;
+            const iofBonus  = iofConfluenceScore(entry, 'bearish', fvgs, orderBlocks, atrCurrent);
+            const { score: conf, breakdown: scoreBreakdown } = _trendlineConf({
+              breakSize, touches: support.touches, regime, direction: 'bearish', iofBonus,
+            });
+            const { outcome, outcomeTime } = _evaluateOutcome(allCandles, c.time, { direction: 'bearish', sl, tp });
+
+            found.push({
+              type: 'trendline_break', direction: 'bearish',
+              time: c.time, price: c.close,
+              entry, sl, tp, riskPoints: Math.abs(entry - sl), outcome, outcomeTime,
+              trendlineLevel:   +lineNow.toFixed(4),
+              trendlineTouches: support.touches,
+              confidence: conf, iofBonus, scoreBreakdown,
+              rationale: `Bearish trendline break below support — ${support.touches} touches` +
+                (iofBonus >= 10 ? ' · IOF confluence' : ''),
+            });
+          }
+        }
+      }
+    }
+  }
+
+  return found;
+}
+
+function _trendlineConf({ breakSize, touches, regime, direction, iofBonus }) {
+  let score = 45;
+  const bd  = { base: 45, break: 0, touches: 0, regime: 0, align: 0, iof: iofBonus || 0 };
+
+  // Reward a decisive break (not just a tick across the line)
+  const brk = Math.min(10, Math.round(breakSize * 15));
+  score += brk; bd.break = brk;
+
+  // More confirmed touches = more significant trendline = more meaningful break
+  if      (touches >= 5) { score += 10; bd.touches = 10; }
+  else if (touches >= 3) { score += 5;  bd.touches = 5;  }
+
+  if (regime?.direction === direction) { score += 15; bd.regime = 15; }
+  if (regime?.alignment)               { score += 10; bd.align  = 10; }
+  score += bd.iof;
+  return { score: Math.round(Math.max(0, Math.min(100, score))), breakdown: bd };
+}
+
+// ---------------------------------------------------------------------------
 
 module.exports = { detectSetups };

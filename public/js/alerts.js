@@ -15,7 +15,7 @@
 
   // ── Settings (loaded from server defaults, overridden by localStorage) ─────
   let cfg = { mnqContracts: 5, mgcContracts: 3, maxRiskDollars: 200, rrRatio: 2.0 };
-  let minConf = 0;
+  let minConf = 65;
 
   // ── Active chart view — synced from chart.js via chartViewChange event ──────
   let activeSymbol = 'MNQ';
@@ -364,8 +364,9 @@
     if (sd.body   > 0) parts.push(`<span class="bd-item">+B${sd.body}</span>`);
     if (sd.wick   > 0) parts.push(`<span class="bd-item">+W${sd.wick}</span>`);
     if (sd.size   > 0) parts.push(`<span class="bd-item">+Sz${sd.size}</span>`);
-    if (sd.break  > 0) parts.push(`<span class="bd-item">+Br${sd.break}</span>`);
-    if (sd.choch  > 0) parts.push(`<span class="bd-item">+CH${sd.choch}</span>`);
+    if (sd.break   > 0) parts.push(`<span class="bd-item">+Br${sd.break}</span>`);
+    if (sd.touches > 0) parts.push(`<span class="bd-item">+T${sd.touches}</span>`);
+    if (sd.choch   > 0) parts.push(`<span class="bd-item">+CH${sd.choch}</span>`);
     if (sd.regime > 0) parts.push(`<span class="bd-item bd-regime">+R${sd.regime}</span>`);
     if (sd.align  > 0) parts.push(`<span class="bd-item bd-align">+A${sd.align}</span>`);
     if (sd.iof    > 0) parts.push(`<span class="bd-item bd-iof">+IOF${sd.iof}</span>`);
@@ -628,6 +629,7 @@
       case 'bos':                      return 'BOS';
       case 'choch':                    return 'CHoCH';
       case 'pdh_breakout':             return 'PDH Brk';
+      case 'trendline_break':          return 'TL Break';
       default:                         return type;
     }
   }

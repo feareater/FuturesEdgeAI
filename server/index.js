@@ -410,7 +410,9 @@ function _applyTradeFilter(alerts) {
 // ---------------------------------------------------------------------------
 
 const SCAN_SYMBOLS    = ['MNQ', 'MGC'];
-const SCAN_TIMEFRAMES = ['1m', '2m', '3m', '5m', '15m', '30m'];
+// 1m/2m/3m removed: with 15-min delayed data they are stale by the time they display.
+// 5m/15m/30m give actionable signals even accounting for the data lag.
+const SCAN_TIMEFRAMES = ['5m', '15m', '30m'];
 
 /**
  * Run a full scan. Returns the count of NEW alerts added to the cache.
@@ -427,13 +429,16 @@ async function runScan() {
 
     for (const tf of SCAN_TIMEFRAMES) {
       try {
-        const candles = getCandles(symbol, tf);
-        const ind     = computeIndicators(candles, {
+        const candles    = getCandles(symbol, tf);
+        const ind        = computeIndicators(candles, {
           swingLookback:    settings.swingLookback,
           impulseThreshold: settings.impulseThreshold,
         });
-        const regime  = { ...classifyRegime(ind), alignment };
-        const setups  = detectSetups(candles, ind, regime, { rrRatio: settings.risk.rrRatio || 1.0, symbol });
+        const regime     = { ...classifyRegime(ind), alignment };
+        const trendlines = detectTrendlines(candles, ind.atrCurrent);
+        const setups     = detectSetups(candles, ind, regime, {
+          rrRatio: settings.risk.rrRatio || 1.0, symbol, trendlines,
+        });
 
         for (const setup of setups) {
           // Multi-TF zone stack: check if the setup's key level has a confirming

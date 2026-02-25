@@ -581,7 +581,9 @@
                     : a.setup.outcome === 'won'    ? '#26a69a'
                     : a.setup.outcome === 'lost'   ? '#ef5350'
                     :                                '#2196f3';
-        const label = a.setup.type === 'zone_rejection' ? 'ZR' : 'PDH';
+        const label = a.setup.type === 'zone_rejection'  ? 'ZR'
+                    : a.setup.type === 'trendline_break' ? 'TL'
+                    : 'PDH';
         // Snap to the nearest bar time so TradingView can render the marker correctly.
         const snappedTime = _snapToCandle(a.setup.time);
         return {
