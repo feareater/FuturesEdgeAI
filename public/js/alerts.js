@@ -49,12 +49,9 @@
   const refreshIntervalEl = document.getElementById('refresh-interval');
   const refreshNowBtn     = document.getElementById('refresh-now-btn');
 
-  // ── Drawer handle DOM refs (mobile only — null on desktop) ───────────────
-  const drawerHandleEl   = document.getElementById('drawer-handle');
-  const drawerToggleBtn  = document.getElementById('drawer-toggle-btn');
-  const drawerDataAgeEl  = document.getElementById('drawer-data-age');
-  const drawerAlertCount = document.getElementById('drawer-alert-count');
-  const rightPanel       = document.getElementById('right-panel');
+  // ── Mobile tab DOM refs ────────────────────────────────────────────────────
+  const rightPanel      = document.getElementById('right-panel');
+  const tabAlertBadge   = document.getElementById('tab-alert-badge');
 
   // ── Data freshness display + countdown ────────────────────────────────────
 
@@ -84,7 +81,6 @@
       text += ` · ${m}:${s.toString().padStart(2, '0')}`;
     }
     if (dataAgeEl) dataAgeEl.textContent = text;
-    if (drawerDataAgeEl) drawerDataAgeEl.textContent = text;  // mirror to drawer handle
   }
 
   // ── Session badge ──────────────────────────────────────────────────────────
@@ -119,31 +115,27 @@
     setTimeout(() => banner.remove(), 6000);
   }
 
-  // ── Drawer toggle (mobile slide-up panel) ────────────────────────────────────
+  // ── Mobile bottom-tab navigation ─────────────────────────────────────────────
 
-  function _initDrawer() {
-    if (!drawerHandleEl || !rightPanel) return;
+  function _initMobileTabs() {
+    const tabBtns = document.querySelectorAll('#bottom-nav .tab-btn');
+    if (!tabBtns.length) return;
 
-    function _toggle() {
-      const isOpen = rightPanel.classList.toggle('drawer-open');
-      if (drawerToggleBtn) {
-        drawerToggleBtn.textContent = isOpen ? '⌄' : '⌃';
-        drawerToggleBtn.setAttribute('aria-expanded', String(isOpen));
+    const app = document.getElementById('app');
+
+    function _switchTab(tab) {
+      app.dataset.mobileTab = tab;
+      tabBtns.forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+      if (tab === 'chart') {
+        // Give the chart container one frame to reappear before resizing
+        requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
       }
-      // Fire resize after CSS transition ends (300ms) so TradingView chart
-      // recalculates its container dimensions correctly.
-      setTimeout(() => window.dispatchEvent(new Event('resize')), 310);
     }
 
-    drawerHandleEl.addEventListener('click', _toggle);
+    tabBtns.forEach(btn => btn.addEventListener('click', () => _switchTab(btn.dataset.tab)));
 
-    // Prevent tap on the toggle button from bubbling to the handle (double-toggle)
-    if (drawerToggleBtn) {
-      drawerToggleBtn.addEventListener('click', e => {
-        e.stopPropagation();
-        _toggle();
-      });
-    }
+    // Start on chart tab
+    _switchTab('chart');
   }
 
   // ── Boot ────────────────────────────────────────────────────────────────────
@@ -198,7 +190,7 @@
     await fetchAndRender();
     connectWS();
     _wireInputs();
-    _initDrawer();
+    _initMobileTabs();
     _updateSessionBadge();
     setInterval(_updateSessionBadge, 60_000);
     setInterval(_tickDataAge, 1000);  // live countdown
@@ -220,15 +212,15 @@
       if (!alert) return;
       const key = _alertKey(alert);
 
-      // On mobile: open the drawer first, then scroll after the animation
-      if (rightPanel && window.matchMedia('(max-width: 767px)').matches) {
-        if (!rightPanel.classList.contains('drawer-open')) {
-          rightPanel.classList.add('drawer-open');
-          if (drawerToggleBtn) {
-            drawerToggleBtn.textContent = '⌄';
-            drawerToggleBtn.setAttribute('aria-expanded', 'true');
-          }
-          setTimeout(() => _scrollToAlert(key), 320);
+      // On mobile: switch to Alerts tab first, then scroll after a frame
+      if (window.matchMedia('(max-width: 767px)').matches) {
+        const app = document.getElementById('app');
+        if (app.dataset.mobileTab !== 'alerts') {
+          app.dataset.mobileTab = 'alerts';
+          document.querySelectorAll('#bottom-nav .tab-btn').forEach(b =>
+            b.classList.toggle('active', b.dataset.tab === 'alerts')
+          );
+          setTimeout(() => _scrollToAlert(key), 80);
           return;
         }
       }
@@ -337,10 +329,10 @@
     wrPct.textContent  = wr !== null ? `${wr}% WR` : '— WR';
     wrPct.className    = 'wr-pct' + (wr === null ? '' : wr >= 50 ? ' good' : wr >= 40 ? ' neutral' : ' bad');
 
-    // Mirror alert count to drawer handle summary (mobile)
-    if (drawerAlertCount) {
+    // Update alert count badge on bottom nav tab
+    if (tabAlertBadge) {
       const n = currentAlerts.filter(a => !a.suppressed).length;
-      drawerAlertCount.textContent = n > 0 ? `${n} alert${n !== 1 ? 's' : ''}` : 'No alerts';
+      tabAlertBadge.textContent = n > 0 ? String(n) : '';
     }
   }
 

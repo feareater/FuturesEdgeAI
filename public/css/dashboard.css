@@ -811,33 +811,63 @@ html, body {
 
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   Mobile layout — slide-up drawer pattern (≤767px)
+   Bottom navigation bar — hidden on desktop, shown only on mobile
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+#bottom-nav        { display: none; }
+.mobile-links-section { display: none; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Mobile layout — bottom tab navigation (≤ 767px)
    ═══════════════════════════════════════════════════════════════════════════ */
 
 @media (max-width: 767px) {
 
-  /* Allow page to scroll on mobile (chart + drawer don't fill viewport the
-     same way as desktop) */
-  html, body { overflow: auto; }
+  /* Full-screen app shell; each tab's panel scrolls internally */
+  html, body { overflow: hidden; }
 
-  /* ── Topbar: 2-row CSS grid ──────────────────────────────────────────── */
+  /* ── Topbar: 2-row grid ─────────────────────────────────────────────── */
 
   #topbar {
     display: grid;
-    grid-template-columns: auto 1fr auto;
+    grid-template-columns: auto 1fr auto auto;
     grid-template-rows: 44px auto;
     grid-template-areas:
-      "brand  price  ws"
-      "ctrls  ctrls  ctrls";
+      "brand  price  status  status"
+      "ctrls  ctrls  ctrls   ctrls";
     height: auto;
     padding: 0 12px;
     gap: 0;
     align-items: center;
   }
 
-  #brand      { grid-area: brand; font-size: 14px; }
-  #last-price { grid-area: price; justify-self: center; flex-direction: column; gap: 1px; }
-  #ws-status  { grid-area: ws;   justify-self: end; }
+  #brand         { grid-area: brand; align-self: center; }
+  #last-price    {
+    grid-area: price;
+    margin-left: 0;
+    justify-self: center;
+    align-self: center;
+    flex-direction: row;
+    gap: 5px;
+    align-items: baseline;
+  }
+  #price-value   { font-size: 15px; }
+  #price-symbol  { font-size: 11px; }
+
+  /* topbar-status wraps session-badge + ws-dot */
+  #topbar-status {
+    grid-area: status;
+    align-self: center;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    justify-self: end;
+  }
+  #session-badge {
+    font-size: 9px;
+    padding: 1px 5px;
+    white-space: nowrap;
+  }
 
   #controls {
     grid-area: ctrls;
@@ -847,149 +877,78 @@ html, body {
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
     flex-wrap: nowrap;
-    gap: 12px;
+    gap: 10px;
   }
   #controls::-webkit-scrollbar { display: none; }
-
   .control-group { flex-shrink: 0; }
-
-  /* Hide label text ("Symbol" / "Timeframe") — too tight on phone */
   .control-label { display: none; }
 
-  /* Touch-friendly symbol + TF buttons */
-  .sym-btn,
-  .tf-btn {
+  .sym-btn, .tf-btn {
     min-height: 36px;
-    padding: 6px 14px;
+    padding: 6px 12px;
     font-size: 13px;
   }
 
-  /* Hide elements that don't fit or are shown in the drawer handle instead */
-  #ohlc-display  { display: none; }
-  #session-badge { display: none; }
-  #data-age      { display: none; }
-  #docs-nav-link    { display: none; }
-  #ai-nav-link      { display: none; }
-  #export-nav-link  { display: none; }
+  /* Desktop-only topbar elements */
+  #ohlc-display    { display: none; }
+  #data-age        { display: none; }
+  #docs-nav-link   { display: none; }
+  #ai-nav-link     { display: none; }
+  #export-nav-link { display: none; }
 
-  /* ── Main area: column so chart fills width ──────────────────────────── */
+  /* ── Main content area ──────────────────────────────────────────────── */
 
   #main {
-    flex-direction: column;
-    overflow: visible;
-    height: auto;
+    flex: 1;
+    overflow: hidden;
+    /* default flex-direction: row — only one child visible at a time */
   }
 
-  /* Chart occupies remaining viewport height; padding-bottom reserves space
-     so content isn't hidden behind the fixed drawer handle */
   #chart-wrap {
-    flex: none;
-    height: calc(100svh - 44px - 46px - 52px); /* topbar row1 + row2 + handle */
-    min-height: 260px;
-    padding-bottom: 0;
+    flex: 1;
     position: relative;
+    overflow: hidden;
+    min-height: 0;
   }
 
-  /* chart-container stays absolutely inset inside chart-wrap */
-  #chart-container {
-    inset: 0;
-  }
+  #chart-container { position: absolute; inset: 0; }
 
-  /* ── Right panel → fixed slide-up bottom drawer ──────────────────────── */
-
+  /* Right panel: in normal flow, fills #main when visible */
   #right-panel {
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    width: 100%;           /* override desktop 260px */
-    height: 52px;          /* collapsed: handle only */
+    position: static;
+    width: 100%;
+    flex: 1;
+    display: none;           /* hidden on chart tab */
     border-left: none;
-    border-top: 1px solid var(--border);
-    border-radius: 14px 14px 0 0;
-    z-index: 200;
-    overflow: hidden;      /* clips content when collapsed */
-    transition: height 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    display: flex;
-    flex-direction: column;
-    background: var(--bg-panel);
-    /* Safe area (iPhone home bar) */
-    padding-bottom: env(safe-area-inset-bottom, 0px);
-  }
-
-  /* Open state — toggled by JS adding .drawer-open */
-  #right-panel.drawer-open {
-    height: 65vh;
+    border-top: none;
+    border-radius: 0;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
+    transition: none;
+    height: auto;
+    min-height: 0;
   }
 
-  /* ── Drawer handle (shown only on mobile) ────────────────────────────── */
+  /* ── Tab visibility ─────────────────────────────────────────────────── */
 
-  #drawer-handle {
-    display: flex;
-    align-items: center;
-    height: 52px;
-    flex-shrink: 0;
-    padding: 0 14px;
-    cursor: pointer;
-    user-select: none;
-    background: var(--bg-panel);
-    /* Stays visible when panel is scrolled open */
-    position: sticky;
-    top: 0;
-    z-index: 1;
+  /* Alerts tab: show right-panel (alert section only) */
+  #app[data-mobile-tab="alerts"] #chart-wrap      { display: none; }
+  #app[data-mobile-tab="alerts"] #right-panel     { display: flex; }
+  #app[data-mobile-tab="alerts"] #layers-section  { display: none; }
+
+  /* Layers tab: show right-panel (layers section only) */
+  #app[data-mobile-tab="layers"] #chart-wrap      { display: none; }
+  #app[data-mobile-tab="layers"] #right-panel     { display: flex; }
+  #app[data-mobile-tab="layers"] #alert-section   { display: none; }
+  #app[data-mobile-tab="layers"] .mobile-links-section { display: flex; }
+
+  /* ── Layer list: 2-column grid ──────────────────────────────────────── */
+
+  #layer-list {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    padding: 4px 0;
   }
-
-  /* Pill grab indicator */
-  #drawer-grab {
-    width: 36px;
-    height: 4px;
-    background: var(--border);
-    border-radius: 2px;
-    position: absolute;
-    top: 8px;
-    left: 50%;
-    transform: translateX(-50%);
-  }
-
-  #drawer-summary {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex: 1;
-    padding-top: 6px; /* push content below grab pill */
-  }
-
-  #drawer-data-age {
-    font-size: 11px;
-    color: var(--text-dim);
-  }
-
-  #drawer-alert-count {
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--bull);
-  }
-
-  #drawer-toggle-btn {
-    background: transparent;
-    border: none;
-    color: var(--text-dim);
-    font-size: 20px;
-    line-height: 1;
-    cursor: pointer;
-    padding: 4px 8px;
-    flex-shrink: 0;
-    transition: transform 0.3s ease;
-  }
-
-  /* Rotate arrow when drawer is open */
-  #right-panel.drawer-open #drawer-toggle-btn {
-    transform: rotate(180deg);
-  }
-
-  /* ── Touch target sizing ─────────────────────────────────────────────── */
 
   .layer-row {
     min-height: 44px;
@@ -1002,15 +961,11 @@ html, body {
     flex-shrink: 0;
   }
 
-  /* ── Alert filter inputs ─────────────────────────────────────────────── */
+  /* ── Alert filters — touch-friendly ────────────────────────────────── */
 
-  #alert-filters {
-    padding: 8px 14px;
-    gap: 8px;
-  }
-
-  .filter-row   { gap: 8px; flex-wrap: wrap; }
-  .filter-label { min-width: 60px; font-size: 12px; }
+  #alert-filters { padding: 8px 14px; gap: 8px; }
+  .filter-row    { gap: 8px; flex-wrap: wrap; }
+  .filter-label  { min-width: 60px; font-size: 12px; }
 
   .filter-input {
     min-height: 32px;
@@ -1021,28 +976,114 @@ html, body {
   .filter-input.narrow { width: 44px; }
 
   .filter-select,
-  .refresh-now-btn {
-    min-height: 32px;
-    font-size: 12px;
+  .refresh-now-btn { min-height: 32px; font-size: 12px; }
+
+  /* ── Alert cards + WR bar ───────────────────────────────────────────── */
+
+  .alert-card { padding: 10px 14px; margin-bottom: 8px; }
+  #wr-bar     { padding: 8px 16px; font-size: 12px; }
+
+  /* ── Bottom navigation bar ──────────────────────────────────────────── */
+
+  #bottom-nav {
+    display: flex;
+    align-items: stretch;
+    background: var(--bg-panel);
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+    /* iPhone home-bar safe area */
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    height: calc(56px + env(safe-area-inset-bottom, 0px));
+    z-index: 50;
   }
 
-  /* ── Alert cards ─────────────────────────────────────────────────────── */
+  .tab-btn {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    position: relative;
+    padding: 8px 4px 6px;
+    transition: color 0.15s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .tab-btn.active   { color: var(--accent); }
+  .tab-btn:active   { opacity: 0.7; }
 
-  .alert-card {
-    padding: 10px 14px;
-    margin-bottom: 8px;
+  .tab-icon  { width: 22px; height: 22px; flex-shrink: 0; }
+  .tab-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    line-height: 1;
   }
 
-  #wr-bar { padding: 8px 16px; font-size: 12px; }
+  /* Alert count badge on the Alerts tab */
+  .tab-badge {
+    position: absolute;
+    top: 5px;
+    left: calc(50% + 5px);
+    background: var(--accent);
+    color: #fff;
+    font-size: 9px;
+    font-weight: 700;
+    min-width: 16px;
+    height: 16px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 4px;
+    line-height: 1;
+  }
+  .tab-badge:empty { display: none !important; }
 
-  /* New alert toast banner: position below taller 2-row topbar */
-  .new-alert-banner { top: 96px; }
+  /* ── Mobile-only nav links section (layers tab footer) ──────────────── */
+
+  .mobile-links-section {
+    flex-direction: column;
+    gap: 8px;
+    padding: 16px;
+    border-top: 1px solid var(--border);
+    margin-top: 4px;
+  }
+
+  .mobile-link-btn {
+    display: block;
+    padding: 12px 16px;
+    background: rgba(33, 150, 243, 0.08);
+    border: 1px solid rgba(33, 150, 243, 0.25);
+    border-radius: 6px;
+    color: var(--accent);
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 600;
+    text-align: center;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.12s;
+  }
+  .mobile-link-btn:active { background: rgba(33, 150, 243, 0.2); }
+
+  /* Toast banner: below 2-row topbar (~44 + ~50 = ~94px) */
+  .new-alert-banner { top: 94px; }
+
+  /* Legacy drawer handle — hidden (no longer in HTML, safety rule) */
+  #drawer-handle { display: none !important; }
 
 }
 
-/* ── Desktop guard: drawer handle is never visible on wide screens ──────────── */
+/* ── Desktop: topbar-status is a plain inline flex wrapper ──────────────────── */
 @media (min-width: 768px) {
-  #drawer-handle { display: none; }
+  #topbar-status {
+    display: contents; /* children appear as direct topbar flex items (no layout impact) */
+  }
+  .mobile-links-section { display: none !important; }
 }
 
 
