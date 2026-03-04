@@ -329,11 +329,11 @@ html, body {
   font-size: 11px;
   padding: 2px 5px;
   border-radius: var(--radius);
-  width: 46px;
+  width: 58px;
   text-align: right;
 }
 
-.filter-input.narrow { width: 32px; }
+.filter-input.narrow { width: 44px; }
 
 .filter-input:focus {
   outline: none;

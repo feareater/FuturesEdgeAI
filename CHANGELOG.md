@@ -4,6 +4,14 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v3.3] — 2026-03-04 — Filter Input Width Fix
+
+### Updated — `public/css/dashboard.css`
+- `.filter-input` width: 46px → 58px — Min Conf and Max Risk inputs no longer clip numbers with browser spin controls.
+- `.filter-input.narrow` width: 32px → 44px — R:R Ratio and contract count inputs now display "2.0" and "5" without truncation.
+
+---
+
 ## [v3.2] — 2026-03-04 — Dashboard Layout Redesign
 
 ### Updated — `public/index.html`
