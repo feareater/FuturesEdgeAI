@@ -24,7 +24,9 @@ const BOS_QUAL_BONUS = 15;          // confidence pts added to the qualifying zo
 // PDH/PDL Breakout uses symbol-specific R:R (data-optimised):
 //   MNQ → 2:1 (breakouts run further; ★ $6,593 PF 5.36 on 30d backtest)
 //   MGC → 1:1 (tighter ATR range; ★ $2,856 PF 4.02 on 30d backtest)
-const PDH_RR = { MNQ: 2.0, MGC: 1.0 };
+//   MES → 2:1 (equity index micro, same breakout behavior as MNQ — pending backtest)
+//   MCL → 1.5:1 (crude oil, wider ATR than gold — pending backtest)
+const PDH_RR = { MNQ: 2.0, MGC: 1.0, MES: 2.0, MCL: 1.5 };
 
 /**
  * Detect trade setups in the candle history.
@@ -40,12 +42,14 @@ const PDH_RR = { MNQ: 2.0, MGC: 1.0 };
 function detectSetups(candles, indicators, regime, opts = {}) {
   if (!candles || candles.length < 20) return [];
 
-  const { swingHighs, swingLows, atrCurrent, pdh, pdl, fvgs = [], orderBlocks = [] } = indicators;
+  const { swingHighs, swingLows, atrCurrent, pdh, pdl, fvgs = [], orderBlocks = [],
+          openingRange } = indicators;
   if (!atrCurrent || !swingHighs.length || !swingLows.length) return [];
 
-  const rrRatio    = opts.rrRatio    || 1.0;
-  const symbol     = opts.symbol     || '';
-  const trendlines = opts.trendlines || null;
+  const rrRatio       = opts.rrRatio        || 1.0;
+  const symbol        = opts.symbol         || '';
+  const trendlines    = opts.trendlines     || null;
+  const calendarEvents = opts.calendarEvents || [];
 
   // Examine only the most recent SCAN_WINDOW candles, but use all known swings
   const scanStart   = Math.max(0, candles.length - SCAN_WINDOW);
@@ -54,39 +58,63 @@ function detectSetups(candles, indicators, regime, opts = {}) {
   const pdhSetups  = _pdhBreakout(scanCandles, candles, pdh, pdl, atrCurrent, regime, fvgs, orderBlocks, symbol);
 
   // Detect BOS/CHoCH internally — used as zone qualifiers, NOT returned as standalone trades.
-  // Analysis showed BOS alone: 60% WR but -$321 P&L at 1:1 (continuation needs higher R:R).
   const bosSetups  = _bosChoch(scanCandles, candles, swingHighs, swingLows, atrCurrent, regime, fvgs, orderBlocks, rrRatio);
 
-  // Zone rejections are the primary signal (backtest: 72.7% WR, PF 5.52).
-  // Boost any zone that follows a prior BOS/CHoCH in the same direction.
-  // Regime gate: only fire counter-trend if a CHoCH confirmed the trend shift.
+  // Zone rejections — primary signal.
   const rawZones   = _zoneRejection(scanCandles, candles, swingHighs, swingLows, atrCurrent, regime, fvgs, orderBlocks, rrRatio);
   const zoneSetups = _applyBosQualifier(rawZones, bosSetups)
     .filter(z => _regimeGate(z, regime));
 
-  // Trendline breaks — only when trendlines have been computed and passed in.
-  // Requires ≥3 touches; fires only on the first candle that crosses the line.
+  // Trendline breaks.
   const tlSetups = trendlines
     ? _trendlineBreak(scanCandles, candles, trendlines, atrCurrent, regime, fvgs, orderBlocks, rrRatio)
     : [];
 
-  // PDH/PDL breakouts always included (max 2: one bull, one bear).
-  // Remaining slots filled by highest-confidence zone setups, then trendline breaks.
+  // Opening Range breakouts — only when OR is formed and feature data is present.
+  const orSetups = openingRange?.formed
+    ? _orBreakout(scanCandles, candles, openingRange, atrCurrent, regime, fvgs, orderBlocks, rrRatio)
+    : [];
+
+  // Merge: PDH always included, remaining slots by confidence.
   zoneSetups.sort((a, b) => b.confidence - a.confidence);
   tlSetups.sort((a, b) => b.confidence - a.confidence);
+  orSetups.sort((a, b) => b.confidence - a.confidence);
 
   const remaining  = Math.max(0, 10 - pdhSetups.length);
   const top        = [...pdhSetups, ...zoneSetups.slice(0, remaining)];
   const tlSlots    = Math.min(2, Math.max(0, 10 - top.length));
   top.push(...tlSetups.slice(0, tlSlots));
+  const orSlots    = Math.min(2, Math.max(0, 10 - top.length));
+  top.push(...orSetups.slice(0, orSlots));
+
+  // Calendar gating: flag setups near high-impact events (confidence -20, nearEvent: true)
+  if (calendarEvents.length > 0) {
+    for (const setup of top) {
+      if (_isNearCalendarEvent(setup, symbol, calendarEvents)) {
+        setup.confidence  = Math.max(0, setup.confidence - 20);
+        setup.nearEvent   = true;
+      }
+    }
+  }
 
   const bosQual = zoneSetups.filter(z => (z.scoreBreakdown?.bos || 0) > 0).length;
   console.log(
-    `[setups]  found=${pdhSetups.length + zoneSetups.length + tlSetups.length}  returned=${top.length}  rr=${rrRatio}:1  ` +
-    `(zone=${zoneSetups.length}[bq=${bosQual}] bos_detected=${bosSetups.length} pdh=${pdhSetups.length} tl=${tlSetups.length})`
+    `[setups]  found=${pdhSetups.length + zoneSetups.length + tlSetups.length + orSetups.length}  returned=${top.length}  rr=${rrRatio}:1  ` +
+    `(zone=${zoneSetups.length}[bq=${bosQual}] bos_detected=${bosSetups.length} pdh=${pdhSetups.length} tl=${tlSetups.length} or=${orSetups.length})`
   );
 
   return top;
+}
+
+// ---------------------------------------------------------------------------
+// Calendar event check
+// ---------------------------------------------------------------------------
+
+function _isNearCalendarEvent(setup, symbol, events, windowSec = 15 * 60) {
+  return events.some(e =>
+    e.symbols?.includes(symbol) &&
+    Math.abs(e.time - setup.time) <= windowSec
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -696,6 +724,97 @@ function _trendlineConf({ breakSize, touches, regime, direction, iofBonus }) {
   if (regime?.alignment)               { score += 10; bd.align  = 10; }
   score += bd.iof;
   return { score: Math.round(Math.max(0, Math.min(100, score))), breakdown: bd };
+}
+
+// ---------------------------------------------------------------------------
+// Setup: Opening Range Breakout
+// ---------------------------------------------------------------------------
+// Fires when price closes beyond the OR high (bullish) or OR low (bearish)
+// after the OR window closes (10:00 ET). RTH-gated (before 15:30 ET).
+// SL = opposite OR bound, TP = SL distance × 2 (OR breakouts run further).
+
+const OR_POST_START_UTC = 14.0;  // 10:00 ET — OR window closed
+const OR_RTH_END_UTC    = 20.5;  // 16:30 ET — stop scanning late session
+
+function _orBreakout(scanCandles, allCandles, openingRange, atrCurrent, regime, fvgs, orderBlocks, rrRatio) {
+  if (!openingRange || !openingRange.formed) return [];
+  const { high: orHigh, low: orLow } = openingRange;
+  if (!orHigh || !orLow || orHigh <= orLow) return [];
+
+  const found = [];
+  const seen  = new Set();
+
+  for (const c of scanCandles) {
+    const h = _utcHour(c.time);
+    if (h < OR_POST_START_UTC || h >= OR_RTH_END_UTC) continue;
+
+    // Bullish breakout: first close above OR high
+    if (c.close > orHigh && !seen.has(`bull_or_${c.time}`)) {
+      seen.add(`bull_or_${c.time}`);
+      const entry    = orHigh;
+      const sl       = orLow;
+      const risk     = Math.abs(entry - sl);
+      const tp       = entry + risk * 2; // OR breaks tend to run 2:1
+      const iofBonus = iofConfluenceScore(entry, 'bullish', fvgs, orderBlocks, atrCurrent);
+      const breakMag = (c.close - orHigh) / atrCurrent;
+      const { score: conf, breakdown: scoreBreakdown } = _orConf({ breakMag, regime, direction: 'bullish', iofBonus });
+      const { outcome, outcomeTime } = _evaluateOutcome(allCandles, c.time, { direction: 'bullish', sl, tp });
+
+      found.push({
+        type: 'or_breakout', direction: 'bullish',
+        time: c.time, price: c.close,
+        entry, sl, tp, riskPoints: risk, outcome, outcomeTime,
+        orHigh, orLow,
+        confidence: conf, iofBonus, scoreBreakdown,
+        rationale: `Bullish OR breakout above ${orHigh.toFixed(2)} — close ${c.close.toFixed(2)}` +
+                   (iofBonus >= 10 ? ' · IOF confluence' : ''),
+      });
+    }
+
+    // Bearish breakout: first close below OR low
+    if (c.close < orLow && !seen.has(`bear_or_${c.time}`)) {
+      seen.add(`bear_or_${c.time}`);
+      const entry    = orLow;
+      const sl       = orHigh;
+      const risk     = Math.abs(entry - sl);
+      const tp       = entry - risk * 2;
+      const iofBonus = iofConfluenceScore(entry, 'bearish', fvgs, orderBlocks, atrCurrent);
+      const breakMag = (orLow - c.close) / atrCurrent;
+      const { score: conf, breakdown: scoreBreakdown } = _orConf({ breakMag, regime, direction: 'bearish', iofBonus });
+      const { outcome, outcomeTime } = _evaluateOutcome(allCandles, c.time, { direction: 'bearish', sl, tp });
+
+      found.push({
+        type: 'or_breakout', direction: 'bearish',
+        time: c.time, price: c.close,
+        entry, sl, tp, riskPoints: risk, outcome, outcomeTime,
+        orHigh, orLow,
+        confidence: conf, iofBonus, scoreBreakdown,
+        rationale: `Bearish OR breakdown below ${orLow.toFixed(2)} — close ${c.close.toFixed(2)}` +
+                   (iofBonus >= 10 ? ' · IOF confluence' : ''),
+      });
+    }
+  }
+
+  return found;
+}
+
+function _orConf({ breakMag, regime, direction, iofBonus }) {
+  let score = 35;
+  const bd  = { base: 35, break: 0, regime: 0, align: 0, iof: iofBonus || 0 };
+
+  // Break magnitude vs ATR
+  const brk = Math.min(20, Math.round(breakMag * 20));
+  score += brk; bd.break = brk;
+
+  if (regime?.direction === direction) { score += 15; bd.regime = 15; }
+  if (regime?.alignment)               { score += 10; bd.align  = 10; }
+  score += bd.iof;
+  return { score: Math.round(Math.max(0, Math.min(100, score))), breakdown: bd };
+}
+
+function _utcHour(unixSec) {
+  const d = new Date(unixSec * 1000);
+  return d.getUTCHours() + d.getUTCMinutes() / 60;
 }
 
 // ---------------------------------------------------------------------------

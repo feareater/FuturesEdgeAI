@@ -43,6 +43,18 @@
   let lastFVGs      = [];
   let lastOBs       = [];
 
+  // Volume Profile price line handles
+  let vpPriceLines      = [];
+  let lastVolumeProfile = null;
+
+  // Opening Range price line handles
+  let orPriceLines    = [];
+  let lastOpeningRange = null;
+
+  // Session Level price line handles
+  let sessionPriceLines = [];
+  let lastSessionLevels = null;
+
   // Marker arrays merged into candleSeries
   let swingHighMarkers = [];
   let swingLowMarkers  = [];
@@ -61,14 +73,18 @@
 
   // Layer visibility
   const vis = {
-    ema9:            true,
-    ema21:           true,
-    ema50:           true,
-    vwap:            true,
-    priorDayHighLow: true,
-    swingHighLow:    true,
-    trendlines:      true,
-    iofZones:        true,
+    ema9:               true,
+    ema21:              true,
+    ema50:              true,
+    vwap:               true,
+    priorDayHighLow:    true,
+    swingHighLow:       true,
+    trendlines:         true,
+    iofZones:           true,
+    volumeProfile:      true,
+    openingRange:       true,
+    sessionLevels:      true,
+    correlationHeatmap: true,
   };
 
   // ── DOM refs ───────────────────────────────────────────────────────────────
@@ -293,6 +309,21 @@
     clearIOFZones();
     if (vis.iofZones) _drawIOFZones(lastFVGs, lastOBs);
 
+    // Volume Profile
+    lastVolumeProfile = d.volumeProfile || null;
+    clearVPLines();
+    if (vis.volumeProfile && lastVolumeProfile) _drawVolumeProfile(lastVolumeProfile);
+
+    // Opening Range
+    lastOpeningRange = d.openingRange || null;
+    clearORLines();
+    if (vis.openingRange && lastOpeningRange?.formed) _drawOpeningRange(lastOpeningRange);
+
+    // Session Levels
+    lastSessionLevels = d.sessionLevels || null;
+    clearSessionLines();
+    if (vis.sessionLevels && lastSessionLevels) _drawSessionLevels(lastSessionLevels);
+
     // Apply persisted visibility state
     for (const [key, visible] of Object.entries(vis)) {
       _applyVis(key, visible);
@@ -425,6 +456,83 @@
     }
   }
 
+  // ── Volume Profile (POC / VAH / VAL) ───────────────────────────────────────
+
+  function clearVPLines() {
+    for (const { line } of vpPriceLines) {
+      try { candleSeries.removePriceLine(line); } catch (_) {}
+    }
+    vpPriceLines = [];
+  }
+
+  function _drawVolumeProfile(vp) {
+    const add = (price, color, style, title, axisLabel = true) => {
+      if (price == null) return;
+      vpPriceLines.push({ line: candleSeries.createPriceLine({
+        price, color, lineWidth: 1, lineStyle: style,
+        axisLabelVisible: axisLabel, title,
+      })});
+    };
+    const Dotted  = LightweightCharts.LineStyle.Dotted;
+    const Dashed  = LightweightCharts.LineStyle.Dashed;
+    add(vp.poc,     'rgba(255,255,255,0.85)', Dashed,  'POC');
+    add(vp.vah,     'rgba(38,166,154,0.80)',  Dashed,  'VAH');
+    add(vp.val,     'rgba(239,83,80,0.80)',   Dashed,  'VAL');
+    add(vp.prevPoc, 'rgba(180,180,180,0.40)', Dotted,  'pPOC');
+  }
+
+  // ── Opening Range ───────────────────────────────────────────────────────────
+
+  function clearORLines() {
+    for (const { line } of orPriceLines) {
+      try { candleSeries.removePriceLine(line); } catch (_) {}
+    }
+    orPriceLines = [];
+  }
+
+  function _drawOpeningRange(or_) {
+    const add = (price, style, title) => {
+      if (price == null) return;
+      orPriceLines.push({ line: candleSeries.createPriceLine({
+        price, color: '#ff9800', lineWidth: 1, lineStyle: style,
+        axisLabelVisible: true, title,
+      })});
+    };
+    const Solid  = LightweightCharts.LineStyle.Solid;
+    const Dashed = LightweightCharts.LineStyle.Dashed;
+    add(or_.high, Solid,  'OR Hi');
+    add(or_.low,  Solid,  'OR Lo');
+    add(or_.mid,  Dashed, 'OR Mid');
+  }
+
+  // ── Session Levels ──────────────────────────────────────────────────────────
+
+  function clearSessionLines() {
+    for (const { line } of sessionPriceLines) {
+      try { candleSeries.removePriceLine(line); } catch (_) {}
+    }
+    sessionPriceLines = [];
+  }
+
+  function _drawSessionLevels(sl) {
+    const add = (price, color, title) => {
+      if (price == null) return;
+      sessionPriceLines.push({ line: candleSeries.createPriceLine({
+        price, color, lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Dashed,
+        axisLabelVisible: true, title,
+      })});
+    };
+    if (sl.asian) {
+      add(sl.asian.high, 'rgba(255,193,7,0.80)',   'Asia Hi');
+      add(sl.asian.low,  'rgba(255,193,7,0.80)',   'Asia Lo');
+    }
+    if (sl.london) {
+      add(sl.london.high, 'rgba(156,39,176,0.80)', 'Lon Hi');
+      add(sl.london.low,  'rgba(156,39,176,0.80)', 'Lon Lo');
+    }
+  }
+
   // ── PDH / PDL ──────────────────────────────────────────────────────────────
 
   function clearPricelines() {
@@ -535,6 +643,27 @@
         clearIOFZones();
         if (visible) _drawIOFZones(lastFVGs, lastOBs);
         break;
+
+      case 'volumeProfile':
+        clearVPLines();
+        if (visible && lastVolumeProfile) _drawVolumeProfile(lastVolumeProfile);
+        break;
+
+      case 'openingRange':
+        clearORLines();
+        if (visible && lastOpeningRange?.formed) _drawOpeningRange(lastOpeningRange);
+        break;
+
+      case 'sessionLevels':
+        clearSessionLines();
+        if (visible && lastSessionLevels) _drawSessionLevels(lastSessionLevels);
+        break;
+
+      case 'correlationHeatmap': {
+        const panel = document.getElementById('corr-heatmap-section');
+        if (panel) panel.style.display = visible ? '' : 'none';
+        break;
+      }
     }
   }
 
@@ -583,6 +712,7 @@
                     :                                '#2196f3';
         const label = a.setup.type === 'zone_rejection'  ? 'ZR'
                     : a.setup.type === 'trendline_break' ? 'TL'
+                    : a.setup.type === 'or_breakout'     ? 'OR'
                     : 'PDH';
         // Snap to the nearest bar time so TradingView can render the marker correctly.
         const snappedTime = _snapToCandle(a.setup.time);

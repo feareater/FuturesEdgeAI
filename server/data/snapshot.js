@@ -14,7 +14,7 @@ const path = require('path');
 const DATA_SOURCE  = process.env.DATA_SOURCE ?? 'seed';
 const SEED_DIR     = path.join(__dirname, '..', '..', 'data', 'seed');
 
-const VALID_SYMBOLS    = ['MNQ', 'MGC'];
+const VALID_SYMBOLS    = ['MNQ', 'MGC', 'MES', 'MCL'];
 const VALID_TIMEFRAMES = ['1m', '2m', '3m', '5m', '15m', '30m'];
 
 // ---------------------------------------------------------------------------

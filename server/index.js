@@ -16,8 +16,16 @@ const { generateCommentary, generateSingle } = require('./ai/commentary');
 const { checkTFZoneStack }  = require('./analysis/confluence');
 const { saveAlertCache, loadAlertCache, saveCommentaryCache, loadCommentaryCache,
         saveTradeLog, loadTradeLog } = require('./storage/log');
-const { fetchAll }          = require('./data/seedFetch');
+const { fetchAll }              = require('./data/seedFetch');
+const autotrader                = require('./trading/autotrader');
+const simulator                 = require('./trading/simulator');
+const { computeRelativeStrength } = require('./analysis/relativeStrength');
+const { computeCorrelationMatrix } = require('./analysis/correlation');
+const { computePerformanceStats }  = require('./analysis/performanceStats');
+const { getCalendarEvents, getNextEvent, isNearEvent } = require('./data/calendar');
 const settings              = require('../config/settings.json');
+const fs                    = require('fs');
+const SETTINGS_PATH         = require('path').join(__dirname, '..', 'config', 'settings.json');
 
 const PORT        = process.env.PORT        || 3000;
 const DATA_SOURCE = process.env.DATA_SOURCE || 'seed';
@@ -128,6 +136,8 @@ app.get('/api/indicators', (req, res) => {
     const indicators = computeIndicators(candles, {
       swingLookback:    settings.swingLookback,
       impulseThreshold: settings.impulseThreshold,
+      symbol,
+      features:         settings.features || {},
     });
     const trendlines = detectTrendlines(candles, indicators.atrCurrent);
 
@@ -162,9 +172,9 @@ app.get('/api/trendlines', (req, res) => {
   }
 });
 
-// GET /api/settings — returns the risk section of settings.json for the frontend
+// GET /api/settings — returns the risk + features sections of settings.json for the frontend
 app.get('/api/settings', (_req, res) => {
-  res.json({ risk: settings.risk || {} });
+  res.json({ risk: settings.risk || {}, features: settings.features || {} });
 });
 
 // POST /api/settings — update in-memory risk params and re-scan.
@@ -206,17 +216,27 @@ app.post('/api/settings', async (req, res) => {
   res.json({ status: 'ok', risk: settings.risk });
 });
 
-// GET /api/alerts?limit=20&minConfidence=0&symbol=MNQ&timeframe=5m
+// GET /api/alerts?limit=20&minConfidence=0&symbol=MNQ&timeframe=5m&start=ISO&end=ISO
 // symbol + timeframe filters applied first, then confidence, then trade filter.
 app.get('/api/alerts', (req, res) => {
   const limit     = Math.min(parseInt(req.query.limit) || 50, MAX_ALERTS);
   const minConf   = parseInt(req.query.minConfidence) || 0;
-  const { symbol, timeframe } = req.query;
+  const { symbol, timeframe, start, end } = req.query;
 
   let qualifying = alertCache;
   if (symbol)    qualifying = qualifying.filter(a => a.symbol    === symbol);
   if (timeframe) qualifying = qualifying.filter(a => a.timeframe === timeframe);
   if (minConf > 0) qualifying = qualifying.filter(a => a.setup.confidence >= minConf);
+
+  // Date range filter for replay/backtest usage
+  if (start) {
+    const startTs = new Date(start).getTime() / 1000;
+    qualifying = qualifying.filter(a => a.setup.time >= startTs);
+  }
+  if (end) {
+    const endTs = new Date(end).getTime() / 1000;
+    qualifying = qualifying.filter(a => a.setup.time <= endTs);
+  }
 
   const filtered = _applyTradeFilter(qualifying);
   // Sort: unsuppressed first, then by newest candle time
@@ -341,6 +361,133 @@ app.get('/api/scan', async (_req, res) => {
   }
 });
 
+// POST /api/features — hot-toggle individual feature flags (no restart needed)
+// body: { "openingRange": false } or any subset of features
+app.post('/api/features', (req, res) => {
+  if (!settings.features) settings.features = {};
+  const updates = req.body;
+  const changed = [];
+  for (const [key, val] of Object.entries(updates)) {
+    if (typeof val === 'boolean') {
+      settings.features[key] = val;
+      changed.push(key);
+    }
+  }
+  if (changed.length) {
+    // Persist to disk
+    try {
+      const current = JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf8'));
+      current.features = settings.features;
+      fs.writeFileSync(SETTINGS_PATH, JSON.stringify(current, null, 2), 'utf8');
+      console.log(`[features] Updated: ${changed.join(', ')}`);
+    } catch (e) {
+      console.error('[features] Failed to persist:', e.message);
+    }
+  }
+  res.json({ features: settings.features });
+});
+
+// GET /api/calendar?symbol=MNQ — upcoming high-impact economic events
+app.get('/api/calendar', async (req, res) => {
+  try {
+    const { symbol } = req.query;
+    const events = await getCalendarEvents(symbol || null);
+    res.json({ events });
+  } catch (err) {
+    console.error('[api] /calendar error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/correlation — 4×4 rolling correlation matrix for all symbols
+app.get('/api/correlation', (req, res) => {
+  try {
+    const allCandles = {};
+    for (const sym of SCAN_SYMBOLS) {
+      try { allCandles[sym] = getCandles(sym, '5m'); } catch { allCandles[sym] = []; }
+    }
+    const result = computeCorrelationMatrix(allCandles);
+    res.json(result);
+  } catch (err) {
+    console.error('[api] /correlation error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/relativestrength?base=MNQ&compare=MES
+app.get('/api/relativestrength', (req, res) => {
+  try {
+    const { base = 'MNQ', compare = 'MES' } = req.query;
+    const baseCandles    = getCandles(base, '5m');
+    const compareCandles = getCandles(compare, '5m');
+    const result = computeRelativeStrength(baseCandles, compareCandles);
+    res.json({ base, compare, ...result });
+  } catch (err) {
+    console.error('[api] /relativestrength error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/performance — win-rate / profit factor stats from alert cache
+app.get('/api/performance', (_req, res) => {
+  try {
+    const stats = computePerformanceStats(alertCache);
+    res.json(stats);
+  } catch (err) {
+    console.error('[api] /performance error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// AutoTrader routes
+// ---------------------------------------------------------------------------
+
+// GET /api/autotrader/status — kill switch state + live position snapshot
+app.get('/api/autotrader/status', async (_req, res) => {
+  try {
+    const status = await autotrader.getStatus();
+    res.json(status);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/autotrader/toggle — enable or disable auto-order execution
+// body: { enabled: true | false }
+app.post('/api/autotrader/toggle', (req, res) => {
+  const { enabled } = req.body;
+  if (enabled === true || enabled === false) {
+    enabled ? autotrader.enable() : autotrader.disable();
+  } else {
+    // No body → flip current state
+    autotrader.isEnabled() ? autotrader.disable() : autotrader.enable();
+  }
+  const nowEnabled = autotrader.isEnabled();
+  console.log(`[autotrader] Kill switch → ${nowEnabled ? 'LIVE' : 'PAUSED'}`);
+  res.json({ enabled: nowEnabled, status: nowEnabled ? 'live' : 'paused' });
+});
+
+// POST /api/autotrader/settings — update the execution confidence floor
+// body: { minConfidence: 75 }
+app.post('/api/autotrader/settings', (req, res) => {
+  const { minConfidence } = req.body;
+  if (minConfidence != null) autotrader.setMinConfidence(minConfidence);
+  res.json({ minConfidence: autotrader.state.minConfidence });
+});
+
+// GET /api/simulator/positions — all virtual positions (open + closed), newest first
+app.get('/api/simulator/positions', (_req, res) => {
+  res.json({ positions: simulator.getAllPositions(), summary: simulator.getSummary() });
+});
+
+// POST /api/simulator/reset — clear all virtual positions (for testing)
+app.post('/api/simulator/reset', (_req, res) => {
+  simulator.reset();
+  console.log('[sim] Positions reset via API');
+  res.json({ status: 'ok', message: 'All simulator positions cleared' });
+});
+
 // ---------------------------------------------------------------------------
 // HTTP + WebSocket server
 // ---------------------------------------------------------------------------
@@ -409,7 +556,7 @@ function _applyTradeFilter(alerts) {
 // In seed mode it runs once at startup and is re-runnable via GET /api/scan.
 // ---------------------------------------------------------------------------
 
-const SCAN_SYMBOLS    = ['MNQ', 'MGC'];
+const SCAN_SYMBOLS    = ['MNQ', 'MGC', 'MES', 'MCL'];
 // 1m/2m/3m removed: with 15-min delayed data they are stale by the time they display.
 // 5m/15m/30m give actionable signals even accounting for the data lag.
 const SCAN_TIMEFRAMES = ['5m', '15m', '30m'];
@@ -421,11 +568,20 @@ async function runScan() {
   console.log('[scan] Starting…');
   let newCount = 0;
 
+  // Fetch calendar events once per scan (cached in calendar.js for 1h)
+  let calendarCache = {};
+  if (settings.features?.economicCalendar) {
+    for (const sym of SCAN_SYMBOLS) {
+      try { calendarCache[sym] = await getCalendarEvents(sym); } catch { calendarCache[sym] = []; }
+    }
+  }
+
   for (const symbol of SCAN_SYMBOLS) {
     // Pre-compute 5m and 15m regimes for the alignment flag
     const regime5m  = _regimeFor(symbol, '5m');
     const regime15m = _regimeFor(symbol, '15m');
     const alignment = computeAlignment(regime15m, regime5m);
+    const calendarEvents = calendarCache[symbol] || [];
 
     for (const tf of SCAN_TIMEFRAMES) {
       try {
@@ -433,11 +589,13 @@ async function runScan() {
         const ind        = computeIndicators(candles, {
           swingLookback:    settings.swingLookback,
           impulseThreshold: settings.impulseThreshold,
+          symbol,
+          features:         settings.features || {},
         });
         const regime     = { ...classifyRegime(ind), alignment };
         const trendlines = detectTrendlines(candles, ind.atrCurrent);
         const setups     = detectSetups(candles, ind, regime, {
-          rrRatio: settings.risk.rrRatio || 1.0, symbol, trendlines,
+          rrRatio: settings.risk.rrRatio || 1.0, symbol, trendlines, calendarEvents,
         });
 
         for (const setup of setups) {
@@ -461,6 +619,17 @@ async function runScan() {
           if (_cacheAlert(alert)) {
             broadcast({ type: 'setup', ...alert });
             newCount++;
+            // Auto-order trigger — non-blocking; passes saveTradeLog + tradeLog refs
+            autotrader.onNewAlert(alert, settings, saveTradeLog, tradeLog)
+              .then(result => {
+                if (result.placed) {
+                  console.log(`[autotrader] Order placed: orderId=${result.orderId} — ${alert.symbol} ${alert.setup.direction}`);
+                  broadcast({ type: 'order', ...result });
+                } else {
+                  console.log(`[autotrader] Skipped ${alert.symbol} ${alert.setup.type}: ${result.reason}`);
+                }
+              })
+              .catch(err => console.error('[autotrader] Error:', err.message));
           }
         }
       } catch (err) {
@@ -520,6 +689,8 @@ function _regimeFor(symbol, tf) {
     const ind     = computeIndicators(candles, {
       swingLookback:    settings.swingLookback,
       impulseThreshold: settings.impulseThreshold,
+      symbol,
+      features:         settings.features || {},
     });
     return classifyRegime(ind);
   } catch {
@@ -564,6 +735,38 @@ async function _autoRefresh({ fetchData = true } = {}) {
   }
   if (openKeys.size > 0) {
     console.log(`[refresh] Evicted ${openKeys.size} open-outcome alert(s) for re-evaluation`);
+  }
+
+  // Check simulator positions against the freshly loaded candles.
+  // Use 5m candles (finest available) for the best fill resolution.
+  for (const sym of SCAN_SYMBOLS) {
+    try {
+      const candles5m = getCandles(sym, '5m');
+      const filled    = simulator.checkFills(sym, candles5m);
+      for (const pos of filled) {
+        // Update the matching trade log entry with the close details
+        const idx = tradeLog.findIndex(t => t.simOrderId === pos.id);
+        if (idx >= 0) {
+          tradeLog[idx].actualExit = pos.closePrice;
+          tradeLog[idx].notes     += ` → ${pos.status} @ ${pos.closePrice}  P&L: ${pos.pnl >= 0 ? '+' : ''}$${pos.pnl}`;
+          saveTradeLog(tradeLog);
+        }
+        // Broadcast the fill event so the UI can react immediately
+        broadcast({
+          type:       'sim_fill',
+          orderId:    pos.id,
+          symbol:     pos.symbol,
+          direction:  pos.direction,
+          status:     pos.status,
+          closePrice: pos.closePrice,
+          pnl:        pos.pnl,
+          alertKey:   pos.alertKey,
+        });
+        console.log(`[sim] Broadcasted fill: ${pos.symbol} ${pos.status}  P&L $${pos.pnl}`);
+      }
+    } catch (err) {
+      console.error(`[sim] checkFills ${sym} error: ${err.message}`);
+    }
   }
 
   const newCount = await runScan();

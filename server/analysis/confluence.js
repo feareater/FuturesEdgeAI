@@ -50,9 +50,9 @@ const PROX_ATR_MULT      = 0.5; // zone proximity = 0.5 × higher-TF ATR
  * @returns {{ stackCount: number, bonus: number, tfs: string[] }}
  */
 function checkTFZoneStack(setup, symbol, tf, getCandles, computeIndicators, settings) {
-  // TF stack is a positive predictor for MNQ only.
-  // For MGC, HTF IOF alignment means the level is contested — negative predictor.
-  if (symbol !== 'MNQ') return { stackCount: 0, bonus: 0, tfs: [] };
+  // TF stack is a positive predictor for equity index micros (MNQ, MES).
+  // For commodities (MGC, MCL), HTF IOF alignment means contested level — negative predictor.
+  if (symbol !== 'MNQ' && symbol !== 'MES') return { stackCount: 0, bonus: 0, tfs: [] };
 
   const higherTfs = TF_HIGHER[tf] || [];
   if (higherTfs.length === 0) return { stackCount: 0, bonus: 0, tfs: [] };

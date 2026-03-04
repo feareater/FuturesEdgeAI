@@ -1,0 +1,243 @@
+/* Performance analytics page styles */
+
+body { overflow: auto; }
+
+#perf-main {
+  padding: 16px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.page-nav {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.page-nav a {
+  color: var(--text-dim);
+  text-decoration: none;
+  font-size: 13px;
+  padding: 3px 0;
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.page-nav a:hover { color: var(--text); }
+.page-nav a.active { color: var(--accent); border-color: var(--accent); }
+
+/* ── Summary cards ───────────────────────────────────────────────────────── */
+
+.stat-cards {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.stat-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 18px;
+  min-width: 120px;
+  flex: 1;
+}
+
+.stat-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.stat-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* ── Grid layout ─────────────────────────────────────────────────────────── */
+
+.perf-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.perf-panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+}
+
+.perf-panel-wide {
+  grid-column: 1 / -1;
+}
+
+.perf-panel-header {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ── Bar charts (CSS-only) ───────────────────────────────────────────────── */
+
+.bar-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.bar-label {
+  width: 90px;
+  text-align: right;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+}
+
+.bar-track {
+  flex: 1;
+  height: 14px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.4s ease;
+  background: var(--bull);
+}
+
+.bar-fill.bad    { background: var(--bear); }
+.bar-fill.neutral { background: #ff9800; }
+
+.bar-pct {
+  width: 36px;
+  text-align: right;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.bar-meta {
+  width: 36px;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+/* ── Time-of-Day heatmap ─────────────────────────────────────────────────── */
+
+.tod-heatmap {
+  display: flex;
+  gap: 3px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+
+.tod-cell {
+  width: 32px;
+  text-align: center;
+  font-size: 10px;
+  border-radius: 2px;
+  cursor: default;
+}
+
+.tod-bar {
+  border-radius: 2px 2px 0 0;
+  margin-bottom: 3px;
+  min-height: 4px;
+}
+
+.tod-label {
+  color: var(--text-dim);
+  font-size: 9px;
+}
+
+/* ── Alert table ─────────────────────────────────────────────────────────── */
+
+.alert-table-section {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+}
+
+.table-count {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-weight: 400;
+}
+
+.csv-btn {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  margin-top: 8px;
+}
+
+#alert-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+#alert-table th {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+#alert-table th:hover { color: var(--text); }
+
+#alert-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  color: var(--text);
+}
+
+#alert-table tr:hover td { background: rgba(255,255,255,0.03); }
+
+.outcome-won  { color: var(--bull); font-weight: 700; }
+.outcome-lost { color: var(--bear); font-weight: 700; }
+.outcome-open { color: var(--text-dim); }
+
+.dir-bull { color: var(--bull); }
+.dir-bear { color: var(--bear); }
+
+.no-data {
+  color: var(--text-dim);
+  padding: 24px;
+  text-align: center;
+}

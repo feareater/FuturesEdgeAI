@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FuturesEdge — Alert Replay</title>
+  <link rel="stylesheet" href="/css/dashboard.css" />
+  <link rel="stylesheet" href="/css/backtest.css" />
+</head>
+<body>
+  <div id="app">
+
+    <header id="topbar">
+      <div id="brand">FuturesEdge AI</div>
+      <nav class="page-nav">
+        <a href="/">Dashboard</a>
+        <a href="/commentary.html">AI Analysis</a>
+        <a href="/performance.html">Performance</a>
+        <a href="/backtest.html" class="active">Backtest</a>
+        <a href="/api/export" download>Export</a>
+      </nav>
+    </header>
+
+    <main id="bt-main">
+
+      <!-- Controls -->
+      <section class="bt-controls">
+        <div class="ctrl-group">
+          <label>From</label>
+          <input type="date" id="bt-start" />
+        </div>
+        <div class="ctrl-group">
+          <label>To</label>
+          <input type="date" id="bt-end" />
+        </div>
+        <div class="ctrl-group">
+          <label>Symbol</label>
+          <div class="btn-group">
+            <button class="sym-filter active" data-sym="ALL">All</button>
+            <button class="sym-filter" data-sym="MNQ">MNQ</button>
+            <button class="sym-filter" data-sym="MGC">MGC</button>
+            <button class="sym-filter" data-sym="MES">MES</button>
+            <button class="sym-filter" data-sym="MCL">MCL</button>
+          </div>
+        </div>
+        <div class="ctrl-group">
+          <label>Setup</label>
+          <div class="btn-group">
+            <button class="type-filter active" data-type="ALL">All</button>
+            <button class="type-filter" data-type="zone_rejection">Zone Rej</button>
+            <button class="type-filter" data-type="pdh_breakout">PDH</button>
+            <button class="type-filter" data-type="or_breakout">OR</button>
+            <button class="type-filter" data-type="trendline_break">TL</button>
+          </div>
+        </div>
+        <div class="ctrl-group">
+          <label>Min Conf</label>
+          <input type="number" id="bt-minconf" value="65" min="0" max="99" step="5" />
+          <span class="ctrl-unit">%</span>
+        </div>
+        <div class="ctrl-group">
+          <label>Contracts</label>
+          <input type="number" id="bt-contracts" value="1" min="1" max="20" />
+        </div>
+        <button id="bt-run" class="run-btn">Run</button>
+      </section>
+
+      <!-- Step-through -->
+      <section class="bt-stepthrough">
+        <div id="bt-summary" class="bt-summary">Run a backtest to see results.</div>
+        <div class="step-btns">
+          <button id="bt-prev" class="step-btn" disabled>&#8592; Prev</button>
+          <span id="bt-step-label" class="step-label">—</span>
+          <button id="bt-next" class="step-btn" disabled>Next &#8594;</button>
+          <button id="bt-to-dashboard" class="step-btn to-dash" title="View on dashboard chart" disabled>View on Chart</button>
+        </div>
+      </section>
+
+      <!-- Equity curve -->
+      <section id="equity-section" class="equity-section" style="display:none">
+        <div class="perf-panel-header">Cumulative P&amp;L</div>
+        <div id="equity-bars" class="equity-bars"></div>
+        <div id="equity-axis" class="equity-axis"></div>
+      </section>
+
+      <!-- Alert cards -->
+      <section id="bt-feed" class="bt-feed">
+        <div class="bt-placeholder">Configure filters above and click Run.</div>
+      </section>
+
+    </main>
+  </div>
+
+  <script src="/js/backtest.js"></script>
+</body>
+</html>

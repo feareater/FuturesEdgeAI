@@ -3,7 +3,10 @@
 // Pure function: candles in → indicator data out. No I/O.
 
 const { EMA, ATR } = require('technicalindicators');
-const { detectFVGs, detectOrderBlocks } = require('./iof');
+const { detectFVGs, detectOrderBlocks }    = require('./iof');
+const { computeVolumeProfile }             = require('./volumeProfile');
+const { computeOpeningRange }              = require('./openingRange');
+const { computeSessionLevels }             = require('./sessionLevels');
 
 // EST = UTC-5. Simplified — not DST-aware (acceptable for Phase 2 seed data).
 const ET_OFFSET_MS = 5 * 60 * 60 * 1000;
@@ -21,7 +24,7 @@ const ET_OFFSET_MS = 5 * 60 * 60 * 1000;
  * @returns {Object}  Indicator payload — see shape below
  */
 function computeIndicators(candles, opts = {}) {
-  const { swingLookback = 10, impulseThreshold = 1.5 } = opts;
+  const { swingLookback = 10, impulseThreshold = 1.5, symbol = null, features = {} } = opts;
 
   if (!candles || candles.length === 0) {
     return {
@@ -44,16 +47,28 @@ function computeIndicators(candles, opts = {}) {
   const fvgs        = detectFVGs(candles);
   const orderBlocks = detectOrderBlocks(candles, atrCurrent, impulseThreshold);
 
+  // Feature-gated indicators — only computed when the feature is enabled
+  const volumeProfile  = features.volumeProfile  && symbol ? computeVolumeProfile(candles, symbol)  : null;
+  const openingRange   = features.openingRange               ? computeOpeningRange(candles)            : null;
+  const sessionLevels  = features.sessionLevels              ? computeSessionLevels(candles)           : null;
+
   console.log(
     `[indicators] ema9:${ema9.length} ema21:${ema21.length} ema50:${ema50.length}` +
     ` vwap:${vwap.length} atr:${atrCurrent?.toFixed(2)}` +
     ` pdh:${pdh} pdl:${pdl}` +
     ` swingH:${swingHighs.length} swingL:${swingLows.length}` +
     ` fvgs:${fvgs.length}(open:${fvgs.filter(f=>f.status==='open').length})` +
-    ` obs:${orderBlocks.length}(untested:${orderBlocks.filter(o=>o.status==='untested').length})`
+    ` obs:${orderBlocks.length}(untested:${orderBlocks.filter(o=>o.status==='untested').length})` +
+    (volumeProfile ? ` poc:${volumeProfile.poc}` : '') +
+    (openingRange  ? ` or:${openingRange.formed ? 'formed' : 'forming'}` : '') +
+    (sessionLevels ? ` asian:${sessionLevels.asian?.high?.toFixed(2)}` : '')
   );
 
-  return { ema9, ema21, ema50, vwap, atrCurrent, pdh, pdl, swingHighs, swingLows, fvgs, orderBlocks };
+  return {
+    ema9, ema21, ema50, vwap, atrCurrent, pdh, pdl,
+    swingHighs, swingLows, fvgs, orderBlocks,
+    volumeProfile, openingRange, sessionLevels,
+  };
 }
 
 module.exports = { computeIndicators };

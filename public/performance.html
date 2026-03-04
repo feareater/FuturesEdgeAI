@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FuturesEdge — Performance</title>
+  <link rel="stylesheet" href="/css/dashboard.css" />
+  <link rel="stylesheet" href="/css/performance.css" />
+</head>
+<body>
+  <div id="app">
+
+    <header id="topbar">
+      <div id="brand">FuturesEdge AI</div>
+      <nav class="page-nav">
+        <a href="/">Dashboard</a>
+        <a href="/commentary.html">AI Analysis</a>
+        <a href="/performance.html" class="active">Performance</a>
+        <a href="/backtest.html">Backtest</a>
+        <a href="/api/export" download>Export</a>
+      </nav>
+    </header>
+
+    <main id="perf-main">
+
+      <!-- Summary cards -->
+      <section class="stat-cards" id="stat-cards">
+        <div class="stat-card">
+          <div class="stat-label">Win Rate</div>
+          <div class="stat-value" id="s-wr">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Profit Factor</div>
+          <div class="stat-value" id="s-pf">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Avg R</div>
+          <div class="stat-value" id="s-avgr">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Total Trades</div>
+          <div class="stat-value" id="s-total">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Won / Lost / Open</div>
+          <div class="stat-value" id="s-wlo">— / — / —</div>
+        </div>
+      </section>
+
+      <div class="perf-grid">
+
+        <!-- By Symbol -->
+        <div class="perf-panel">
+          <div class="perf-panel-header">Win Rate by Symbol</div>
+          <div id="chart-by-symbol" class="bar-chart"></div>
+        </div>
+
+        <!-- By Setup Type -->
+        <div class="perf-panel">
+          <div class="perf-panel-header">Win Rate by Setup Type</div>
+          <div id="chart-by-type" class="bar-chart"></div>
+        </div>
+
+        <!-- By Timeframe -->
+        <div class="perf-panel">
+          <div class="perf-panel-header">Win Rate by Timeframe</div>
+          <div id="chart-by-tf" class="bar-chart"></div>
+        </div>
+
+        <!-- By Direction -->
+        <div class="perf-panel">
+          <div class="perf-panel-header">Win Rate by Direction</div>
+          <div id="chart-by-dir" class="bar-chart"></div>
+        </div>
+
+        <!-- Time-of-Day heat map -->
+        <div class="perf-panel perf-panel-wide">
+          <div class="perf-panel-header">Win Rate by Hour (ET)</div>
+          <div id="tod-heatmap" class="tod-heatmap"></div>
+        </div>
+
+      </div>
+
+      <!-- Alert table -->
+      <section class="alert-table-section">
+        <div class="perf-panel-header">
+          All Resolved Alerts
+          <span id="table-count" class="table-count"></span>
+          <a href="/api/export" class="csv-btn" download>⬇ Export JSON</a>
+        </div>
+        <div class="table-wrap">
+          <table id="alert-table">
+            <thead>
+              <tr>
+                <th>Symbol</th><th>TF</th><th>Type</th>
+                <th>Dir</th><th>Conf</th><th>Outcome</th>
+                <th>Time (ET)</th>
+              </tr>
+            </thead>
+            <tbody id="alert-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <script src="/js/performance.js"></script>
+</body>
+</html>

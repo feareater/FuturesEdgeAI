@@ -29,6 +29,8 @@
           <div class="btn-group">
             <button class="sym-btn active" data-symbol="MNQ">MNQ</button>
             <button class="sym-btn"        data-symbol="MGC">MGC</button>
+            <button class="sym-btn"        data-symbol="MES">MES</button>
+            <button class="sym-btn"        data-symbol="MCL">MCL</button>
           </div>
         </div>
 
@@ -57,10 +59,20 @@
         <span id="price-symbol">MNQ · 5m</span>
       </div>
 
-      <a href="/docs.html" id="docs-nav-link" title="Setup Guide">Setup Guide</a>
-      <a href="/commentary.html" id="ai-nav-link" title="AI Analysis">AI Analysis</a>
-      <a href="/api/export" id="export-nav-link" title="Export all alerts &amp; trades as JSON" download>⬇ Export</a>
+      <!-- Relative Strength widget (MNQ vs MES, only shown for equity symbols) -->
+      <div id="rs-widget" class="rs-widget" style="display:none">
+        <span class="rs-label">RS</span>
+        <span id="rs-ratio" class="rs-ratio">—</span>
+        <span id="rs-signal" class="rs-signal">—</span>
+      </div>
+
+      <a href="/docs.html" id="docs-nav-link" title="Setup Guide">Guide</a>
+      <a href="/commentary.html" id="ai-nav-link" title="AI Analysis">AI</a>
+      <a href="/performance.html" id="perf-nav-link" title="Performance Analytics">Stats</a>
+      <a href="/backtest.html" id="bt-nav-link" title="Alert Replay">Replay</a>
+      <a href="/api/export" id="export-nav-link" title="Export all alerts &amp; trades as JSON" download>Export</a>
       <div id="topbar-status">
+        <span id="calendar-badge" class="calendar-badge" style="display:none"></span>
         <span id="session-badge" class="session-badge">—</span>
         <span id="ws-status" class="ws-status ws-connecting" title="WebSocket status"></span>
       </div>
@@ -126,13 +138,43 @@
               <span class="layer-name">IOF Zones</span>
             </label>
 
+            <label class="layer-row">
+              <input type="checkbox" data-layer="volumeProfile" checked />
+              <span class="swatch" style="background:rgba(255,255,255,0.7);border-style:dashed"></span>
+              <span class="layer-name">Volume Profile</span>
+            </label>
+
+            <label class="layer-row">
+              <input type="checkbox" data-layer="openingRange" checked />
+              <span class="swatch" style="background:#ff9800"></span>
+              <span class="layer-name">Opening Range</span>
+            </label>
+
+            <label class="layer-row">
+              <input type="checkbox" data-layer="sessionLevels" checked />
+              <span class="swatch" style="background:rgba(255,193,7,0.8);border-style:dashed"></span>
+              <span class="layer-name">Session Levels</span>
+            </label>
+
+            <label class="layer-row">
+              <input type="checkbox" data-layer="correlationHeatmap" checked />
+              <span class="swatch corr-swatch"></span>
+              <span class="layer-name">Correlation</span>
+            </label>
+
           </div>
+
+          <!-- Feature toggles (server-rendered by layers.js) -->
+          <div class="panel-header features-header">Features</div>
+          <div id="feature-list"></div>
 
           <!-- Mobile-only nav links (visible in Layers tab) -->
           <div class="mobile-links-section">
-            <a href="/docs.html" class="mobile-link-btn">📖 Setup Guide</a>
-            <a href="/commentary.html" class="mobile-link-btn">✦ AI Analysis</a>
-            <a href="/api/export" class="mobile-link-btn" download>⬇ Export Data</a>
+            <a href="/docs.html" class="mobile-link-btn">Setup Guide</a>
+            <a href="/commentary.html" class="mobile-link-btn">AI Analysis</a>
+            <a href="/performance.html" class="mobile-link-btn">Performance</a>
+            <a href="/backtest.html" class="mobile-link-btn">Backtest</a>
+            <a href="/api/export" class="mobile-link-btn" download>Export Data</a>
           </div>
 
         </div>
@@ -152,6 +194,24 @@
             <span id="wr-lost" class="wr-lost">L 0</span>
             <span id="wr-open" class="wr-open">O 0</span>
             <span id="wr-pct"  class="wr-pct">— WR</span>
+          </div>
+
+          <!-- ── AutoTrader kill switch ─────────────────────────────────── -->
+          <div id="autotrader-panel">
+            <div class="at-row">
+              <span class="at-label">AutoTrader</span>
+              <span id="at-status-dot" class="at-dot at-paused"></span>
+              <button id="at-toggle-btn" class="at-toggle-btn at-paused">PAUSED</button>
+              <span class="at-platform">Paper Sim</span>
+            </div>
+            <div id="at-position-row" class="at-position-row">—</div>
+            <div id="at-summary-row" class="at-summary-row"></div>
+            <div class="at-row at-conf-row">
+              <label class="at-conf-label" for="at-min-conf">Min Conf</label>
+              <input id="at-min-conf" type="number" class="filter-input narrow" value="75" min="65" max="99" step="5" />
+              <span class="filter-unit">%</span>
+              <span id="at-last-order" class="at-last-order"></span>
+            </div>
           </div>
 
           <!-- Filter controls -->
@@ -194,6 +254,14 @@
 
           <div id="alert-feed">
             <p class="placeholder">Scanning…</p>
+          </div>
+        </div>
+
+        <!-- ── Correlation Heatmap ─────────────────────────────────────── -->
+        <div class="panel-section" id="corr-heatmap-section">
+          <div class="panel-header">Correlation <span id="corr-updated" class="corr-updated"></span></div>
+          <div id="corr-grid" class="corr-grid">
+            <div class="corr-loading">—</div>
           </div>
         </div>
 

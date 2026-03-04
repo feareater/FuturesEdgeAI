@@ -141,6 +141,7 @@
     .setup-badge.s2 { background: rgba(38,166,154,0.15); color: var(--bull); }
     .setup-badge.s3 { background: rgba(255,179,0,0.15);  color: var(--amber); }
     .setup-badge.sq { background: rgba(171,71,188,0.15); color: var(--purple); }
+    .setup-badge.s4  { background: rgba(255,138,0,0.15);  color: #ff8a00; }
 
     /* ── Two-col layout ──────────────────────────────────────────────── */
     .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin: 16px 0; }
@@ -195,10 +196,11 @@
     <a href="#key-concepts">Key Concepts</a>
     <a href="#delay">The 15-Min Delay</a>
 
-    <div class="nav-section">The Three Alert Types</div>
+    <div class="nav-section">The Four Alert Types</div>
     <a href="#zone">1 · Zone Rejection</a>
     <a href="#pdh">2 · PDH / PDL Breakout</a>
     <a href="#trendline">3 · Trendline Break</a>
+    <a href="#or-breakout">4 · OR Breakout</a>
     <a href="#bos">BOS / CHoCH (Qualifiers)</a>
 
     <div class="nav-section">Confidence Score</div>
@@ -207,6 +209,14 @@
     <div class="nav-section">Using the Dashboard</div>
     <a href="#alerts">Reading the Alerts</a>
     <a href="#risk">Risk Management</a>
+
+    <div class="nav-section">Chart Layers</div>
+    <a href="#layers">All Layers Explained</a>
+
+    <div class="nav-section">Features &amp; Tools</div>
+    <a href="#features">Feature Toggles</a>
+    <a href="#perf-page">Performance Page</a>
+    <a href="#bt-page">Backtest &amp; Replay</a>
   </nav>
 
   <!-- Main content -->
@@ -222,7 +232,7 @@
       <div class="cards">
         <div class="card">
           <h4>What FuturesEdge AI does</h4>
-          <p>Scans MNQ and MGC futures on the 5m, 15m, and 30m timeframes, detects
+          <p>Scans MNQ, MGC, MES, and MCL futures on the 5m, 15m, and 30m timeframes, detects
           high-probability setups, and scores their quality 0–100%.</p>
         </div>
         <div class="card amber">
@@ -231,8 +241,8 @@
           better decisions — the final call is always yours.</p>
         </div>
         <div class="card bull">
-          <h4>Three alert types</h4>
-          <p>Zone Rejection, PDH/PDL Breakout, and Trendline Break. All are explained
+          <h4>Four alert types</h4>
+          <p>Zone Rejection, PDH/PDL Breakout, Trendline Break, and Opening Range Breakout. All are explained
           below with diagrams and entry criteria.</p>
         </div>
         <div class="card">
@@ -602,6 +612,19 @@
           1:1 more reliably than 2:1. Taking profit sooner on MGC prevents giveback
           (backtest: PF 4.02).</p>
         </div>
+        <div class="card bull">
+          <h4>MES — 2:1 R:R</h4>
+          <p>Micro E-mini S&amp;P 500 closely tracks MNQ but with lower volatility per point.
+          PDH breakouts on MES behave similarly to MNQ — institutional acceptance of new
+          range tends to run. Use for lower-risk exposure to S&amp;P breakout setups.</p>
+        </div>
+        <div class="card">
+          <h4>MCL — 1:1 R:R</h4>
+          <p>Micro Crude Oil is driven by supply/demand headlines and EIA reports. PDH
+          breakouts on MCL are momentum-based but can reverse sharply on intraday news.
+          1:1 R:R reflects the tighter range and headline risk. Avoid MCL PDH setups
+          within 30 minutes of an EIA release.</p>
+        </div>
       </div>
 
       <div class="callout warning">
@@ -720,6 +743,71 @@
       </div>
     </section>
 
+    <!-- ── Setup 4: OR Breakout ──────────────────────────────────────────── -->
+    <section id="or-breakout">
+      <span class="setup-badge s4">Alert Type 4</span>
+      <h2>Opening Range Breakout</h2>
+      <p><strong>Plain language:</strong> The Opening Range (OR) is the high and low established
+        in the first 30 minutes of the Regular Trading Hours session (9:30–10:00 AM ET). This
+        range captures the initial tug-of-war between buyers and sellers at the open. When price
+        closes decisively above the OR high or below the OR low after 10:00 AM ET, it signals
+        that one side has taken clear control — and momentum tends to continue for at least the
+        width of the OR range beyond the breakout level.</p>
+      <p>OR breakouts are among the most widely-watched intraday setups in equity futures.
+        Institutional order flow concentrates in the first hour of RTH, making OR levels
+        self-fulfilling reference points. Algorithms queue orders above/below these boundaries;
+        a confirmed close through one releases that accumulated momentum.</p>
+
+      <h3>Rules</h3>
+      <ul class="checklist green">
+        <li>OR must be fully formed — only fires <strong>after 10:00 AM ET</strong> (14:00 UTC)</li>
+        <li>Only within RTH — alerts suppressed after 3:30 PM ET (19:30 UTC) to avoid low-liquidity late-session noise</li>
+        <li>Price must <strong>CLOSE</strong> above OR high (bullish) or below OR low (bearish) — a wick alone does not qualify</li>
+        <li>First confirmed close only per session — repeated breaks of the same level after the first are ignored</li>
+        <li>Available on MNQ and MES (equity index instruments) — MCL and MGC do not use RTH opening range logic</li>
+      </ul>
+
+      <div class="two-col">
+        <div>
+          <h3>Bullish OR Breakout</h3>
+          <ul class="checklist green">
+            <li>Entry: at the OR high level (the broken boundary)</li>
+            <li>Stop-loss: OR low (full OR range as stop distance)</li>
+            <li>Take profit: Entry + (OR range × 2) — 2:1 R:R</li>
+            <li>Best when regime is bullish and 5m/15m are aligned upward</li>
+          </ul>
+        </div>
+        <div>
+          <h3>Bearish OR Breakout</h3>
+          <ul class="checklist red">
+            <li>Entry: at the OR low level (the broken boundary)</li>
+            <li>Stop-loss: OR high (full OR range as stop distance)</li>
+            <li>Take profit: Entry − (OR range × 2) — 2:1 R:R</li>
+            <li>Caution: bearish OR breaks after 2 PM ET often fail — the day's trend frequently reasserts</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout warning">
+        <p><strong>Wide OR = wider stop:</strong> On high-volatility days (FOMC, NFP, CPI),
+        the Opening Range can be 3–5× its average width. The alert's dollar risk display
+        accounts for this — if it exceeds your max-risk budget, reduce contract size or skip
+        the setup. The R:R target remains 2:1 regardless of OR width.</p>
+        <p><strong>Calendar awareness:</strong> If a high-impact economic event fires within
+        15 minutes of the OR breakout trigger, the alert's confidence is reduced by 20 points
+        and flagged with a <strong>⚠ Near Event</strong> badge. Do not enter OR breakouts
+        into an active event — wait for the move to settle first.</p>
+      </div>
+
+      <div class="callout success">
+        <p><strong>Highest-probability version:</strong> A bullish OR breakout on MNQ where
+        (1) the regime is bullish on both 5m and 15m, (2) the break magnitude is strong
+        (close well above OR high, not a tick-above), (3) an IOF zone sits just below the
+        OR high (providing support after the break), and (4) no high-impact event within
+        15 minutes. This combination earns the full confidence stack.</p>
+      </div>
+    </section>
+
     <!-- ── BOS / CHoCH ───────────────────────────────────────────────────── -->
     <section id="bos">
       <span class="setup-badge sq">Qualifier Signal</span>
@@ -809,6 +897,21 @@
           <tr><td>Regime aligned <span class="tag-inline">+R</span></td><td class="pts">+15</td><td>Break direction matches regime direction.</td></tr>
           <tr><td>TF alignment <span class="tag-inline">+A</span></td><td class="pts">+10</td><td>5m and 15m regimes agree.</td></tr>
           <tr><td>IOF confluence <span class="tag-inline">+IOF</span></td><td class="pts">+10 to +20</td><td>FVG or OB near the breakout level.</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Score components — Opening Range Breakout</h3>
+      <table class="score-table">
+        <thead>
+          <tr><th>Factor</th><th>Points</th><th>What it means</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Base score</td><td class="pts">35</td><td>OR breakouts start lower — the setup is very specific (RTH only, equity only, gated by OR formation time)</td></tr>
+          <tr><td>Break magnitude <span class="tag-inline">+Br</span></td><td class="pts">+1 to +20</td><td>How far beyond the OR boundary the close landed relative to ATR. A decisive push earns up to +20; a single-tick close above earns only +1. Rewards strong momentum, not marginal crosses.</td></tr>
+          <tr><td>Regime aligned <span class="tag-inline">+R</span></td><td class="pts">+15</td><td>Breakout direction matches current regime direction (bullish OR break in bullish regime).</td></tr>
+          <tr><td>TF alignment <span class="tag-inline">+A</span></td><td class="pts">+10</td><td>5m and 15m regimes agree on direction.</td></tr>
+          <tr><td>IOF confluence <span class="tag-inline">+IOF</span></td><td class="pts">+10 to +20</td><td>An open FVG or active Order Block near the OR boundary — confirms institutional interest at the breakout level.</td></tr>
+          <tr><td>Calendar penalty <span class="tag-inline">−Evt</span></td><td class="pts">−20</td><td>Applied (not a bonus) if a high-impact economic event fires within 15 minutes of the trigger. Flags <code>nearEvent: true</code> on the card. Floor is 0.</td></tr>
         </tbody>
       </table>
 
@@ -932,8 +1035,9 @@
         <span style="color:#26a69a;font-weight:700">● Teal</span> = won,
         <span style="color:#ef5350;font-weight:700">● Red</span> = lost,
         <span style="color:#ffb300;font-weight:700">● Gold</span> = taken by you.
-        Labels are <code>ZR</code> (zone rejection), <code>PDH</code> (breakout),
-        <code>TL</code> (trendline break). Clicking an arrow scrolls the feed to that card.</p>
+        Labels are <code>ZR</code> (zone rejection), <code>PDH</code> (PDH/PDL breakout),
+        <code>TL</code> (trendline break), <code>OR</code> (opening range breakout).
+        Clicking an arrow scrolls the feed to that card.</p>
     </section>
 
     <!-- ── Risk Management ───────────────────────────────────────────────── -->
@@ -998,6 +1102,279 @@
           plain-language assessment: what the setup quality is, what would confirm it,
           what level invalidates it, and what the current market context suggests. This
           is especially useful when you're unsure about acting on a delayed alert.</p>
+      </div>
+
+    </section>
+
+    <!-- ── Chart Layers ──────────────────────────────────────────────────── -->
+    <section id="layers">
+      <h2>Chart Layers</h2>
+      <p>All overlays can be shown or hidden individually using the checkboxes in the left
+        panel. Preferences are saved in browser storage and restored automatically on reload.
+        Layers are grouped by function below.</p>
+
+      <h3>Trend Indicators</h3>
+      <div class="cards">
+        <div class="card">
+          <h4>EMA 9 <code>ema9</code></h4>
+          <p>The 9-period Exponential Moving Average — the fastest of the three. Tracks
+          short-term momentum tick by tick. Price above EMA 9 is micro-bullish; price below
+          is micro-bearish. Use it to gauge immediate trend direction within a candle sequence
+          and to spot when short-term momentum is accelerating or fading.</p>
+        </div>
+        <div class="card">
+          <h4>EMA 21 <code>ema21</code></h4>
+          <p>The 21-period EMA. Medium-term trend direction. The 9/21 EMA pair is the primary
+          trend lens used by most professional short-term traders — when EMA 9 crosses above
+          EMA 21, it confirms a momentum shift. Zone rejections that align with the EMA 9/21
+          orientation are higher quality than those trading against it.</p>
+        </div>
+        <div class="card">
+          <h4>EMA 50 <code>ema50</code></h4>
+          <p>The 50-period EMA. Longer-term directional bias. Acts as dynamic support or
+          resistance on the 15m and 30m timeframes. Price well above EMA 50 = confirmed
+          uptrend context for the session. Useful as a macro bias filter before trading
+          individual setups — e.g., only taking long zone rejections when price is above EMA 50.</p>
+        </div>
+        <div class="card amber">
+          <h4>VWAP <code>vwap</code></h4>
+          <p>Volume-Weighted Average Price — the most-watched intraday level by institutional
+          traders. Calculated from the session open (price × volume). Algorithms and
+          institutional desks treat VWAP as a fair-price benchmark: buying below VWAP is
+          buying at value; selling above is selling at premium. A zone rejection that
+          coincides with a VWAP reclaim or rejection carries extra conviction.</p>
+        </div>
+      </div>
+
+      <h3>Structure &amp; Key Levels</h3>
+      <div class="cards">
+        <div class="card">
+          <h4>Prior Day High / Low <code>priorDayHighLow</code></h4>
+          <p>Horizontal lines at yesterday's RTH high and low. These are the reference levels
+          for PDH/PDL Breakout alerts. When price closes above the PDH it signals range
+          expansion; breaking PDL signals distribution or breakdown. Always worth keeping
+          visible — they're critical context for any intraday directional trade.</p>
+        </div>
+        <div class="card">
+          <h4>Swing High / Low <code>swingHighLow</code></h4>
+          <p>Marked pivot points (local peaks and troughs) detected with a 10-candle lookback.
+          These are the building blocks of market structure: BOS fires when a prior swing high
+          is broken bullishly; CHoCH fires when a swing is taken out against the trend. Useful
+          for manually reading structure and anticipating where breaks of structure may occur.</p>
+        </div>
+        <div class="card">
+          <h4>Auto Trendlines <code>autoTrendlines</code></h4>
+          <p>System-detected diagonal support and resistance lines anchored at swing extremes,
+          requiring ≥3 touches to qualify. The touch count is tracked — more touches means a
+          more significant line, and therefore a more significant break. Lines are refreshed
+          each scan cycle. Trendline Break alerts fire when price closes through one of these.</p>
+        </div>
+        <div class="card">
+          <h4>Manual Trendlines <code>manualTrendlines</code></h4>
+          <p>Trendlines you draw directly on the chart by clicking two points. Stored in
+          browser memory and persist across page reloads. Use them to mark your own key levels —
+          diagonal channels, wedges, or higher-timeframe structures you're monitoring.
+          Manual lines are visible only, they do <strong>not</strong> trigger alerts.</p>
+        </div>
+      </div>
+
+      <h3>Order Flow (IOF) Layers</h3>
+      <div class="cards">
+        <div class="card bull">
+          <h4>Order Blocks — Untested <code>orderBlocksUntested</code></h4>
+          <p>The last opposing candle before a strong impulsive move — e.g. the last bearish
+          candle before a large rally. These represent levels where institutional orders are
+          believed to be resting. An <strong>untested</strong> OB has never been revisited
+          since formation — first touch is typically the highest-probability reaction.
+          Shown as semi-transparent green (demand OB) or red (supply OB) rectangles.</p>
+        </div>
+        <div class="card">
+          <h4>Order Blocks — Tested <code>orderBlocksTested</code></h4>
+          <p>An OB that price has returned to and traded through at least once. Tested OBs
+          carry less weight — some of the resting institutional orders have already been filled.
+          Still useful as secondary support/resistance levels, but confidence in a strong
+          rejection is lower than at an untested OB. Shown in a dimmer shade.</p>
+        </div>
+        <div class="card amber">
+          <h4>FVG — Open <code>fvgOpen</code></h4>
+          <p>A <strong>Fair Value Gap</strong> is a 3-candle imbalance where price moved so
+          fast that a visible gap remains between the first candle's extreme and the third
+          candle's extreme. An <strong>open</strong> FVG has not yet been revisited by price.
+          They act as magnets (price tends to fill them) and as reaction zones. An open FVG
+          overlapping a zone rejection earns the +IOF confidence bonus.</p>
+        </div>
+        <div class="card">
+          <h4>FVG — Filled <code>fvgFilled</code></h4>
+          <p>A previously open FVG where price has returned and traded into the gap, resolving
+          the imbalance. Filled FVGs are less significant as magnets but can still act as
+          minor support/resistance. Toggle off to reduce visual clutter if you prefer to only
+          see unfilled gaps. Shown in a dimmer style to separate from open gaps.</p>
+        </div>
+        <div class="card">
+          <h4>Supply / Demand Zones <code>supplyDemandZones</code></h4>
+          <p>Composite shaded areas representing high-probability institutional zones —
+          combines OB and FVG identification into larger visible areas where price has
+          historically reversed. Zones are graded by freshness and proximity. Zone Rejection
+          alerts fire when price enters and rejects from one of these areas.</p>
+        </div>
+        <div class="card purple">
+          <h4>IOF Confluence Zones <code>iofConfluenceZones</code></h4>
+          <p>Zones where two or more institutional order flow signals overlap — e.g. an OB
+          inside an FVG, or an OB coinciding with a VWAP level. These are the
+          highest-quality areas on the chart. The +IOF confidence bonus (+10 to +20) is
+          calculated from IOF signals that overlap the zone at rejection time. "IOF" stands
+          for Institutional Order Flow.</p>
+        </div>
+      </div>
+
+      <h3>Session &amp; Volume Layers</h3>
+      <div class="cards">
+        <div class="card">
+          <h4>Volume Profile <code>volumeProfile</code></h4>
+          <p>Displays volume distribution across price levels for the current and prior RTH
+          session. Three key lines: <strong>POC</strong> (Point of Control — white dashed,
+          price with the highest volume traded), <strong>VAH</strong> (Value Area High —
+          green dashed, upper bound of the 70% volume zone), <strong>VAL</strong> (Value Area
+          Low — red dashed, lower bound), and a prior session POC (<strong>pPOC</strong> —
+          dim dotted). Price tends to gravitate toward the POC and react at VAH/VAL as
+          natural support and resistance.</p>
+        </div>
+        <div class="card amber">
+          <h4>Opening Range <code>openingRange</code></h4>
+          <p>Horizontal lines at the high and low of the first 30 minutes of RTH
+          (9:30–10:00 AM ET). Shown in orange: <strong>OR Hi</strong> (solid upper boundary),
+          <strong>OR Lo</strong> (solid lower boundary), <strong>OR Mid</strong> (dashed
+          midpoint). These levels act as intraday reference points throughout the session —
+          the OR mid is often a decision point for continuation vs. reversal. OR Breakout
+          alerts fire when price closes beyond these boundaries after 10:00 AM ET.</p>
+        </div>
+        <div class="card">
+          <h4>Session Levels <code>sessionLevels</code></h4>
+          <p>High and low lines from the two major overnight sessions:<br/>
+          <strong>Asian session</strong> (00:00–07:00 UTC, midnight–3 AM ET) — amber/yellow
+          dashed lines. Asian highs and lows are liquidity pools that are frequently swept
+          during the London open or New York open. A sweep of the Asian high followed by a
+          sharp reversal is a high-probability setup to watch manually.<br/>
+          <strong>London session</strong> (07:00–13:30 UTC, 3–9:30 AM ET) — purple dashed
+          lines. London creates the largest price ranges and often sets the directional bias
+          that carries into NY RTH.</p>
+        </div>
+        <div class="card">
+          <h4>Correlation Heatmap <code>correlationHeatmap</code></h4>
+          <p>A 4×4 matrix panel in the right sidebar showing the rolling 20-period pairwise
+          correlation between all four instruments (MNQ, MGC, MES, MCL) using 5-minute log
+          returns. Color scale: <span style="color:#26a69a">green = positive correlation</span>,
+          <span style="color:#ef5350">red = negative</span>, transparent = near-zero.
+          MNQ and MES typically show 0.85+ correlation; MCL and MGC tend to have low or
+          negative correlation with equities. When MNQ/MES correlation drops below 0.7,
+          it signals potential intermarket stress — treat equity index setups with extra caution.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Features & Analysis Tools ──────────────────────────────────────── -->
+    <section id="features">
+      <h2>Features &amp; Analysis Tools</h2>
+      <p>The <strong>Features</strong> section (below layer toggles in the left panel) controls
+        which server-side analysis modules are active. Changes are hot-applied — no server
+        restart needed. The updated setting takes effect on the next scan cycle (every 5 minutes).</p>
+
+      <div class="cards">
+        <div class="card bull">
+          <h4>Volume Profile</h4>
+          <p>Enables POC, VAH, and VAL calculation for current and prior RTH sessions. When
+          off, volume profile lines disappear from the chart and the layer toggle has no effect.
+          On by default.</p>
+        </div>
+        <div class="card amber">
+          <h4>Opening Range</h4>
+          <p>Enables OR high/low/mid calculation and the OR Breakout alert type. When off, no
+          OR lines are drawn and no <code>or_breakout</code> alerts are generated regardless
+          of price action. On by default.</p>
+        </div>
+        <div class="card">
+          <h4>Performance Stats</h4>
+          <p>Enables real-time win rate, profit factor, and average R calculations computed
+          from all resolved alerts. Powers the Stats page. When off, <code>/api/performance</code>
+          returns empty stats. On by default.</p>
+        </div>
+        <div class="card">
+          <h4>Economic Calendar</h4>
+          <p>Fetches the weekly high-impact economic event schedule from ForexFactory's public
+          feed (refreshed hourly). When enabled: a topbar countdown badge shows upcoming events
+          within 3 hours for the active symbol; setup confidence is reduced −20 points if a
+          high-impact event fires within 15 minutes of the trigger; affected cards show a
+          <strong>⚠ Near Event</strong> badge. On by default.</p>
+        </div>
+        <div class="card">
+          <h4>Relative Strength</h4>
+          <p>Computes the session-normalized performance ratio between MNQ and MES using aligned
+          5-minute candles. Visible in the topbar widget when viewing MNQ or MES. Shows:
+          <strong>ratio</strong> (1.0 = equal performance), <strong>correlation</strong>
+          (rolling 20-period Pearson), and a directional <strong>signal</strong>.
+          Ratio &gt; 1.02 = MNQ leading (risk-on, bullish MNQ bias). Ratio &lt; 0.98 =
+          rotation to defensives (caution on MNQ longs). On by default.</p>
+        </div>
+        <div class="card">
+          <h4>Session Levels</h4>
+          <p>Enables calculation of Asian session (00:00–07:00 UTC) and London session
+          (07:00–13:30 UTC) high/low levels. When off, session level lines disappear from
+          the chart and the layer toggle has no effect. On by default.</p>
+        </div>
+        <div class="card">
+          <h4>Alert Replay</h4>
+          <p>Enables date-range filtering on the alerts API, which powers the Backtest/Replay
+          page. When off, the replay page can only access alerts from the current server session
+          rather than filtering by historical date range. On by default.</p>
+        </div>
+        <div class="card">
+          <h4>Correlation Heatmap</h4>
+          <p>Enables the 4×4 pairwise correlation matrix calculation between all instruments.
+          When off, the heatmap panel in the right sidebar is hidden and the
+          <code>/api/correlation</code> endpoint returns no data. On by default.</p>
+        </div>
+        <div class="card amber">
+          <h4>Sound Alerts</h4>
+          <p>Plays a two-tone audio chime when a new setup alert fires above your minimum
+          confidence threshold. Uses the Web Audio API — no audio files required.
+          Bullish alerts play an ascending tone (440→550 Hz); bearish play a descending tone
+          (550→440 Hz). <strong>Off by default</strong> — requires explicit opt-in. Your
+          browser may require a user interaction before allowing audio to play.</p>
+        </div>
+        <div class="card amber">
+          <h4>Push Notifications</h4>
+          <p>Enables browser push notifications for new high-confidence alerts, delivered even
+          when the tab is in the background. Requires granting notification permission in your
+          browser when prompted. <strong>Off by default</strong> — requires explicit opt-in
+          and browser permission grant.</p>
+        </div>
+      </div>
+
+      <h3 id="perf-page">Performance Page</h3>
+      <p>Navigate to <a href="/performance.html" style="color:var(--accent)">Stats</a> in the
+        topbar to view detailed performance analytics for all resolved alerts:</p>
+      <ul class="checklist green">
+        <li><strong>Summary cards:</strong> Overall win rate, profit factor, average R, total resolved trades</li>
+        <li><strong>Bar charts:</strong> Win rate broken down by symbol, setup type, timeframe, and direction (bull vs. bear)</li>
+        <li><strong>Time-of-day heat map:</strong> Win rate by UTC hour across RTH — green ≥60%, amber 40–60%, red &lt;40%, gray = no data</li>
+        <li><strong>Alert table:</strong> All resolved alerts with sortable columns — symbol, TF, type, direction, confidence, outcome, R achieved</li>
+      </ul>
+
+      <h3 id="bt-page">Backtest &amp; Replay Page</h3>
+      <p>Navigate to <a href="/backtest.html" style="color:var(--accent)">Replay</a> in the
+        topbar to step through historical alerts within a custom date range:</p>
+      <ul class="checklist green">
+        <li><strong>Filters:</strong> Date range, symbol, setup type, minimum confidence threshold, contract size</li>
+        <li><strong>Step-through navigation:</strong> Previous / Next buttons to walk through alerts one at a time; "View on Chart" loads that symbol and timeframe on the main dashboard</li>
+        <li><strong>Equity curve:</strong> CSS bar chart showing cumulative P&amp;L across the filtered alert set, using instrument point values (MNQ $2/pt, MES $5/pt, MGC $10/pt, MCL $100/pt)</li>
+        <li><strong>Summary panel:</strong> Win rate, total R, and trade count for the filtered window</li>
+      </ul>
+
+      <div class="callout">
+        <p><strong>How to use Replay for learning:</strong> Set a date range from a week or month
+        ago, filter to setups above 75% confidence, and step through each alert. For each one,
+        ask yourself: "Would I have taken this? Why?" Then check the outcome. This builds
+        intuition for what the system's high-confidence setups look like in real-time conditions.</p>
       </div>
 
       <hr/>

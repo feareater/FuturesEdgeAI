@@ -1130,3 +1130,246 @@ html, body {
   animation: markerHighlight 0.7s ease-out 3;
   border-color: var(--accent) !important;
 }
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   AutoTrader kill-switch panel
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+#autotrader-panel {
+  padding: 10px 14px 8px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.at-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.at-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.at-platform {
+  font-size: 9px;
+  color: var(--text-dim);
+  margin-left: auto;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 1px 5px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+/* Status dot */
+.at-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.at-dot.at-live   { background: #26a69a; box-shadow: 0 0 6px #26a69a; animation: atPulse 1.8s infinite; }
+.at-dot.at-paused { background: var(--text-dim); }
+.at-dot.at-error  { background: #ef5350; }
+
+@keyframes atPulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.35; }
+}
+
+/* Toggle button */
+.at-toggle-btn {
+  padding: 4px 12px;
+  border-radius: 4px;
+  border: 1px solid;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.at-toggle-btn.at-live   { background: rgba(38, 166, 154, 0.15); border-color: #26a69a; color: #26a69a; }
+.at-toggle-btn.at-paused { background: rgba(120, 120, 140, 0.10); border-color: var(--border); color: var(--text-dim); }
+.at-toggle-btn.at-error  { background: rgba(239, 83, 80, 0.10); border-color: #ef5350; color: #ef5350; }
+.at-toggle-btn:hover { opacity: 0.8; }
+
+/* Position display row */
+.at-position-row {
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 3px 0 4px;
+  min-height: 18px;
+}
+.at-position-row.has-position {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* Min-confidence row */
+.at-conf-row   { margin-bottom: 0; }
+.at-conf-label { font-size: 11px; color: var(--text-dim); min-width: 52px; }
+.at-last-order { font-size: 10px; color: var(--text-dim); margin-left: auto; }
+
+/* P&L summary row */
+.at-summary-row {
+  font-size: 11px;
+  color: var(--text);
+  padding: 2px 0 5px;
+  min-height: 16px;
+  letter-spacing: 0.2px;
+}
+
+/* Simulator fill toast — TP/SL hit notification */
+.sim-fill-toast {
+  position: fixed;
+  top: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  z-index: 9999;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  animation: toastIn 0.2s ease-out;
+  white-space: nowrap;
+  pointer-events: none;
+}
+@keyframes toastIn {
+  from { opacity: 0; transform: translateX(-50%) translateY(-8px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+/* ── Calendar badge ──────────────────────────────────────────────────────── */
+
+.calendar-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  background: rgba(255,152,0,0.18);
+  border: 1px solid rgba(255,152,0,0.5);
+  border-radius: var(--radius);
+  color: #ff9800;
+  white-space: nowrap;
+}
+
+/* ── Near Event badge (on alert cards) ──────────────────────────────────── */
+
+.near-event-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  background: rgba(255,152,0,0.18);
+  border: 1px solid rgba(255,152,0,0.5);
+  border-radius: var(--radius);
+  color: #ff9800;
+  margin-left: auto;
+}
+
+/* ── RS Widget ───────────────────────────────────────────────────────────── */
+
+.rs-widget {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  padding: 2px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  white-space: nowrap;
+}
+.rs-label    { color: var(--text-dim); font-size: 10px; }
+.rs-ratio    { font-weight: 700; }
+.rs-leading  { color: var(--bull); }
+.rs-lagging  { color: var(--bear); }
+.rs-signal   { font-size: 11px; }
+.rs-bull     { color: var(--bull); }
+.rs-bear     { color: var(--bear); }
+
+/* ── Correlation Heatmap panel ───────────────────────────────────────────── */
+
+#corr-heatmap-section {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+}
+
+.corr-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 2px;
+  padding: 6px;
+}
+
+.corr-cell {
+  text-align: center;
+  font-size: 10px;
+  padding: 4px 2px;
+  border-radius: 2px;
+  font-weight: 500;
+}
+
+.corr-header {
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 600;
+  background: transparent;
+}
+
+.corr-updated {
+  font-size: 10px;
+  color: var(--text-dim);
+  font-weight: 400;
+  margin-left: 6px;
+}
+
+.corr-loading {
+  color: var(--text-dim);
+  padding: 8px;
+  text-align: center;
+}
+
+/* ── Feature toggles section ─────────────────────────────────────────────── */
+
+.features-header {
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+
+.feature-row {
+  opacity: 0.9;
+}
+
+.corr-swatch {
+  background: linear-gradient(90deg, rgba(239,83,80,0.6), rgba(80,80,80,0.3), rgba(38,166,154,0.6));
+  border: none;
+}
+
+/* ── Topbar nav link style (compact) ─────────────────────────────────────── */
+
+#perf-nav-link, #bt-nav-link {
+  font-size: 12px;
+  color: var(--text-dim);
+  text-decoration: none;
+  padding: 3px 6px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s;
+}
+#perf-nav-link:hover, #bt-nav-link:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}

@@ -1,4 +1,16 @@
 {
+  "features": {
+    "volumeProfile": true,
+    "openingRange": true,
+    "performanceStats": true,
+    "economicCalendar": true,
+    "relativeStrength": true,
+    "sessionLevels": true,
+    "alertReplay": true,
+    "correlationHeatmap": true,
+    "soundAlerts": false,
+    "pushNotifications": false
+  },
   "layers": {
     "ema9": true,
     "ema21": true,
@@ -21,7 +33,9 @@
   "risk": {
     "mnqContracts": 5,
     "mgcContracts": 3,
+    "mesContracts": 2,
+    "mclContracts": 2,
     "maxRiskDollars": 200,
-    "rrRatio": 1.0
+    "rrRatio": 1
   }
 }

@@ -1,0 +1,461 @@
+// ═══════════════════════════════════════════════════════════════════════════════
+// FuturesEdge AI — Phase 1: Overlay
+// ═══════════════════════════════════════════════════════════════════════════════
+// Charts every layer used by the FuturesEdge AI dashboard directly on your
+// TradingView chart.  Works on any timeframe with any symbol.
+//
+// Layers:  EMA 9 / 21 / 50 · VWAP (±σ bands) · Prior Day H/L · Swing H/L
+//          Auto Trendlines · Fair Value Gaps · Order Blocks · Regime tint
+//
+// Phase 2 adds: setup detection + alertcondition()
+// Phase 3 adds: AI webhook formatted alerts
+// ═══════════════════════════════════════════════════════════════════════════════
+//@version=6
+indicator("FuturesEdge AI — Overlay", shorttitle="FE·Overlay",
+          overlay=true, max_lines_count=200, max_boxes_count=200, max_labels_count=100)
+
+// ───────────────────────────────────────────────────────────────────────────────
+// INPUTS
+// ───────────────────────────────────────────────────────────────────────────────
+
+grpEMA  = "── EMAs ──────────────────────────────────────────"
+showEMA9   = input.bool(true,    "EMA 9",         group=grpEMA, inline="e9")
+ema9Color  = input.color(#2962ff, "",             group=grpEMA, inline="e9")
+showEMA21  = input.bool(true,    "EMA 21",        group=grpEMA, inline="e21")
+ema21Color = input.color(#ff6d00, "",             group=grpEMA, inline="e21")
+showEMA50  = input.bool(true,    "EMA 50",        group=grpEMA, inline="e50")
+ema50Color = input.color(#d500f9, "",             group=grpEMA, inline="e50")
+showEMAFill = input.bool(true,   "EMA 9/21 Fill", group=grpEMA)
+
+grpVWAP = "── VWAP ───────────────────────────────────────────"
+showVWAP      = input.bool(true,    "VWAP",           group=grpVWAP)
+vwapColor     = input.color(#00bcd4, "Color",          group=grpVWAP)
+showVWAPBands = input.bool(true,    "±1σ / ±2σ Bands", group=grpVWAP)
+
+grpPD = "── Prior Day H/L ─────────────────────────────────"
+showPDHL = input.bool(true,               "PDH / PDL",  group=grpPD)
+pdhColor = input.color(color.new(#607d8b, 30), "PDH Color", group=grpPD)
+pdlColor = input.color(color.new(#607d8b, 30), "PDL Color", group=grpPD)
+
+grpSwing = "── Swing H/L ─────────────────────────────────────"
+showSwings    = input.bool(true, "Show Swing H/L", group=grpSwing)
+swingLookback = input.int(10,   "Lookback bars",   group=grpSwing, minval=3, maxval=30)
+showSwingLabels = input.bool(true, "Price labels",  group=grpSwing)
+
+grpTL = "── Trendlines ────────────────────────────────────"
+showTrendlines  = input.bool(true,   "Auto Trendlines",     group=grpTL)
+tlResistColor   = input.color(color.new(#ef5350, 30), "Resistance", group=grpTL)
+tlSupportColor  = input.color(color.new(#26a69a, 30), "Support",    group=grpTL)
+
+grpIOF = "── IOF Zones ─────────────────────────────────────"
+showFVG       = input.bool(true,  "Fair Value Gaps",    group=grpIOF)
+showOB        = input.bool(true,  "Order Blocks",       group=grpIOF)
+obImpulseMult = input.float(1.5,  "OB Impulse (×ATR)",  group=grpIOF, step=0.1, minval=0.5, maxval=5.0)
+fvgBullColor  = input.color(color.new(#26a69a, 78), "Bullish FVG", group=grpIOF)
+fvgBearColor  = input.color(color.new(#ef5350, 78), "Bearish FVG", group=grpIOF)
+obBullColor   = input.color(color.new(#1976d2, 70), "Bullish OB",  group=grpIOF)
+obBearColor   = input.color(color.new(#c62828, 70), "Bearish OB",  group=grpIOF)
+
+grpDisp = "── Display ───────────────────────────────────────"
+showRegimeBg = input.bool(true,  "EMA Regime Background", group=grpDisp)
+showTable    = input.bool(true,  "Info Table (top-right)", group=grpDisp)
+showSession  = input.bool(true,  "RTH Session Highlight",  group=grpDisp)
+
+// ───────────────────────────────────────────────────────────────────────────────
+// CORE CALCULATIONS
+// ───────────────────────────────────────────────────────────────────────────────
+
+// EMAs
+ema9  = ta.ema(close, 9)
+ema21 = ta.ema(close, 21)
+ema50 = ta.ema(close, 50)
+
+// ATR
+atr14 = ta.atr(14)
+
+// VWAP — resets each session; bands via standard deviation
+vwapVal    = ta.vwap(hlc3)
+vwapDev    = ta.stdev(hlc3, 20)
+vwapUp1    = vwapVal + vwapDev
+vwapDn1    = vwapVal - vwapDev
+vwapUp2    = vwapVal + vwapDev * 2
+vwapDn2    = vwapVal - vwapDev * 2
+
+// Prior Day High / Low
+prevDayHigh = request.security(syminfo.tickerid, "D", high[1], lookahead=barmerge.lookahead_on)
+prevDayLow  = request.security(syminfo.tickerid, "D", low[1],  lookahead=barmerge.lookahead_on)
+
+// EMA regime
+bullishStack = ema9 > ema21 and ema21 > ema50
+bearishStack = ema9 < ema21 and ema21 < ema50
+
+// RTH session: 09:30–16:00 ET (UTC-5/UTC-4 depending on DST)
+// TradingView uses exchange timezone — check "Session" in Symbol Info if bands look off
+isRTH = not na(time("", "0930-1600", "America/New_York"))
+
+// ───────────────────────────────────────────────────────────────────────────────
+// EMA PLOTS + FILL
+// ───────────────────────────────────────────────────────────────────────────────
+
+p9  = plot(showEMA9  ? ema9  : na, "EMA 9",  color=ema9Color,  linewidth=1)
+p21 = plot(showEMA21 ? ema21 : na, "EMA 21", color=ema21Color, linewidth=1)
+p50 = plot(showEMA50 ? ema50 : na, "EMA 50", color=ema50Color, linewidth=2)
+
+fill(p9, p21,
+     color = showEMAFill
+             ? (bullishStack ? color.new(color.green, 90) : bearishStack ? color.new(color.red, 90) : color.new(color.gray, 95))
+             : na,
+     title="EMA 9/21 Fill")
+
+// ───────────────────────────────────────────────────────────────────────────────
+// VWAP PLOTS
+// ───────────────────────────────────────────────────────────────────────────────
+
+pVWAP = plot(showVWAP ? vwapVal : na, "VWAP", color=vwapColor, linewidth=2)
+pUp1  = plot(showVWAP and showVWAPBands ? vwapUp1 : na, "VWAP +1σ", color=color.new(vwapColor, 55), linewidth=1, style=plot.style_circles)
+pDn1  = plot(showVWAP and showVWAPBands ? vwapDn1 : na, "VWAP -1σ", color=color.new(vwapColor, 55), linewidth=1, style=plot.style_circles)
+pUp2  = plot(showVWAP and showVWAPBands ? vwapUp2 : na, "VWAP +2σ", color=color.new(vwapColor, 75), linewidth=1, style=plot.style_cross)
+pDn2  = plot(showVWAP and showVWAPBands ? vwapDn2 : na, "VWAP -2σ", color=color.new(vwapColor, 75), linewidth=1, style=plot.style_cross)
+
+// ───────────────────────────────────────────────────────────────────────────────
+// PRIOR DAY H/L
+// ───────────────────────────────────────────────────────────────────────────────
+
+plot(showPDHL ? prevDayHigh : na, "PDH", color=pdhColor, linewidth=1, style=plot.style_linebr)
+plot(showPDHL ? prevDayLow  : na, "PDL", color=pdlColor, linewidth=1, style=plot.style_linebr)
+
+// Label PDH/PDL at day open
+isNewDay = ta.change(time("D")) != 0
+if showPDHL and isNewDay and barstate.isconfirmed
+    label.new(bar_index, prevDayHigh,
+              "PDH " + str.tostring(prevDayHigh, format.mintick),
+              color=color.new(#607d8b, 50), textcolor=color.white,
+              size=size.tiny, style=label.style_label_right)
+    label.new(bar_index, prevDayLow,
+              "PDL " + str.tostring(prevDayLow, format.mintick),
+              color=color.new(#607d8b, 50), textcolor=color.white,
+              size=size.tiny, style=label.style_label_right)
+
+// ───────────────────────────────────────────────────────────────────────────────
+// SWING H/L MARKERS
+// ───────────────────────────────────────────────────────────────────────────────
+
+swingH = ta.pivothigh(high, swingLookback, swingLookback)
+swingL = ta.pivotlow(low,   swingLookback, swingLookback)
+
+plotshape(showSwings and not na(swingH),
+          title="Swing High", location=location.abovebar,
+          style=shape.triangledown, color=#ef5350,
+          size=size.tiny, offset=-swingLookback)
+
+plotshape(showSwings and not na(swingL),
+          title="Swing Low", location=location.belowbar,
+          style=shape.triangleup, color=#26a69a,
+          size=size.tiny, offset=-swingLookback)
+
+// Price labels on swings
+if showSwings and showSwingLabels and barstate.isconfirmed
+    if not na(swingH)
+        label.new(bar_index - swingLookback, swingH + atr14 * 0.3,
+                  str.tostring(swingH, format.mintick),
+                  color=color.new(#ef5350, 75), textcolor=#ef5350,
+                  size=size.tiny, style=label.style_none)
+    if not na(swingL)
+        label.new(bar_index - swingLookback, swingL - atr14 * 0.3,
+                  str.tostring(swingL, format.mintick),
+                  color=color.new(#26a69a, 75), textcolor=#26a69a,
+                  size=size.tiny, style=label.style_none)
+
+// ───────────────────────────────────────────────────────────────────────────────
+// AUTO TRENDLINES — connect last 2 confirmed swing highs (resistance)
+//                   and last 2 confirmed swing lows (support)
+// ───────────────────────────────────────────────────────────────────────────────
+
+var line resistLine = na
+var line supportLine = na
+
+// Track last 2 swing highs
+var float sh1  = na
+var int   shb1 = na
+var float sh2  = na
+var int   shb2 = na
+// Track last 2 swing lows
+var float sl1  = na
+var int   slb1 = na
+var float sl2  = na
+var int   slb2 = na
+
+if showTrendlines
+    if not na(swingH)
+        sh2  := sh1
+        shb2 := shb1
+        sh1 := swingH
+        shb1 := bar_index - swingLookback
+        if not na(sh1) and not na(sh2) and shb1 != shb2
+            line.delete(resistLine)
+            resistLine := line.new(shb2, sh2, shb1, sh1,
+                                   extend=extend.right,
+                                   color=tlResistColor, width=1,
+                                   style=line.style_dashed)
+
+    if not na(swingL)
+        sl2  := sl1
+        slb2 := slb1
+        sl1 := swingL
+        slb1 := bar_index - swingLookback
+        if not na(sl1) and not na(sl2) and slb1 != slb2
+            line.delete(supportLine)
+            supportLine := line.new(slb2, sl2, slb1, sl1,
+                                    extend=extend.right,
+                                    color=tlSupportColor, width=1,
+                                    style=line.style_dashed)
+
+// ───────────────────────────────────────────────────────────────────────────────
+// FAIR VALUE GAPS  (time-anchored, active-only)
+// Zones stored as timestamps + price levels.  Box objects rebuilt on every
+// barstate.islast tick using xloc.bar_time — correctly follows the chart on
+// any zoom or scroll.  Filled zones are removed entirely.
+// ───────────────────────────────────────────────────────────────────────────────
+
+var float[] fvgBullTop    = array.new<float>()
+var float[] fvgBullBot    = array.new<float>()
+var int[]   fvgBullStart  = array.new<int>()    // open-time (ms) of left bar
+var bool[]  fvgBullFilled = array.new<bool>()
+
+var float[] fvgBearTop    = array.new<float>()
+var float[] fvgBearBot    = array.new<float>()
+var int[]   fvgBearStart  = array.new<int>()
+var bool[]  fvgBearFilled = array.new<bool>()
+
+var box[]   fvgBullBoxes  = array.new<box>()    // visual cache — rebuilt each islast
+var box[]   fvgBearBoxes  = array.new<box>()
+
+if showFVG and barstate.isconfirmed
+    // ── Detect new FVGs ──────────────────────────────────────────────────────
+    if low > high[2]   // Bullish FVG
+        array.push(fvgBullTop,    low)
+        array.push(fvgBullBot,    high[2])
+        array.push(fvgBullStart,  time[2])
+        array.push(fvgBullFilled, false)
+    if high < low[2]   // Bearish FVG
+        array.push(fvgBearTop,    low[2])
+        array.push(fvgBearBot,    high)
+        array.push(fvgBearStart,  time[2])
+        array.push(fvgBearFilled, false)
+
+    // ── Mark filled when price closes inside the gap ──────────────────────────
+    if array.size(fvgBullTop) > 0
+        for i = array.size(fvgBullTop) - 1 to 0
+            if not array.get(fvgBullFilled, i)
+                if close >= array.get(fvgBullBot, i) and close <= array.get(fvgBullTop, i)
+                    array.set(fvgBullFilled, i, true)
+    if array.size(fvgBearTop) > 0
+        for i = array.size(fvgBearTop) - 1 to 0
+            if not array.get(fvgBearFilled, i)
+                if close >= array.get(fvgBearBot, i) and close <= array.get(fvgBearTop, i)
+                    array.set(fvgBearFilled, i, true)
+
+    // ── Cleanup (keep most recent 30) ────────────────────────────────────────
+    while array.size(fvgBullTop) > 30
+        array.shift(fvgBullTop)
+        array.shift(fvgBullBot)
+        array.shift(fvgBullStart)
+        array.shift(fvgBullFilled)
+    while array.size(fvgBearTop) > 30
+        array.shift(fvgBearTop)
+        array.shift(fvgBearBot)
+        array.shift(fvgBearStart)
+        array.shift(fvgBearFilled)
+
+// ───────────────────────────────────────────────────────────────────────────────
+// ORDER BLOCKS  (time-anchored, active-only)
+// ───────────────────────────────────────────────────────────────────────────────
+
+var float[] obBullTop       = array.new<float>()
+var float[] obBullBot       = array.new<float>()
+var int[]   obBullStart     = array.new<int>()
+var bool[]  obBullMitigated = array.new<bool>()
+
+var float[] obBearTop       = array.new<float>()
+var float[] obBearBot       = array.new<float>()
+var int[]   obBearStart     = array.new<int>()
+var bool[]  obBearMitigated = array.new<bool>()
+
+var box[]   obBullBoxes     = array.new<box>()
+var box[]   obBearBoxes     = array.new<box>()
+
+if showOB and barstate.isconfirmed
+    isImpulse = math.abs(close - open) > obImpulseMult * atr14
+
+    // ── Bullish OB ───────────────────────────────────────────────────────────
+    if isImpulse and close > open and close[1] < open[1]
+        bodyH     = math.max(open[1], close[1])
+        bodyL     = math.min(open[1], close[1])
+        totalRng  = high[1] - low[1]
+        bodyRatio = totalRng > 0 ? (bodyH - bodyL) / totalRng : 1.0
+        if bodyRatio <= 0.75
+            array.push(obBullTop,       bodyH)
+            array.push(obBullBot,       bodyL)
+            array.push(obBullStart,     time[1])
+            array.push(obBullMitigated, false)
+
+    // ── Bearish OB ───────────────────────────────────────────────────────────
+    if isImpulse and close < open and close[1] > open[1]
+        bodyH     = math.max(open[1], close[1])
+        bodyL     = math.min(open[1], close[1])
+        totalRng  = high[1] - low[1]
+        bodyRatio = totalRng > 0 ? (bodyH - bodyL) / totalRng : 1.0
+        if bodyRatio <= 0.75
+            array.push(obBearTop,       bodyH)
+            array.push(obBearBot,       bodyL)
+            array.push(obBearStart,     time[1])
+            array.push(obBearMitigated, false)
+
+    // ── Mitigate when price closes through OB body ────────────────────────────
+    if array.size(obBullTop) > 0
+        for i = array.size(obBullTop) - 1 to 0
+            if not array.get(obBullMitigated, i) and close < array.get(obBullBot, i)
+                array.set(obBullMitigated, i, true)
+    if array.size(obBearTop) > 0
+        for i = array.size(obBearTop) - 1 to 0
+            if not array.get(obBearMitigated, i) and close > array.get(obBearTop, i)
+                array.set(obBearMitigated, i, true)
+
+    // ── Cleanup (keep most recent 20) ────────────────────────────────────────
+    while array.size(obBullTop) > 20
+        array.shift(obBullTop)
+        array.shift(obBullBot)
+        array.shift(obBullStart)
+        array.shift(obBullMitigated)
+    while array.size(obBearTop) > 20
+        array.shift(obBearTop)
+        array.shift(obBearBot)
+        array.shift(obBearStart)
+        array.shift(obBearMitigated)
+
+// ───────────────────────────────────────────────────────────────────────────────
+// REDRAW BOXES — every barstate.islast tick
+// xloc.bar_time anchors boxes to timestamps so they follow bars on any zoom/scroll.
+// Only active (unfilled / unmitigated) zones are drawn.
+// ───────────────────────────────────────────────────────────────────────────────
+
+if barstate.islast
+    curTime = time   // open-time of current bar — right edge for all active zones
+
+    // ── Delete all cached box objects ────────────────────────────────────────
+    if array.size(fvgBullBoxes) > 0
+        for i = 0 to array.size(fvgBullBoxes) - 1
+            box.delete(array.get(fvgBullBoxes, i))
+    array.clear(fvgBullBoxes)
+    if array.size(fvgBearBoxes) > 0
+        for i = 0 to array.size(fvgBearBoxes) - 1
+            box.delete(array.get(fvgBearBoxes, i))
+    array.clear(fvgBearBoxes)
+    if array.size(obBullBoxes) > 0
+        for i = 0 to array.size(obBullBoxes) - 1
+            box.delete(array.get(obBullBoxes, i))
+    array.clear(obBullBoxes)
+    if array.size(obBearBoxes) > 0
+        for i = 0 to array.size(obBearBoxes) - 1
+            box.delete(array.get(obBearBoxes, i))
+    array.clear(obBearBoxes)
+
+    // ── Draw active FVG zones (unfilled only) ─────────────────────────────────
+    if showFVG and array.size(fvgBullTop) > 0
+        for i = 0 to array.size(fvgBullTop) - 1
+            if not array.get(fvgBullFilled, i)
+                array.push(fvgBullBoxes,
+                           box.new(array.get(fvgBullStart, i), array.get(fvgBullTop, i),
+                                   curTime, array.get(fvgBullBot, i),
+                                   xloc=xloc.bar_time,
+                                   bgcolor=fvgBullColor,
+                                   border_color=color.new(#26a69a, 50), border_width=1))
+    if showFVG and array.size(fvgBearTop) > 0
+        for i = 0 to array.size(fvgBearTop) - 1
+            if not array.get(fvgBearFilled, i)
+                array.push(fvgBearBoxes,
+                           box.new(array.get(fvgBearStart, i), array.get(fvgBearTop, i),
+                                   curTime, array.get(fvgBearBot, i),
+                                   xloc=xloc.bar_time,
+                                   bgcolor=fvgBearColor,
+                                   border_color=color.new(#ef5350, 50), border_width=1))
+
+    // ── Draw active OB zones (unmitigated only) ───────────────────────────────
+    if showOB and array.size(obBullTop) > 0
+        for i = 0 to array.size(obBullTop) - 1
+            if not array.get(obBullMitigated, i)
+                array.push(obBullBoxes,
+                           box.new(array.get(obBullStart, i), array.get(obBullTop, i),
+                                   curTime, array.get(obBullBot, i),
+                                   xloc=xloc.bar_time,
+                                   bgcolor=obBullColor,
+                                   border_color=color.new(#1976d2, 30), border_width=1))
+    if showOB and array.size(obBearTop) > 0
+        for i = 0 to array.size(obBearTop) - 1
+            if not array.get(obBearMitigated, i)
+                array.push(obBearBoxes,
+                           box.new(array.get(obBearStart, i), array.get(obBearTop, i),
+                                   curTime, array.get(obBearBot, i),
+                                   xloc=xloc.bar_time,
+                                   bgcolor=obBearColor,
+                                   border_color=color.new(#c62828, 30), border_width=1))
+
+// ───────────────────────────────────────────────────────────────────────────────
+// REGIME BACKGROUND + RTH HIGHLIGHT
+// ───────────────────────────────────────────────────────────────────────────────
+
+bgcolor(showRegimeBg and bullishStack ? color.new(color.green, 96) :
+        showRegimeBg and bearishStack ? color.new(color.red,   96) : na,
+        title="EMA Regime")
+
+bgcolor(showSession and isRTH ? color.new(color.blue, 97) : na, title="RTH Session")
+
+// ───────────────────────────────────────────────────────────────────────────────
+// INFO TABLE — top-right corner
+// ───────────────────────────────────────────────────────────────────────────────
+
+var table infoTbl = table.new(position.top_right, 2, 8,
+    bgcolor=color.new(#0d0f1a, 72),
+    border_width=1, border_color=color.new(color.gray, 65),
+    frame_width=1,  frame_color=color.new(color.gray, 65))
+
+if showTable and barstate.islast
+    DIM = color.new(color.white, 55)
+    SML = size.tiny
+
+    regimeTxt   = bullishStack ? "▲ BULLISH" : bearishStack ? "▼ BEARISH" : "◆ NEUTRAL"
+    regimeColor = bullishStack ? #26a69a     : bearishStack ? #ef5350     : #78909c
+
+    aboveVWAP   = close > vwapVal
+    vwapRelTxt  = aboveVWAP ? "▲ Above" : "▼ Below"
+    vwapRelClr  = aboveVWAP ? #26a69a  : #ef5350
+
+    table.cell(infoTbl, 0, 0, "REGIME", text_color=DIM, text_size=SML)
+    table.cell(infoTbl, 1, 0, regimeTxt, text_color=regimeColor, text_size=SML)
+
+    table.cell(infoTbl, 0, 1, "EMA 9",  text_color=DIM, text_size=SML)
+    table.cell(infoTbl, 1, 1, str.tostring(ema9, format.mintick),
+               text_color=ema9Color, text_size=SML)
+
+    table.cell(infoTbl, 0, 2, "EMA 21", text_color=DIM, text_size=SML)
+    table.cell(infoTbl, 1, 2, str.tostring(ema21, format.mintick),
+               text_color=ema21Color, text_size=SML)
+
+    table.cell(infoTbl, 0, 3, "EMA 50", text_color=DIM, text_size=SML)
+    table.cell(infoTbl, 1, 3, str.tostring(ema50, format.mintick),
+               text_color=ema50Color, text_size=SML)
+
+    table.cell(infoTbl, 0, 4, "VWAP",   text_color=DIM, text_size=SML)
+    table.cell(infoTbl, 1, 4, str.tostring(vwapVal, format.mintick),
+               text_color=vwapColor, text_size=SML)
+
+    table.cell(infoTbl, 0, 5, "vs VWAP", text_color=DIM, text_size=SML)
+    table.cell(infoTbl, 1, 5, vwapRelTxt, text_color=vwapRelClr, text_size=SML)
+
+    table.cell(infoTbl, 0, 6, "PDH",    text_color=DIM, text_size=SML)
+    table.cell(infoTbl, 1, 6, str.tostring(prevDayHigh, format.mintick),
+               text_color=#607d8b, text_size=SML)
+
+    table.cell(infoTbl, 0, 7, "ATR 14", text_color=DIM, text_size=SML)
+    table.cell(infoTbl, 1, 7, str.tostring(atr14, format.mintick),
+               text_color=color.white, text_size=SML)

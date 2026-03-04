@@ -1,0 +1,630 @@
+// ═══════════════════════════════════════════════════════════════════════════════
+// FuturesEdge AI — Phase 3: AI Webhook Integration
+// ═══════════════════════════════════════════════════════════════════════════════
+// Includes everything from Phase 2 plus:
+//   · Structured JSON webhook messages for every alert
+//   · ATR-based SL/TP estimates embedded in the payload
+//   · Webhook fires to your FuturesEdge server → Claude generates commentary
+//   · Server route: POST /api/tv-webhook  (see README.md for setup)
+//
+// HOW IT WORKS:
+//   1. Setup fires on TradingView → alertcondition() triggers
+//   2. TradingView sends POST to http://<your-server>:3000/api/tv-webhook
+//   3. Server parses JSON, calls Claude API with full market context
+//   4. Commentary saved to data/logs/ and appears in FuturesEdge dashboard
+//
+// SETUP:
+//   · In TradingView: Create alert → Condition: any FE alert → Notifications → Webhook URL
+//   · Webhook URL: http://<your-server-ip>:3000/api/tv-webhook
+//   · Set alert message to {{strategy.order.comment}} or use the custom JSON below
+//   · See README.md for the server-side webhook route you need to add
+// ═══════════════════════════════════════════════════════════════════════════════
+//@version=6
+indicator("FuturesEdge AI — Phase 3 AI", shorttitle="FE·AI",
+          overlay=true, max_lines_count=200, max_boxes_count=200, max_labels_count=200)
+
+// ───────────────────────────────────────────────────────────────────────────────
+// INPUTS  (identical to Phase 2 — all overlay settings preserved)
+// ───────────────────────────────────────────────────────────────────────────────
+
+grpEMA = "── EMAs ──────────────────────────────────────────"
+showEMA9    = input.bool(true,    "EMA 9",         group=grpEMA, inline="e9")
+ema9Color   = input.color(#2962ff, "",             group=grpEMA, inline="e9")
+showEMA21   = input.bool(true,    "EMA 21",        group=grpEMA, inline="e21")
+ema21Color  = input.color(#ff6d00, "",             group=grpEMA, inline="e21")
+showEMA50   = input.bool(true,    "EMA 50",        group=grpEMA, inline="e50")
+ema50Color  = input.color(#d500f9, "",             group=grpEMA, inline="e50")
+showEMAFill = input.bool(true,    "EMA 9/21 Fill", group=grpEMA)
+
+grpVWAP = "── VWAP ───────────────────────────────────────────"
+showVWAP      = input.bool(true,     "VWAP",            group=grpVWAP)
+vwapColor     = input.color(#00bcd4, "Color",            group=grpVWAP)
+showVWAPBands = input.bool(true,     "±1σ / ±2σ Bands", group=grpVWAP)
+
+grpPD = "── Prior Day H/L ─────────────────────────────────"
+showPDHL = input.bool(true,                    "PDH / PDL",  group=grpPD)
+pdhColor = input.color(color.new(#607d8b, 30), "PDH Color",  group=grpPD)
+pdlColor = input.color(color.new(#607d8b, 30), "PDL Color",  group=grpPD)
+
+grpSwing = "── Swing H/L ─────────────────────────────────────"
+showSwings      = input.bool(true, "Show Swing H/L", group=grpSwing)
+swingLookback   = input.int(10,    "Lookback bars",  group=grpSwing, minval=3, maxval=30)
+showSwingLabels = input.bool(true, "Price labels",   group=grpSwing)
+
+grpTL = "── Trendlines ────────────────────────────────────"
+showTrendlines = input.bool(true,                    "Auto Trendlines", group=grpTL)
+tlResistColor  = input.color(color.new(#ef5350, 30), "Resistance",      group=grpTL)
+tlSupportColor = input.color(color.new(#26a69a, 30), "Support",         group=grpTL)
+
+grpIOF = "── IOF Zones ─────────────────────────────────────"
+showFVG       = input.bool(true,                    "Fair Value Gaps",   group=grpIOF)
+showOB        = input.bool(true,                    "Order Blocks",      group=grpIOF)
+obImpulseMult = input.float(1.5,                    "OB Impulse (×ATR)", group=grpIOF, step=0.1, minval=0.5)
+fvgBullColor  = input.color(color.new(#26a69a, 78), "Bullish FVG",       group=grpIOF)
+fvgBearColor  = input.color(color.new(#ef5350, 78), "Bearish FVG",       group=grpIOF)
+obBullColor   = input.color(color.new(#1976d2, 70), "Bullish OB",        group=grpIOF)
+obBearColor   = input.color(color.new(#c62828, 70), "Bearish OB",        group=grpIOF)
+obExtendBars  = input.int(60, "OB extend (bars)", group=grpIOF, minval=10, maxval=200)
+fvgExtendBars = input.int(40, "FVG extend (bars)", group=grpIOF, minval=10, maxval=200)
+
+grpAlert = "── Alert / Webhook Settings ──────────────────────"
+minConfidence    = input.int(65,  "Min Confidence (%)", group=grpAlert, minval=40, maxval=95, step=5)
+showSignalLabels = input.bool(true, "Signal labels",     group=grpAlert)
+showSignalPanel  = input.bool(true, "Signals panel",     group=grpAlert)
+wickRatioMin     = input.float(0.35, "Min wick ratio",   group=grpAlert, step=0.05, minval=0.2, maxval=0.7)
+// R:R used for TP estimate in webhook payload
+mnqRR = input.float(2.0, "MNQ R:R",  group=grpAlert, step=0.5, minval=1.0, maxval=5.0)
+mgcRR = input.float(1.0, "MGC R:R",  group=grpAlert, step=0.5, minval=1.0, maxval=5.0)
+
+grpDisp = "── Display ───────────────────────────────────────"
+showRegimeBg = input.bool(true, "EMA Regime Background", group=grpDisp)
+showTable    = input.bool(true, "Info Table (top-right)", group=grpDisp)
+showSession  = input.bool(true, "RTH Session Highlight",  group=grpDisp)
+
+// ───────────────────────────────────────────────────────────────────────────────
+// CORE CALCULATIONS (identical to Phase 2)
+// ───────────────────────────────────────────────────────────────────────────────
+
+ema9  = ta.ema(close, 9)
+ema21 = ta.ema(close, 21)
+ema50 = ta.ema(close, 50)
+atr14 = ta.atr(14)
+
+vwapVal = ta.vwap(hlc3)
+vwapDev = ta.stdev(hlc3, 20)
+vwapUp1 = vwapVal + vwapDev
+vwapDn1 = vwapVal - vwapDev
+vwapUp2 = vwapVal + vwapDev * 2
+vwapDn2 = vwapVal - vwapDev * 2
+
+prevDayHigh = request.security(syminfo.tickerid, "D", high[1], lookahead=barmerge.lookahead_on)
+prevDayLow  = request.security(syminfo.tickerid, "D", low[1],  lookahead=barmerge.lookahead_on)
+
+bullishStack = ema9 > ema21 and ema21 > ema50
+bearishStack = ema9 < ema21 and ema21 < ema50
+isRTH        = not na(time("", "0930-1600", "America/New_York"))
+
+ema9_15m  = request.security(syminfo.tickerid, "15", ta.ema(close, 9),  lookahead=barmerge.lookahead_off)
+ema21_15m = request.security(syminfo.tickerid, "15", ta.ema(close, 21), lookahead=barmerge.lookahead_off)
+ema50_15m = request.security(syminfo.tickerid, "15", ta.ema(close, 50), lookahead=barmerge.lookahead_off)
+bull15m   = ema9_15m > ema21_15m and ema21_15m > ema50_15m
+bear15m   = ema9_15m < ema21_15m and ema21_15m < ema50_15m
+
+swingH = ta.pivothigh(high, swingLookback, swingLookback)
+swingL = ta.pivotlow(low,   swingLookback, swingLookback)
+
+// ───────────────────────────────────────────────────────────────────────────────
+// PHASE 1 OVERLAYS (same as Phase 2)
+// ───────────────────────────────────────────────────────────────────────────────
+
+p9  = plot(showEMA9  ? ema9  : na, "EMA 9",  color=ema9Color,  linewidth=1)
+p21 = plot(showEMA21 ? ema21 : na, "EMA 21", color=ema21Color, linewidth=1)
+p50 = plot(showEMA50 ? ema50 : na, "EMA 50", color=ema50Color, linewidth=2)
+fill(p9, p21, color=showEMAFill ? (bullishStack ? color.new(color.green, 90) : bearishStack ? color.new(color.red, 90) : color.new(color.gray, 95)) : na)
+
+plot(showVWAP ? vwapVal : na, "VWAP", color=vwapColor, linewidth=2)
+plot(showVWAP and showVWAPBands ? vwapUp1 : na, "VWAP +1σ", color=color.new(vwapColor, 55), linewidth=1, style=plot.style_circles)
+plot(showVWAP and showVWAPBands ? vwapDn1 : na, "VWAP -1σ", color=color.new(vwapColor, 55), linewidth=1, style=plot.style_circles)
+plot(showVWAP and showVWAPBands ? vwapUp2 : na, "VWAP +2σ", color=color.new(vwapColor, 75), linewidth=1, style=plot.style_cross)
+plot(showVWAP and showVWAPBands ? vwapDn2 : na, "VWAP -2σ", color=color.new(vwapColor, 75), linewidth=1, style=plot.style_cross)
+
+plot(showPDHL ? prevDayHigh : na, "PDH", color=pdhColor, linewidth=1, style=plot.style_linebr)
+plot(showPDHL ? prevDayLow  : na, "PDL", color=pdlColor, linewidth=1, style=plot.style_linebr)
+
+isNewDay = ta.change(time("D")) != 0
+if showPDHL and isNewDay and barstate.isconfirmed
+    label.new(bar_index, prevDayHigh, "PDH " + str.tostring(prevDayHigh, format.mintick),
+              color=color.new(#607d8b, 50), textcolor=color.white, size=size.tiny, style=label.style_label_right)
+    label.new(bar_index, prevDayLow, "PDL " + str.tostring(prevDayLow, format.mintick),
+              color=color.new(#607d8b, 50), textcolor=color.white, size=size.tiny, style=label.style_label_right)
+
+plotshape(showSwings and not na(swingH), location=location.abovebar, style=shape.triangledown,
+          color=#ef5350, size=size.tiny, offset=-swingLookback, title="Swing High")
+plotshape(showSwings and not na(swingL), location=location.belowbar, style=shape.triangleup,
+          color=#26a69a, size=size.tiny, offset=-swingLookback, title="Swing Low")
+
+if showSwings and showSwingLabels and barstate.isconfirmed
+    if not na(swingH)
+        label.new(bar_index - swingLookback, swingH + atr14 * 0.3,
+                  str.tostring(swingH, format.mintick), color=color.new(#ef5350, 75),
+                  textcolor=#ef5350, size=size.tiny, style=label.style_none)
+    if not na(swingL)
+        label.new(bar_index - swingLookback, swingL - atr14 * 0.3,
+                  str.tostring(swingL, format.mintick), color=color.new(#26a69a, 75),
+                  textcolor=#26a69a, size=size.tiny, style=label.style_none)
+
+var line resistLine  = na
+var line supportLine = na
+var float sh1  = na
+var int   shb1 = na
+var float sh2  = na
+var int   shb2 = na
+var float sl1  = na
+var int   slb1 = na
+var float sl2  = na
+var int   slb2 = na
+
+if showTrendlines
+    if not na(swingH)
+        sh2  := sh1
+        shb2 := shb1
+        sh1  := swingH
+        shb1 := bar_index - swingLookback
+        if not na(sh1) and not na(sh2) and shb1 != shb2
+            line.delete(resistLine)
+            resistLine := line.new(shb2, sh2, shb1, sh1, extend=extend.right,
+                                   color=tlResistColor, width=1, style=line.style_dashed)
+    if not na(swingL)
+        sl2  := sl1
+        slb2 := slb1
+        sl1  := swingL
+        slb1 := bar_index - swingLookback
+        if not na(sl1) and not na(sl2) and slb1 != slb2
+            line.delete(supportLine)
+            supportLine := line.new(slb2, sl2, slb1, sl1, extend=extend.right,
+                                    color=tlSupportColor, width=1, style=line.style_dashed)
+
+// ─── IOF Zone arrays (visual + detection) ────────────────────────────────────
+
+var box[]   fvgBullBoxes = array.new<box>()
+var float[] fvgBullTop   = array.new<float>()
+var float[] fvgBullBot   = array.new<float>()
+var bool[]  fvgBullFill  = array.new<bool>()
+var box[]   fvgBearBoxes = array.new<box>()
+var float[] fvgBearTop   = array.new<float>()
+var float[] fvgBearBot   = array.new<float>()
+var bool[]  fvgBearFill  = array.new<bool>()
+var box[]   obBullBoxes  = array.new<box>()
+var float[] obBullTop    = array.new<float>()
+var float[] obBullBot    = array.new<float>()
+var bool[]  obBullMit    = array.new<bool>()
+var box[]   obBearBoxes  = array.new<box>()
+var float[] obBearTop    = array.new<float>()
+var float[] obBearBot    = array.new<float>()
+var bool[]  obBearMit    = array.new<bool>()
+
+if barstate.isconfirmed
+    isImpulse = math.abs(close - open) > obImpulseMult * atr14
+
+    if showFVG
+        if low > high[2]
+            b = box.new(bar_index - 2, high[2], bar_index + fvgExtendBars, low,
+                        bgcolor=fvgBullColor, border_color=color.new(#26a69a, 50), border_width=1)
+            array.push(fvgBullBoxes, b)
+            array.push(fvgBullTop, low)
+            array.push(fvgBullBot, high[2])
+            array.push(fvgBullFill, false)
+        if high < low[2]
+            b = box.new(bar_index - 2, high, bar_index + fvgExtendBars, low[2],
+                        bgcolor=fvgBearColor, border_color=color.new(#ef5350, 50), border_width=1)
+            array.push(fvgBearBoxes, b)
+            array.push(fvgBearTop, low[2])
+            array.push(fvgBearBot, high)
+            array.push(fvgBearFill, false)
+        for i = array.size(fvgBullBoxes) - 1 to 0
+            if not array.get(fvgBullFill, i)
+                bT = array.get(fvgBullTop, i)
+                bB = array.get(fvgBullBot, i)
+                if close <= bT and close >= bB
+                    array.set(fvgBullFill, i, true)
+                    b = array.get(fvgBullBoxes, i)
+                    box.set_bgcolor(b, color.new(#26a69a, 93))
+                    box.set_right(b, bar_index)
+        for i = array.size(fvgBearBoxes) - 1 to 0
+            if not array.get(fvgBearFill, i)
+                bT = array.get(fvgBearTop, i)
+                bB = array.get(fvgBearBot, i)
+                if close >= bB and close <= bT
+                    array.set(fvgBearFill, i, true)
+                    b = array.get(fvgBearBoxes, i)
+                    box.set_bgcolor(b, color.new(#ef5350, 93))
+                    box.set_right(b, bar_index)
+
+    if showOB
+        if isImpulse and close > open and close[1] < open[1]
+            bH = math.max(open[1], close[1])
+            bL = math.min(open[1], close[1])
+            rng = high[1] - low[1]
+            if rng > 0 and (bH - bL) / rng <= 0.75
+                b = box.new(bar_index - 1, bL, bar_index + obExtendBars, bH,
+                            bgcolor=obBullColor, border_color=color.new(#1976d2, 30), border_width=1)
+                array.push(obBullBoxes, b)
+                array.push(obBullTop, bH)
+                array.push(obBullBot, bL)
+                array.push(obBullMit, false)
+        if isImpulse and close < open and close[1] > open[1]
+            bH = math.max(open[1], close[1])
+            bL = math.min(open[1], close[1])
+            rng = high[1] - low[1]
+            if rng > 0 and (bH - bL) / rng <= 0.75
+                b = box.new(bar_index - 1, bL, bar_index + obExtendBars, bH,
+                            bgcolor=obBearColor, border_color=color.new(#c62828, 30), border_width=1)
+                array.push(obBearBoxes, b)
+                array.push(obBearTop, bH)
+                array.push(obBearBot, bL)
+                array.push(obBearMit, false)
+        for i = array.size(obBullBoxes) - 1 to 0
+            if not array.get(obBullMit, i) and close < array.get(obBullBot, i)
+                array.set(obBullMit, i, true)
+                b = array.get(obBullBoxes, i)
+                box.set_bgcolor(b, color.new(color.gray, 88))
+                box.set_border_color(b, color.new(color.gray, 70))
+        for i = array.size(obBearBoxes) - 1 to 0
+            if not array.get(obBearMit, i) and close > array.get(obBearTop, i)
+                array.set(obBearMit, i, true)
+                b = array.get(obBearBoxes, i)
+                box.set_bgcolor(b, color.new(color.gray, 88))
+                box.set_border_color(b, color.new(color.gray, 70))
+
+    while array.size(fvgBullBoxes) > 30
+        box.delete(array.shift(fvgBullBoxes))
+        array.shift(fvgBullTop)
+        array.shift(fvgBullBot)
+        array.shift(fvgBullFill)
+
+    while array.size(fvgBearBoxes) > 30
+        box.delete(array.shift(fvgBearBoxes))
+        array.shift(fvgBearTop)
+        array.shift(fvgBearBot)
+        array.shift(fvgBearFill)
+
+    while array.size(obBullBoxes) > 20
+        box.delete(array.shift(obBullBoxes))
+        array.shift(obBullTop)
+        array.shift(obBullBot)
+        array.shift(obBullMit)
+
+    while array.size(obBearBoxes) > 20
+        box.delete(array.shift(obBearBoxes))
+        array.shift(obBearTop)
+        array.shift(obBearBot)
+        array.shift(obBearMit)
+
+bgcolor(showRegimeBg and bullishStack ? color.new(color.green, 96) :
+        showRegimeBg and bearishStack ? color.new(color.red,   96) : na)
+bgcolor(showSession and isRTH ? color.new(color.blue, 97) : na)
+
+// ───────────────────────────────────────────────────────────────────────────────
+// DETECTION HELPERS (same as Phase 2)
+// ───────────────────────────────────────────────────────────────────────────────
+
+bullZoneRejection(topArr, botArr, fillArr) =>
+    rejected = false
+    zLevel   = float(na)
+    for i = array.size(topArr) - 1 to 0
+        if not array.get(fillArr, i)
+            zTop = array.get(topArr, i)
+            zBot = array.get(botArr, i)
+            if low <= zTop and low >= zBot
+                totalRng  = high - low
+                wickSize  = zTop - low
+                wickRatio = totalRng > 0 ? wickSize / totalRng : 0.0
+                if close > zTop and wickRatio >= wickRatioMin
+                    rejected := true
+                    zLevel   := (zTop + zBot) / 2
+                    break
+    [rejected, zLevel]
+
+bearZoneRejection(topArr, botArr, fillArr) =>
+    rejected = false
+    zLevel   = float(na)
+    for i = array.size(topArr) - 1 to 0
+        if not array.get(fillArr, i)
+            zTop = array.get(topArr, i)
+            zBot = array.get(botArr, i)
+            if high >= zBot and high <= zTop
+                totalRng  = high - low
+                wickSize  = high - zBot
+                wickRatio = totalRng > 0 ? wickSize / totalRng : 0.0
+                if close < zBot and wickRatio >= wickRatioMin
+                    rejected := true
+                    zLevel   := (zTop + zBot) / 2
+                    break
+    [rejected, zLevel]
+
+// ───────────────────────────────────────────────────────────────────────────────
+// SETUP DETECTION (same logic as Phase 2)
+// ───────────────────────────────────────────────────────────────────────────────
+
+var float lastSwingH = na
+var float lastSwingL = na
+if not na(swingH)
+    lastSwingH := swingH
+if not na(swingL)
+    lastSwingL := swingL
+
+resistVal  = not na(resistLine)  ? line.get_price(resistLine,  bar_index) : float(na)
+supportVal = not na(supportLine) ? line.get_price(supportLine, bar_index) : float(na)
+
+[bullOBRej,  bullOBZone]  = bullZoneRejection(obBullTop,  obBullBot,  obBullMit)
+[bullFVGRej, bullFVGZone] = bullZoneRejection(fvgBullTop, fvgBullBot, fvgBullFill)
+[bearOBRej,  bearOBZone]  = bearZoneRejection(obBearTop,  obBearBot,  obBearMit)
+[bearFVGRej, bearFVGZone] = bearZoneRejection(fvgBearTop, fvgBearBot, fvgBearFill)
+
+bullZoneRej = bullOBRej or bullFVGRej
+bearZoneRej = bearOBRej or bearFVGRej
+
+totalRng = high == low ? 0.0001 : (high - low)
+
+bullZoneConf = math.min(100, math.max(0,
+    40 +
+    (bullishStack ? 15 : bearishStack ? -20 : 0) +
+    (bull15m ? 15 : bear15m ? -10 : 5) +
+    (bullOBRej ? 5 : 0) +
+    ((close - low) / totalRng > 0.7 ? 10 : (close - low) / totalRng > 0.5 ? 5 : 0) +
+    (math.abs(close - open) / totalRng < 0.4 ? 5 : 0)))
+
+bearZoneConf = math.min(100, math.max(0,
+    40 +
+    (bearishStack ? 15 : bullishStack ? -20 : 0) +
+    (bear15m ? 15 : bull15m ? -10 : 5) +
+    (bearOBRej ? 5 : 0) +
+    ((high - close) / totalRng > 0.7 ? 10 : (high - close) / totalRng > 0.5 ? 5 : 0) +
+    (math.abs(close - open) / totalRng < 0.4 ? 5 : 0)))
+
+pdhBreak = barstate.isconfirmed and close > prevDayHigh and close[1] <= prevDayHigh
+pdlBreak = barstate.isconfirmed and close < prevDayLow  and close[1] >= prevDayLow
+
+pdhConf = math.min(100, math.max(0,
+    45 + (bullishStack ? 15 : bearishStack ? -10 : 5) + (bull15m ? 15 : bear15m ? -5 : 5) +
+    (close > vwapVal ? 5 : 0) + (math.abs(close - prevDayHigh) < 0.5 * atr14 ? 5 : 0)))
+
+pdlConf = math.min(100, math.max(0,
+    45 + (bearishStack ? 15 : bullishStack ? -10 : 5) + (bear15m ? 15 : bull15m ? -5 : 5) +
+    (close < vwapVal ? 5 : 0) + (math.abs(prevDayLow - close) < 0.5 * atr14 ? 5 : 0)))
+
+tlBullBreak = barstate.isconfirmed and not na(resistVal) and close[1] < resistVal[1] and close > resistVal
+tlBearBreak = barstate.isconfirmed and not na(supportVal) and close[1] > supportVal[1] and close < supportVal
+
+tlBullConf = math.min(100, math.max(0,
+    40 + (bullishStack ? 15 : bearishStack ? -10 : 5) + (bull15m ? 15 : 5) +
+    (close > vwapVal ? 10 : 0) + (math.abs(close - resistVal) > 0.3 * atr14 ? 10 : 5)))
+
+tlBearConf = math.min(100, math.max(0,
+    40 + (bearishStack ? 15 : bullishStack ? -10 : 5) + (bear15m ? 15 : 5) +
+    (close < vwapVal ? 10 : 0) + (math.abs(supportVal - close) > 0.3 * atr14 ? 10 : 5)))
+
+bullBOS = barstate.isconfirmed and not na(lastSwingH) and close[1] <= lastSwingH and close > lastSwingH
+bearBOS = barstate.isconfirmed and not na(lastSwingL) and close[1] >= lastSwingL and close < lastSwingL
+
+bullZoneAlert = barstate.isconfirmed and bullZoneRej and bullZoneConf >= minConfidence
+bearZoneAlert = barstate.isconfirmed and bearZoneRej and bearZoneConf >= minConfidence
+pdhAlert      = pdhBreak and pdhConf >= minConfidence
+pdlAlert      = pdlBreak and pdlConf >= minConfidence
+tlBullAlert   = tlBullBreak and tlBullConf >= minConfidence
+tlBearAlert   = tlBearBreak and tlBearConf >= minConfidence
+
+// ───────────────────────────────────────────────────────────────────────────────
+// SIGNAL LABELS (same as Phase 2)
+// ───────────────────────────────────────────────────────────────────────────────
+
+labelOffset = atr14 * 1.2
+
+if showSignalLabels and barstate.isconfirmed
+    if bullZoneAlert
+        label.new(bar_index, low - labelOffset, "ZONE REJ ▲\n" + str.tostring(bullZoneConf) + "%",
+                  color=color.new(#26a69a, 20), textcolor=color.white, size=size.small, style=label.style_label_up)
+    if bearZoneAlert
+        label.new(bar_index, high + labelOffset, "ZONE REJ ▼\n" + str.tostring(bearZoneConf) + "%",
+                  color=color.new(#ef5350, 20), textcolor=color.white, size=size.small, style=label.style_label_down)
+    if pdhAlert
+        label.new(bar_index, high + labelOffset, "PDH BO ▲\n" + str.tostring(pdhConf) + "%",
+                  color=color.new(#1976d2, 20), textcolor=color.white, size=size.small, style=label.style_label_down)
+    if pdlAlert
+        label.new(bar_index, low - labelOffset, "PDL BO ▼\n" + str.tostring(pdlConf) + "%",
+                  color=color.new(#c62828, 20), textcolor=color.white, size=size.small, style=label.style_label_up)
+    if tlBullAlert
+        label.new(bar_index, high + labelOffset, "TL BREAK ▲\n" + str.tostring(tlBullConf) + "%",
+                  color=color.new(#00796b, 20), textcolor=color.white, size=size.small, style=label.style_label_down)
+    if tlBearAlert
+        label.new(bar_index, low - labelOffset, "TL BREAK ▼\n" + str.tostring(tlBearConf) + "%",
+                  color=color.new(#b71c1c, 20), textcolor=color.white, size=size.small, style=label.style_label_up)
+    if bullBOS
+        label.new(bar_index, high + labelOffset * 0.6, "BOS ▲",
+                  color=color.new(#26a69a, 50), textcolor=#26a69a, size=size.tiny, style=label.style_label_down)
+    if bearBOS
+        label.new(bar_index, low - labelOffset * 0.6, "BOS ▼",
+                  color=color.new(#ef5350, 50), textcolor=#ef5350, size=size.tiny, style=label.style_label_up)
+
+// ───────────────────────────────────────────────────────────────────────────────
+// WEBHOOK PAYLOAD BUILDER
+// Generates a compact JSON string for each setup.
+// TradingView sends this as the POST body to your webhook URL.
+// The FuturesEdge server at /api/tv-webhook parses it and calls Claude.
+// ───────────────────────────────────────────────────────────────────────────────
+
+// ATR-based SL/TP estimates
+// Bullish: SL = 1 ATR below close, TP = RR * 1 ATR above close
+// Bearish: SL = 1 ATR above close, TP = RR * 1 ATR below close
+// These are rough estimates — the server may refine them using its own analysis
+
+_rr = str.contains(syminfo.ticker, "MGC") ? mgcRR : mnqRR
+
+_bullSL = close - atr14
+_bullTP = close + _rr * atr14
+_bearSL = close + atr14
+_bearTP = close - _rr * atr14
+
+_regime = bullishStack ? "bullish" : bearishStack ? "bearish" : "neutral"
+_htf    = bull15m ? "bullish" : bear15m ? "bearish" : "neutral"
+_sess   = isRTH ? "rth" : "extended"
+_vwapP  = close > vwapVal ? "above" : "below"
+
+// Build the JSON payload as a string
+// All dynamic Pine values are computed; only {{ticker}}, {{interval}}, {{time}}
+// are TradingView template variables (resolved at alert fire time)
+_buildPayload(setup, dir, conf, sl, tp) =>
+    '{"source":"tradingview"' +
+    ',"sym":"{{ticker}}"' +
+    ',"tf":"{{interval}}"' +
+    ',"ts":"{{time}}"' +
+    ',"setup":"' + setup + '"' +
+    ',"dir":"' + dir + '"' +
+    ',"conf":' + str.tostring(conf) +
+    ',"price":' + str.tostring(close, format.mintick) +
+    ',"sl":' + str.tostring(sl, format.mintick) +
+    ',"tp":' + str.tostring(tp, format.mintick) +
+    ',"atr":' + str.tostring(atr14, format.mintick) +
+    ',"regime":"' + _regime + '"' +
+    ',"htf15":"' + _htf + '"' +
+    ',"vwap":"' + _vwapP + '"' +
+    ',"vwapVal":' + str.tostring(vwapVal, format.mintick) +
+    ',"ema9":' + str.tostring(ema9, format.mintick) +
+    ',"ema21":' + str.tostring(ema21, format.mintick) +
+    ',"ema50":' + str.tostring(ema50, format.mintick) +
+    ',"pdh":' + str.tostring(prevDayHigh, format.mintick) +
+    ',"pdl":' + str.tostring(prevDayLow, format.mintick) +
+    ',"sess":"' + _sess + '"}'
+
+// ───────────────────────────────────────────────────────────────────────────────
+// alertcondition() — standard TradingView alerts (same as Phase 2)
+// ───────────────────────────────────────────────────────────────────────────────
+
+alertcondition(bullZoneAlert,
+               title="FE · Bullish Zone Rejection",
+               message="[FuturesEdge] BULLISH ZONE REJECTION | {{ticker}} {{interval}} | Price: {{close}} | Conf: " + str.tostring(bullZoneConf) + "%")
+
+alertcondition(bearZoneAlert,
+               title="FE · Bearish Zone Rejection",
+               message="[FuturesEdge] BEARISH ZONE REJECTION | {{ticker}} {{interval}} | Price: {{close}} | Conf: " + str.tostring(bearZoneConf) + "%")
+
+alertcondition(pdhAlert,
+               title="FE · PDH Breakout",
+               message="[FuturesEdge] PDH BREAKOUT ▲ | {{ticker}} {{interval}} | Close: {{close}} | Conf: " + str.tostring(pdhConf) + "%")
+
+alertcondition(pdlAlert,
+               title="FE · PDL Breakout",
+               message="[FuturesEdge] PDL BREAKOUT ▼ | {{ticker}} {{interval}} | Close: {{close}} | Conf: " + str.tostring(pdlConf) + "%")
+
+alertcondition(tlBullAlert,
+               title="FE · Bullish TL Break",
+               message="[FuturesEdge] TL BREAK ▲ | {{ticker}} {{interval}} | Close: {{close}} | Conf: " + str.tostring(tlBullConf) + "%")
+
+alertcondition(tlBearAlert,
+               title="FE · Bearish TL Break",
+               message="[FuturesEdge] TL BREAK ▼ | {{ticker}} {{interval}} | Close: {{close}} | Conf: " + str.tostring(tlBearConf) + "%")
+
+// ── Webhook alerts — use these when creating alerts with Webhook URL ──────────
+// In TradingView: Create Alert → Notifications → Enable Webhook URL
+// Set webhook URL to: http://<your-server>:3000/api/tv-webhook
+// For the "Message" field, use one of these alert conditions and set the
+// message to the JSON payload string.
+//
+// RECOMMENDED: Create one alert per setup type using the alertcondition above,
+// and paste the corresponding JSON payload as the alert message manually.
+// Example payload for Zone Rejection:
+//   {"source":"tradingview","sym":"MNQ1!","tf":"5","setup":"zone_rejection","dir":"bullish",...}
+
+alertcondition(bullZoneAlert,
+               title="FE · Webhook: Bull Zone Rej",
+               message=_buildPayload("zone_rejection", "bullish", bullZoneConf, _bullSL, _bullTP))
+
+alertcondition(bearZoneAlert,
+               title="FE · Webhook: Bear Zone Rej",
+               message=_buildPayload("zone_rejection", "bearish", bearZoneConf, _bearSL, _bearTP))
+
+alertcondition(pdhAlert,
+               title="FE · Webhook: PDH Breakout",
+               message=_buildPayload("pdh_breakout", "bullish", pdhConf, _bullSL, _bullTP))
+
+alertcondition(pdlAlert,
+               title="FE · Webhook: PDL Breakout",
+               message=_buildPayload("pdl_breakout", "bearish", pdlConf, _bearSL, _bearTP))
+
+alertcondition(tlBullAlert,
+               title="FE · Webhook: Bull TL Break",
+               message=_buildPayload("trendline_break", "bullish", tlBullConf, _bullSL, _bullTP))
+
+alertcondition(tlBearAlert,
+               title="FE · Webhook: Bear TL Break",
+               message=_buildPayload("trendline_break", "bearish", tlBearConf, _bearSL, _bearTP))
+
+// ───────────────────────────────────────────────────────────────────────────────
+// RECENT SIGNALS PANEL + INFO TABLE (same as Phase 2)
+// ───────────────────────────────────────────────────────────────────────────────
+
+var string[] sigLog = array.new<string>()
+
+if barstate.isconfirmed
+    newSig = ""
+    if bullZoneAlert
+        newSig := "Zone Rej ▲ " + str.tostring(bullZoneConf) + "%"
+    if bearZoneAlert
+        newSig := "Zone Rej ▼ " + str.tostring(bearZoneConf) + "%"
+    if pdhAlert
+        newSig := "PDH Break ▲ " + str.tostring(pdhConf) + "%"
+    if pdlAlert
+        newSig := "PDL Break ▼ " + str.tostring(pdlConf) + "%"
+    if tlBullAlert
+        newSig := "TL Break ▲ " + str.tostring(tlBullConf) + "%"
+    if tlBearAlert
+        newSig := "TL Break ▼ " + str.tostring(tlBearConf) + "%"
+    if bullBOS
+        newSig := "BOS ▲"
+    if bearBOS
+        newSig := "BOS ▼"
+    if newSig != ""
+        array.unshift(sigLog, str.tostring(bar_index, "#") + "  " + newSig)
+        if array.size(sigLog) > 5
+            array.pop(sigLog)
+
+var table sigTable = table.new(position.bottom_right, 1, 8,
+    bgcolor=color.new(#0d0f1a, 72), border_width=1, border_color=color.new(color.gray, 65))
+
+if showSignalPanel and barstate.islast
+    table.cell(sigTable, 0, 0, "Signals → AI Commentary", text_color=color.new(#00bcd4, 20),
+               text_size=size.tiny, bgcolor=color.new(#0d0f1a, 50))
+    for i = 0 to 4
+        txt = i < array.size(sigLog) ? array.get(sigLog, i) : "—"
+        clr = i == 0 ? color.white : color.new(color.white, 50)
+        table.cell(sigTable, 0, i + 1, txt, text_color=clr, text_size=size.tiny)
+    table.cell(sigTable, 0, 6, "Webhook → FuturesEdge server", text_color=color.new(#00bcd4, 40), text_size=size.tiny)
+    table.cell(sigTable, 0, 7, "Min conf: " + str.tostring(minConfidence) + "% · " + syminfo.ticker + " " + timeframe.period,
+               text_color=color.new(color.white, 60), text_size=size.tiny)
+
+var table infoTbl = table.new(position.top_right, 2, 7,
+    bgcolor=color.new(#0d0f1a, 72), border_width=1, border_color=color.new(color.gray, 65))
+
+if showTable and barstate.islast
+    DIM = color.new(color.white, 55)
+    SML = size.tiny
+    regimeTxt   = bullishStack ? "▲ BULLISH" : bearishStack ? "▼ BEARISH" : "◆ NEUTRAL"
+    regimeColor = bullishStack ? #26a69a : bearishStack ? #ef5350 : #78909c
+    htfTxt      = bull15m ? "▲ Bull" : bear15m ? "▼ Bear" : "◆ Neut"
+    htfColor    = bull15m ? #26a69a : bear15m ? #ef5350 : #78909c
+
+    table.cell(infoTbl, 0, 0, "REGIME",  text_color=DIM, text_size=SML)
+    table.cell(infoTbl, 1, 0, regimeTxt, text_color=regimeColor, text_size=SML)
+    table.cell(infoTbl, 0, 1, "15m EMA", text_color=DIM, text_size=SML)
+    table.cell(infoTbl, 1, 1, htfTxt, text_color=htfColor, text_size=SML)
+    table.cell(infoTbl, 0, 2, "vs VWAP", text_color=DIM, text_size=SML)
+    table.cell(infoTbl, 1, 2, close > vwapVal ? "▲ Above" : "▼ Below",
+               text_color=close > vwapVal ? #26a69a : #ef5350, text_size=SML)
+    table.cell(infoTbl, 0, 3, "EMA 9",   text_color=DIM, text_size=SML)
+    table.cell(infoTbl, 1, 3, str.tostring(ema9, format.mintick), text_color=ema9Color, text_size=SML)
+    table.cell(infoTbl, 0, 4, "EMA 21",  text_color=DIM, text_size=SML)
+    table.cell(infoTbl, 1, 4, str.tostring(ema21, format.mintick), text_color=ema21Color, text_size=SML)
+    table.cell(infoTbl, 0, 5, "EMA 50",  text_color=DIM, text_size=SML)
+    table.cell(infoTbl, 1, 5, str.tostring(ema50, format.mintick), text_color=ema50Color, text_size=SML)
+    table.cell(infoTbl, 0, 6, "ATR 14",  text_color=DIM, text_size=SML)
+    table.cell(infoTbl, 1, 6, str.tostring(atr14, format.mintick), text_color=color.white, text_size=SML)

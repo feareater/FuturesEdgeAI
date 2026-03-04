@@ -14,10 +14,12 @@ const path = require('path');
 const SEED_DIR = path.join(__dirname, '..', '..', 'data', 'seed');
 
 // Yahoo Finance symbols for the contracts we care about.
-// NQ=F and GC=F are the full-size contracts — price is identical to MNQ/MGC.
+// Full-size front-month contracts — price is identical to the micro versions.
 const SYMBOLS = {
   MNQ: 'NQ=F',
   MGC: 'GC=F',
+  MES: 'ES=F',
+  MCL: 'CL=F',
 };
 
 // Yahoo Finance supports: 1m (max 7d), 2m (max 60d), 5m (max 60d), 15m/30m (max 60d).

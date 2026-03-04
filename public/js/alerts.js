@@ -10,12 +10,18 @@
   // ── Contract specs — tick-based (per exchange spec) ──────────────────────
   // MNQ: tick = 0.25 pts, tick value = $0.50/contract  →  $2.00 / point
   // MGC: tick = 0.10 pts, tick value = $1.00/contract  →  $10.00 / point
-  const TICK_SIZE  = { MNQ: 0.25,  MGC: 0.10 };
-  const TICK_VALUE = { MNQ: 0.50,  MGC: 1.00  };
+  // MES: tick = 0.25 pts, tick value = $1.25/contract  →  $5.00 / point
+  // MCL: tick = 0.01 pts, tick value = $1.00/contract  →  $100 / point
+  const TICK_SIZE  = { MNQ: 0.25, MGC: 0.10, MES: 0.25, MCL: 0.01 };
+  const TICK_VALUE = { MNQ: 0.50, MGC: 1.00, MES: 1.25, MCL: 1.00 };
 
   // ── Settings (loaded from server defaults, overridden by localStorage) ─────
-  let cfg = { mnqContracts: 5, mgcContracts: 3, maxRiskDollars: 200, rrRatio: 2.0 };
+  let cfg = { mnqContracts: 5, mgcContracts: 3, mesContracts: 2, mclContracts: 2,
+              maxRiskDollars: 200, rrRatio: 2.0, features: {} };
   let minConf = 65;
+
+  // Sound alerts enabled flag (toggleable by feature panel)
+  window._soundAlertsEnabled = false;
 
   // ── Active chart view — synced from chart.js via chartViewChange event ──────
   let activeSymbol = 'MNQ';
@@ -52,6 +58,14 @@
   // ── Mobile tab DOM refs ────────────────────────────────────────────────────
   const rightPanel      = document.getElementById('right-panel');
   const tabAlertBadge   = document.getElementById('tab-alert-badge');
+
+  // ── AutoTrader DOM refs ────────────────────────────────────────────────────
+  const atToggleBtn    = document.getElementById('at-toggle-btn');
+  const atStatusDot    = document.getElementById('at-status-dot');
+  const atPositionRow  = document.getElementById('at-position-row');
+  const atSummaryRow   = document.getElementById('at-summary-row');
+  const atMinConfInput = document.getElementById('at-min-conf');
+  const atLastOrderEl  = document.getElementById('at-last-order');
 
   // ── Data freshness display + countdown ────────────────────────────────────
 
@@ -95,6 +109,119 @@
       sessionBadgeEl.textContent = label;
       sessionBadgeEl.className   = `session-badge ${cls}`;
     }
+    // Update calendar event countdown badge
+    if (cfg.features?.economicCalendar) _updateCalendarBadge();
+    // Update RS widget
+    if (cfg.features?.relativeStrength && (activeSymbol === 'MNQ' || activeSymbol === 'MES')) {
+      _updateRSWidget();
+    }
+  }
+
+  // ── Calendar event badge ────────────────────────────────────────────────────
+
+  const calendarBadgeEl = document.getElementById('calendar-badge');
+
+  async function _updateCalendarBadge() {
+    try {
+      const res = await fetch(`/api/calendar?symbol=${activeSymbol}`);
+      if (!res.ok) return;
+      const { events } = await res.json();
+      const now   = Date.now() / 1000;
+      const limit = now + 3 * 3600; // 3h window
+      const next  = events.find(e => e.impact === 'high' && e.time >= now && e.time <= limit);
+      if (!calendarBadgeEl) return;
+      if (next) {
+        const minsAway = Math.round((next.time - now) / 60);
+        const display  = minsAway >= 60
+          ? `${Math.floor(minsAway / 60)}h ${minsAway % 60}m`
+          : `${minsAway}m`;
+        calendarBadgeEl.textContent = `⚠ ${next.title.split(' ').slice(0, 2).join(' ')} in ${display}`;
+        calendarBadgeEl.style.display = '';
+      } else {
+        calendarBadgeEl.style.display = 'none';
+      }
+    } catch (_) {}
+  }
+
+  // ── RS (Relative Strength) widget ──────────────────────────────────────────
+
+  const rsWidget = document.getElementById('rs-widget');
+  const rsRatioEl = document.getElementById('rs-ratio');
+  const rsSignalEl = document.getElementById('rs-signal');
+
+  async function _updateRSWidget() {
+    try {
+      const res = await fetch('/api/relativestrength?base=MNQ&compare=MES');
+      if (!res.ok) return;
+      const { ratio, correlation, signal } = await res.json();
+      if (!rsWidget) return;
+      rsWidget.style.display = '';
+      if (rsRatioEl) {
+        rsRatioEl.textContent = ratio?.toFixed(3) ?? '—';
+        rsRatioEl.className   = 'rs-ratio' + (ratio > 1.02 ? ' rs-leading' : ratio < 0.98 ? ' rs-lagging' : '');
+      }
+      if (rsSignalEl) {
+        const labels = { mnq_leading: 'MNQ ▲', mes_leading: 'MES ▲', neutral: 'Neutral' };
+        rsSignalEl.textContent = labels[signal] ?? signal;
+        rsSignalEl.className   = 'rs-signal ' + (signal === 'mnq_leading' ? 'rs-bull' : signal === 'mes_leading' ? 'rs-bear' : '');
+      }
+    } catch (_) {}
+  }
+
+  // ── Correlation heatmap ─────────────────────────────────────────────────────
+
+  const CORR_SYMBOLS = ['MNQ', 'MGC', 'MES', 'MCL'];
+
+  async function _updateCorrelationHeatmap() {
+    const grid = document.getElementById('corr-grid');
+    const upd  = document.getElementById('corr-updated');
+    if (!grid) return;
+    try {
+      const res = await fetch('/api/correlation');
+      if (!res.ok) return;
+      const { matrix, updatedAt } = await res.json();
+      if (!matrix) return;
+      grid.innerHTML = '';
+
+      // Header row
+      const headers = ['', ...CORR_SYMBOLS];
+      for (const h of headers) {
+        const cell = document.createElement('div');
+        cell.className   = 'corr-cell corr-header';
+        cell.textContent = h;
+        grid.appendChild(cell);
+      }
+      // Data rows
+      for (const rowSym of CORR_SYMBOLS) {
+        const rowLabel = document.createElement('div');
+        rowLabel.className   = 'corr-cell corr-header';
+        rowLabel.textContent = rowSym;
+        grid.appendChild(rowLabel);
+
+        for (const colSym of CORR_SYMBOLS) {
+          const val  = matrix[rowSym]?.[colSym] ?? 0;
+          const cell = document.createElement('div');
+          cell.className   = 'corr-cell';
+          cell.textContent = val.toFixed(2);
+          // Color: green (+1) → gray (0) → red (-1)
+          const r = val < 0 ? Math.round(-val * 180) : 0;
+          const g = val > 0 ? Math.round(val  * 150) : 0;
+          const b = 0;
+          cell.style.background = `rgba(${r},${g},${b},0.6)`;
+          cell.style.color = Math.abs(val) > 0.5 ? '#fff' : 'var(--text-dim)';
+          cell.title = `${rowSym}↔${colSym}: ${val.toFixed(3)}`;
+          grid.appendChild(cell);
+        }
+      }
+      if (upd && updatedAt) {
+        const t = new Date(updatedAt).toLocaleTimeString('en-US', {
+          hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/Denver',
+        });
+        upd.textContent = t;
+      }
+    } catch (err) {
+      console.warn('[corr] Update failed:', err.message);
+    }
   }
 
   // ── Alert key helper ───────────────────────────────────────────────────────
@@ -104,6 +231,16 @@
   }
 
   // ── New alert banner ───────────────────────────────────────────────────────
+
+  function _showFillToast(text) {
+    const existing = document.querySelector('.sim-fill-toast');
+    if (existing) existing.remove();
+    const toast = document.createElement('div');
+    toast.className   = 'sim-fill-toast';
+    toast.textContent = text;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 5000);
+  }
 
   function _showNewAlertBanner(count) {
     const existing = document.querySelector('.new-alert-banner');
@@ -138,6 +275,30 @@
     _switchTab('chart');
   }
 
+  // ── Sound alerts (Web Audio API) ──────────────────────────────────────────
+
+  function _playAlertSound(direction) {
+    if (!window._soundAlertsEnabled) return;
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const f1 = direction === 'bullish' ? 440 : 550;
+      const f2 = direction === 'bullish' ? 550 : 440;
+
+      [f1, f2].forEach((freq, i) => {
+        const osc  = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type      = 'sine';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.3, ctx.currentTime + i * 0.15);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.15 + 0.25);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(ctx.currentTime + i * 0.15);
+        osc.stop(ctx.currentTime  + i * 0.15 + 0.3);
+      });
+    } catch (_) {}
+  }
+
   // ── Boot ────────────────────────────────────────────────────────────────────
 
   async function boot() {
@@ -145,8 +306,9 @@
     try {
       const res = await fetch('/api/settings');
       if (res.ok) {
-        const { risk } = await res.json();
-        cfg = { ...cfg, ...risk };
+        const { risk, features } = await res.json();
+        cfg = { ...cfg, ...risk, features: features || {} };
+        window._soundAlertsEnabled = !!features?.soundAlerts;
       }
     } catch (_) {}
 
@@ -191,9 +353,17 @@
     connectWS();
     _wireInputs();
     _initMobileTabs();
+    _initAutotrader();
     _updateSessionBadge();
     setInterval(_updateSessionBadge, 60_000);
     setInterval(_tickDataAge, 1000);  // live countdown
+
+    // Initial correlation heatmap + calendar loads
+    if (cfg.features?.correlationHeatmap) _updateCorrelationHeatmap();
+    if (cfg.features?.economicCalendar)   _updateCalendarBadge();
+    if (cfg.features?.relativeStrength && (activeSymbol === 'MNQ' || activeSymbol === 'MES')) {
+      _updateRSWidget();
+    }
 
     // Listen for chart symbol/TF changes (dispatched by chart.js after each loadData)
     document.addEventListener('chartViewChange', (e) => {
@@ -204,6 +374,13 @@
       // fetchAndRender will re-populate with the correct alerts for the new view.
       _syncChartMarkers();
       fetchAndRender();
+      // RS widget only relevant for equity index symbols
+      const rsWidget = document.getElementById('rs-widget');
+      if (rsWidget) rsWidget.style.display = (activeSymbol === 'MNQ' || activeSymbol === 'MES') ? '' : 'none';
+      if (cfg.features?.relativeStrength && (activeSymbol === 'MNQ' || activeSymbol === 'MES')) {
+        _updateRSWidget();
+      }
+      if (cfg.features?.economicCalendar) _updateCalendarBadge();
     });
 
     // Listen for chart marker clicks — scroll to and highlight the matching alert card
@@ -341,8 +518,12 @@
   function _calcRisk(alert) {
     const pts = alert.setup.riskPoints;
     if (pts == null || !TICK_SIZE[alert.symbol]) return null;
-    const contracts = alert.symbol === 'MNQ' ? cfg.mnqContracts : cfg.mgcContracts;
-    const ticks     = pts / TICK_SIZE[alert.symbol];
+    const contracts = alert.symbol === 'MNQ' ? cfg.mnqContracts
+                    : alert.symbol === 'MGC' ? cfg.mgcContracts
+                    : alert.symbol === 'MES' ? cfg.mesContracts
+                    : alert.symbol === 'MCL' ? cfg.mclContracts
+                    : 1;
+    const ticks = pts / TICK_SIZE[alert.symbol];
     return Math.round(ticks * TICK_VALUE[alert.symbol] * contracts);
   }
 
@@ -415,6 +596,7 @@
       `  <span class="alert-type">${_fmtType(setup.type)}</span>`,
       `  <span class="alert-dir ${dirClass}">${dirArrow}</span>`,
       suppressed ? `  <span class="alert-suppressed-tag">filtered</span>` : '',
+      setup.nearEvent ? `  <span class="near-event-badge">⚠ Near Event</span>` : '',
       `</div>`,
       `<div class="alert-rationale">${setup.rationale}</div>`,
       _fmtBreakdown(setup.scoreBreakdown),
@@ -622,6 +804,7 @@
       case 'choch':                    return 'CHoCH';
       case 'pdh_breakout':             return 'PDH Brk';
       case 'trendline_break':          return 'TL Break';
+      case 'or_breakout':              return 'OR Break';
       default:                         return type;
     }
   }
@@ -724,6 +907,79 @@
     }
   }
 
+  // ── AutoTrader status polling ──────────────────────────────────────────────
+
+  async function _pollAutotrader() {
+    try {
+      const res = await fetch('/api/autotrader/status');
+      if (!res.ok) return;
+      _applyAutotraderState(await res.json());
+    } catch (_) {}
+  }
+
+  function _applyAutotraderState({ enabled, minConfidence, lastOrder, authError, positions, summary }) {
+    if (!atToggleBtn || !atStatusDot) return;
+
+    const cls = enabled && !authError ? 'at-live' : authError ? 'at-error' : 'at-paused';
+    atStatusDot.className   = `at-dot ${cls}`;
+    atToggleBtn.className   = `at-toggle-btn ${cls}`;
+    atToggleBtn.textContent = enabled && !authError ? 'LIVE' : authError ? 'AUTH ERR' : 'PAUSED';
+
+    // Open positions row
+    const open = (positions || []).filter(p => p.netPos !== 0);
+    if (atPositionRow) {
+      atPositionRow.textContent = open.length
+        ? open.map(p => `${p.symbol} ${p.netPos > 0 ? '+' : ''}${p.netPos} @ ${p.avgPrice}`).join(' · ')
+        : 'No open positions';
+      atPositionRow.className = `at-position-row${open.length ? ' has-position' : ''}`;
+    }
+
+    // P&L summary row
+    if (atSummaryRow && summary && summary.trades > 0) {
+      const pnlSign  = summary.totalPnl >= 0 ? '+' : '';
+      const pnlColor = summary.totalPnl >= 0 ? 'var(--bull)' : 'var(--bear)';
+      atSummaryRow.innerHTML =
+        `<span style="color:var(--text-dim)">Sim: ${summary.trades}T</span>` +
+        `&nbsp;${summary.won}W / ${summary.lost}L` +
+        (summary.winRate !== null ? `&nbsp;<span style="color:var(--text-dim)">${summary.winRate}% WR</span>` : '') +
+        `&nbsp;·&nbsp;<span style="color:${pnlColor};font-weight:700">${pnlSign}$${summary.totalPnl}</span>`;
+    } else if (atSummaryRow) {
+      atSummaryRow.textContent = '';
+    }
+
+    if (lastOrder && atLastOrderEl) {
+      atLastOrderEl.textContent =
+        `Last: ${lastOrder.symbol} ${lastOrder.direction === 'bullish' ? '▲' : '▼'} #${lastOrder.orderId}`;
+    }
+    if (atMinConfInput && minConfidence != null) atMinConfInput.value = minConfidence;
+  }
+
+  function _initAutotrader() {
+    // Toggle button
+    atToggleBtn?.addEventListener('click', async () => {
+      const nowLive = atToggleBtn.classList.contains('at-live');
+      await fetch('/api/autotrader/toggle', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ enabled: !nowLive }),
+      });
+      _pollAutotrader();
+    });
+
+    // Min-confidence input
+    atMinConfInput?.addEventListener('change', () => {
+      fetch('/api/autotrader/settings', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ minConfidence: parseInt(atMinConfInput.value) }),
+      });
+    });
+
+    // Initial poll + 10-second refresh
+    _pollAutotrader();
+    setInterval(_pollAutotrader, 10_000);
+  }
+
   // ── WebSocket ──────────────────────────────────────────────────────────────
 
   let _wsRetryDelay = 1000;
@@ -756,7 +1012,33 @@
       try {
         const msg = JSON.parse(event.data);
         if (msg.type === 'setup') {
+          // Play sound alert if enabled and confidence passes user filter
+          if (window._soundAlertsEnabled && (msg.setup?.confidence ?? 0) >= minConf) {
+            _playAlertSound(msg.setup?.direction);
+          }
           fetchAndRender(); // re-fetch to keep trade filter accurate
+        }
+        if (msg.type === 'order') {
+          // A virtual order was placed — flash the last-order display
+          if (atLastOrderEl) {
+            atLastOrderEl.textContent =
+              `✓ ${msg.symbol} ${msg.direction === 'bullish' ? '▲' : '▼'} placed`;
+            atLastOrderEl.style.color = 'var(--bull)';
+            setTimeout(() => {
+              atLastOrderEl.style.color = '';
+              _pollAutotrader();
+            }, 4000);
+          }
+        }
+        if (msg.type === 'sim_fill') {
+          // Simulator position closed — show a toast and refresh stats
+          const won  = msg.status === 'hit_tp';
+          const sign = msg.pnl >= 0 ? '+' : '';
+          _showFillToast(
+            `${won ? '✓' : '✗'} ${msg.symbol} ${won ? 'TP HIT' : 'SL HIT'} · ${sign}$${msg.pnl}`
+          );
+          _pollAutotrader();
+          fetchAndRender();
         }
         if (msg.type === 'data_refresh') {
           // Snapshot prev keys before refetch so new cards can be highlighted
@@ -765,6 +1047,8 @@
           fetchAndRender();            // re-fetch alert feed (open outcomes may have resolved)
           _setRefreshTimes(msg.ts, msg.nextRefresh);
           if (msg.newAlerts > 0) _showNewAlertBanner(msg.newAlerts);
+          // Refresh correlation heatmap on data refresh
+          if (cfg.features?.correlationHeatmap) _updateCorrelationHeatmap();
         }
         if (msg.type === 'refresh_schedule') {
           // Server rescheduled the interval (e.g. settings change) — sync countdown + select

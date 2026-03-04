@@ -7,7 +7,7 @@
 
 FuturesEdge AI is a browser-based trading analysis dashboard for a single user (Jeff) — an active retail futures trader. It connects to live market data, detects high-probability trade setups in real time, and provides AI-generated commentary to support — not replace — manual trade decisions.
 
-**It does NOT execute trades. Ever.**
+**It executes paper/demo trades only — via Tradovate Demo API (`demo.tradovateapi.com`). It must NEVER place orders against a live/production brokerage endpoint.**
 
 ---
 
@@ -15,7 +15,9 @@ FuturesEdge AI is a browser-based trading analysis dashboard for a single user (
 
 - **MNQ** — Micro E-mini Nasdaq-100 Futures
 - **MGC** — Micro Gold Futures
-- Timeframes: 1m, 2m, 3m, 5m, 15m (all active simultaneously)
+- **MES** — Micro E-mini S&P 500 Futures
+- **MCL** — Micro Crude Oil Futures
+- Active scan timeframes: **5m, 15m, 30m** (1m/2m/3m removed — stale with 15-min delayed seed data)
 
 ---
 
@@ -41,42 +43,61 @@ FuturesEdge AI is a browser-based trading analysis dashboard for a single user (
 ```
 FuturesEdgeAI/
 ├── CLAUDE.md                  ← You are here
+├── CHANGELOG.md               ← Version history of all changes
 ├── package.json
 ├── .env                       ← API keys — never commit this
 ├── .gitignore
 ├── server/
-│   ├── index.js               ← Express server entry point
+│   ├── index.js               ← Express server entry point; all API routes; scan engine
 │   ├── auth/
 │   │   └── tradovate.js       ← OAuth + session token management
 │   ├── data/
 │   │   ├── snapshot.js        ← OHLCV fetch + candle normalization (source-agnostic)
-│   │   └── seedFetch.js       ← One-time script: fetches Yahoo Finance data → data/seed/
+│   │   ├── seedFetch.js       ← Yahoo Finance seed data fetch (MNQ/MGC/MES/MCL)
+│   │   └── calendar.js        ← ForexFactory economic calendar (1h cache)
 │   ├── analysis/
-│   │   ├── indicators.js      ← EMA, VWAP, ATR, PDH/PDL, swings
+│   │   ├── indicators.js      ← EMA, VWAP, ATR, PDH/PDL, swings, VP, OR, sessions
 │   │   ├── regime.js          ← Market regime classification
 │   │   ├── trendlines.js      ← Significance-ranked trendline detection
 │   │   ├── iof.js             ← FVG + Order Block detection
-│   │   ├── setups.js          ← Setup detection (sweep, OB reject, BOS/CHoCH)
-│   │   └── confluence.js      ← Multi-timeframe confluence scoring
+│   │   ├── setups.js          ← zone_rejection, pdh_breakout, trendline_break, or_breakout
+│   │   ├── confluence.js      ← Multi-TF zone stack scoring
+│   │   ├── volumeProfile.js   ← Session POC/VAH/VAL (70% value area)
+│   │   ├── openingRange.js    ← RTH Opening Range (09:30–10:00 ET)
+│   │   ├── sessionLevels.js   ← Asian + London session H/L
+│   │   ├── relativeStrength.js← MNQ vs MES normalized ratio + Pearson correlation
+│   │   ├── correlation.js     ← 4×4 pairwise rolling correlation matrix
+│   │   └── performanceStats.js← WR/PF/avgR by symbol, setup, TF, hour, direction
 │   ├── ai/
 │   │   └── commentary.js      ← Claude API prompt builder + caller
+│   ├── trading/
+│   │   ├── autotrader.js      ← Kill-switch state machine for paper trading
+│   │   └── simulator.js       ← Virtual position tracker (SL/TP fill simulation)
 │   └── storage/
-│       └── log.js             ← JSON setup report writer
+│       └── log.js             ← Alert, commentary, and trade log persistence
 ├── public/
-│   ├── index.html             ← Dashboard entry point
+│   ├── index.html             ← Main dashboard
+│   ├── commentary.html        ← AI analysis page
+│   ├── performance.html       ← Performance analytics (WR stats, ToD heat map)
+│   ├── backtest.html          ← Alert replay / step-through backtester
+│   ├── docs.html              ← Setup guide
 │   ├── css/
-│   │   └── dashboard.css
-│   └── js/
-│       ├── chart.js           ← TradingView Lightweight Charts renderer
-│       ├── layers.js          ← Layer toggle control panel
-│       └── alerts.js          ← Alert feed + commentary panel UI
+│   │   ├── dashboard.css      ← Main dashboard styles
+│   │   ├── performance.css    ← Performance page styles
+│   │   └── backtest.css       ← Backtest page styles
+│   ├── js/
+│   │   ├── chart.js           ← TradingView chart renderer + all indicator overlays
+│   │   ├── layers.js          ← Layer toggles + feature toggle panel
+│   │   ├── alerts.js          ← Alert feed, WS, RS widget, calendar badge, sound alerts
+│   │   ├── performance.js     ← Performance analytics renderer
+│   │   └── backtest.js        ← Alert replay logic + P&L tracker
+│   ├── manifest.json          ← PWA manifest
+│   └── sw.js                  ← Service worker (cache-first shell, network-only /api/)
 ├── data/
-│   ├── seed/                  ← Generated OHLCV snapshots (run seedFetch.js to refresh)
-│   │   ├── MNQ_1m.json  MNQ_2m.json  MNQ_3m.json  MNQ_5m.json  MNQ_15m.json
-│   │   └── MGC_1m.json  MGC_2m.json  MGC_3m.json  MGC_5m.json  MGC_15m.json
-│   └── logs/                  ← Setup report JSON files stored here
+│   ├── seed/                  ← OHLCV snapshots (MNQ/MGC/MES/MCL × 5m/15m/30m)
+│   └── logs/                  ← alerts.json, commentary.json, trades.json
 └── config/
-    └── settings.json          ← User preferences + layer toggle states
+    └── settings.json          ← risk block + features block (10 hot-toggleable flags)
 ```
 
 ---
@@ -165,7 +186,9 @@ PORT=3000
 
 **Symbol-specific PDH R:R**
 - MNQ → 2:1 (`PDH_RR = 2.0`)
+- MES → 2:1 (`PDH_RR = 2.0`)
 - MGC → 1:1 (`PDH_RR = 1.0`)
+- MCL → 1.5:1 (`PDH_RR = 1.5`)
 
 ---
 
@@ -240,6 +263,10 @@ Default view (Reset to Default): all layers ON.
 | 4 | Claude AI commentary integration (on-demand + batch, persisted) | ✅ Complete |
 | 5 | Alert + commentary persistence, multi-TF confluence scoring (MNQ-only, analysis-driven) | ✅ Complete |
 | 6 | UI polish, error handling, session badge, WebSocket backoff, CLAUDE.md refinement | ✅ Complete |
+| 7 | MES + MCL instruments, OR breakout setup, feature flag architecture | ✅ Complete |
+| 8 | Volume Profile, Opening Range, Session Levels, Relative Strength, Correlation Matrix | ✅ Complete |
+| 9 | Economic Calendar (ForexFactory feed + gating), calendar badge, near-event alerts | ✅ Complete |
+| 10 | Performance analytics page, Alert Replay/Backtest page, sound alerts, RS widget | ✅ Complete |
 
 ---
 
@@ -279,7 +306,7 @@ git branch -d feature/ironbeam-live-data
 ## Coding Rules
 
 - **JavaScript only** — no Python, no TypeScript (keep it simple for now)
-- **No trade execution code** — ever, under any circumstances
+- **Demo/paper order execution only** — all order placement goes through `TRADOVATE_API_URL` which must always point to `demo.tradovateapi.com`. Never hardcode a live endpoint. See `server/trading/orders.js` and `server/trading/autotrader.js`.
 - **All API keys via `.env`** — never hardcoded
 - **Data layer is source-agnostic** — Tradovate and Ironbeam/CQG share the same normalized OHLCV interface so switching data sources is a config change only
 - **Indicators computed in code** — AI never invents or estimates price levels
@@ -290,12 +317,44 @@ git branch -d feature/ironbeam-live-data
 
 ## Current Phase
 
-**All 6 phases complete. Project is production-ready for seed-mode use.**
+**All 10 phases complete. Project is production-ready for seed-mode use.**
 
-**Phase 6 delivered:**
-- `public/index.html` — session badge (`RTH` / `Pre-market` / `After-hours`) + WebSocket status dot in topbar; R:R save feedback span
-- `public/css/dashboard.css` — session badge styles (green/amber/dim), WS dot (green/red/amber), contextual empty-state and error placeholder styles
-- `public/js/alerts.js` — session badge computed from UTC hour, updated every 60s; WebSocket reconnect with exponential backoff (1s → 2s → 4s … cap 30s) + jitter; alert fetch error shows "Retry" link; empty state provides context (minConf hint vs. initial scan); AI 503 rate-limit distinguished from generic error; R:R POST shows "Saved ✓" / "Error" for 2s
-- `CLAUDE.md` — phase table, signal scoring findings, alert schema v2.0
+### Feature Flags (`config/settings.json` → `features` block)
+
+All toggleable at runtime via `POST /api/features { "featureName": true|false }` — no restart needed.
+
+| Flag | Default | What it controls |
+|---|---|---|
+| `volumeProfile` | true | POC/VAH/VAL price lines on chart |
+| `openingRange` | true | OR Hi/Lo/Mid lines on chart + `or_breakout` setup detection |
+| `sessionLevels` | true | Asian/London session H/L lines on chart |
+| `economicCalendar` | true | ForexFactory feed, topbar badge, -20 confidence gating |
+| `relativeStrength` | true | MNQ vs MES RS widget in topbar |
+| `correlationHeatmap` | true | 4×4 correlation panel in sidebar |
+| `performanceStats` | true | `/performance.html` stats rendering |
+| `alertReplay` | true | `/backtest.html` date-range replay |
+| `soundAlerts` | **false** | Web Audio API two-tone on new alert |
+| `pushNotifications` | **false** | Reserved — not yet implemented |
+
+### New API Routes (v3.0)
+
+| Route | Purpose |
+|---|---|
+| `POST /api/features` | Hot-toggle feature flags (persisted) |
+| `GET /api/calendar?symbol=` | Upcoming high-impact events from ForexFactory |
+| `GET /api/correlation` | 4×4 pairwise rolling correlation matrix |
+| `GET /api/relativestrength` | MNQ/MES ratio, correlation, signal |
+| `GET /api/performance` | WR/PF/avgR by symbol, setup type, TF, hour, direction |
+| `GET /api/alerts?start=ISO&end=ISO` | Date-range filtered alerts (for backtest) |
+| `GET /api/settings` | Now returns `risk` + `features` |
+
+### Active Setup Types
+
+| Type | Code | Notes |
+|---|---|---|
+| Zone Rejection | `zone_rejection` | Primary — regime-gated |
+| PDH/PDL Breakout | `pdh_breakout` | RTH-gated (13:00–21:00 UTC) |
+| Trendline Break | `trendline_break` | ≥3 touches required |
+| OR Breakout | `or_breakout` | After 14:00 UTC, RTH only, first-close |
 
 **Next step when resuming:** integrate live Ironbeam/CQG WebSocket data feed (replace seed mode) per the data-source-agnostic interface in `server/data/snapshot.js`.
