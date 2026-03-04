@@ -193,10 +193,28 @@ html, body {
   letter-spacing: 0.3px;
 }
 
-/* ── Right panel (layers + alerts) ─────────────────────────────────────── */
+/* ── Left panel (alert feed) ────────────────────────────────────────────── */
+
+#left-panel {
+  width: 280px;
+  flex-shrink: 0;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#left-panel #alert-section {
+  flex: 1;
+  overflow: hidden;
+  border-bottom: none;
+}
+
+/* ── Right panel (layers + correlation) ─────────────────────────────────── */
 
 #right-panel {
-  width: 260px;
+  width: 220px;
   flex-shrink: 0;
   background: var(--bg-panel);
   border-left: 1px solid var(--border);
@@ -205,16 +223,15 @@ html, body {
   overflow: hidden;
 }
 
+#layers-section {
+  flex: 1;
+  overflow-y: auto;
+}
+
 .panel-section {
   display: flex;
   flex-direction: column;
   border-bottom: 1px solid var(--border);
-}
-
-#alert-section {
-  flex: 1;
-  overflow: hidden;
-  border-bottom: none;
 }
 
 .panel-header {
@@ -913,7 +930,22 @@ html, body {
 
   #chart-container { position: absolute; inset: 0; }
 
-  /* Right panel: in normal flow, fills #main when visible */
+  /* Left panel (alerts): in normal flow, fills #main when visible */
+  #left-panel {
+    position: static;
+    width: 100%;
+    flex: 1;
+    display: none;           /* hidden on chart tab */
+    border-right: none;
+    border-top: none;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    transition: none;
+    height: auto;
+    min-height: 0;
+  }
+
+  /* Right panel (layers): in normal flow, fills #main when visible */
   #right-panel {
     position: static;
     width: 100%;
@@ -931,15 +963,15 @@ html, body {
 
   /* ── Tab visibility ─────────────────────────────────────────────────── */
 
-  /* Alerts tab: show right-panel (alert section only) */
-  #app[data-mobile-tab="alerts"] #chart-wrap      { display: none; }
-  #app[data-mobile-tab="alerts"] #right-panel     { display: flex; }
-  #app[data-mobile-tab="alerts"] #layers-section  { display: none; }
+  /* Alerts tab: show left-panel (alert feed) */
+  #app[data-mobile-tab="alerts"] #chart-wrap  { display: none; }
+  #app[data-mobile-tab="alerts"] #left-panel  { display: flex; }
+  #app[data-mobile-tab="alerts"] #right-panel { display: none; }
 
-  /* Layers tab: show right-panel (layers section only) */
-  #app[data-mobile-tab="layers"] #chart-wrap      { display: none; }
-  #app[data-mobile-tab="layers"] #right-panel     { display: flex; }
-  #app[data-mobile-tab="layers"] #alert-section   { display: none; }
+  /* Layers tab: show right-panel (layers + features) */
+  #app[data-mobile-tab="layers"] #chart-wrap  { display: none; }
+  #app[data-mobile-tab="layers"] #left-panel  { display: none; }
+  #app[data-mobile-tab="layers"] #right-panel { display: flex; }
   #app[data-mobile-tab="layers"] .mobile-links-section { display: flex; }
 
   /* ── Layer list: 2-column grid ──────────────────────────────────────── */

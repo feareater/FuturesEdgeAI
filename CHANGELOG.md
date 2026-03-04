@@ -4,6 +4,21 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v3.2] — 2026-03-04 — Dashboard Layout Redesign
+
+### Updated — `public/index.html`
+- **Alert Feed moved to dedicated left panel** (`<aside id="left-panel">`, 280px) — alert feed, WR bar, AutoTrader panel, and filter controls now live on the left side of the chart instead of the right.
+- **Correlation Heatmap moved to top of right panel** — now always visible above the layer toggles instead of buried at the bottom below a scrollable list.
+- Right panel (`#right-panel`) narrowed to 220px and now contains only Correlation Heatmap + Layers/Features.
+
+### Updated — `public/css/dashboard.css`
+- Added `#left-panel` styles (280px, `border-right`).
+- `#left-panel #alert-section` given `flex: 1` so alert feed fills the panel.
+- `#layers-section` given `flex: 1` + `overflow-y: auto` so layers scroll within the right panel.
+- Mobile tab visibility updated: Alerts tab shows `#left-panel`; Layers tab shows `#right-panel`.
+
+---
+
 ## [v3.1] — 2026-03-04 — Guide Fully Updated for v3.0
 
 ### Updated — `public/docs.html`
