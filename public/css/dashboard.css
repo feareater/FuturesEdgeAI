@@ -437,9 +437,120 @@ html, body {
 .alert-card.bull { border-left-color: var(--bull); }
 .alert-card.bear { border-left-color: var(--bear); }
 
-/* Outcome overrides direction border for resolved trades */
-.alert-card.outcome-won  { border-left-color: var(--bull) !important; }
-.alert-card.outcome-lost { border-left-color: var(--bear) !important; }
+/* Outcome overrides direction border for resolved trades + adds background tint */
+.alert-card.outcome-won  {
+  border-left-color: var(--bull) !important;
+  background: rgba(38, 166, 154, 0.07) !important;
+}
+.alert-card.outcome-lost {
+  border-left-color: var(--bear) !important;
+  background: rgba(239, 83, 80, 0.07) !important;
+}
+
+/* Outcome badge in the alert header (shown on taken + resolved cards) */
+.outcome-header-badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  margin-left: auto;
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.outcome-header-badge.won  { color: var(--bull); background: rgba(38,166,154,0.12); }
+.outcome-header-badge.lost { color: var(--bear); background: rgba(239,83,80,0.12); }
+
+/* Won / Lost outcome buttons on taken-but-still-open cards */
+.outcome-btn {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: opacity 0.15s;
+}
+.outcome-btn:hover { opacity: 0.8; }
+.outcome-btn.won-btn  { background: rgba(38,166,154,0.18); color: var(--bull); border-color: rgba(38,166,154,0.35); }
+.outcome-btn.lost-btn { background: rgba(239,83,80,0.18);  color: var(--bear); border-color: rgba(239,83,80,0.35); }
+
+/* ＋ Log Trade button in panel header */
+.log-trade-btn {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 10px;
+  font-family: inherit;
+  padding: 2px 7px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.log-trade-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+/* Manual trade entry form */
+#manual-trade-form {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px;
+  margin: 4px 0;
+  font-size: 11px;
+}
+.manual-form-inner .mf-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 5px;
+  flex-wrap: wrap;
+}
+.manual-form-inner label { color: var(--text-dim); font-size: 10px; white-space: nowrap; }
+.filter-input.wide { width: 100px; text-align: left; }
+.mf-dir-toggle { display: flex; gap: 3px; }
+.mf-dir-btn {
+  font-size: 10px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.mf-dir-btn.active { background: rgba(255,255,255,0.1); color: var(--text); border-color: var(--accent); }
+.mf-btns { display: flex; gap: 6px; margin-top: 4px; }
+.mf-save {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 3px;
+  padding: 3px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.mf-cancel {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 3px;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+/* Manual trade card badge */
+.manual-badge {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+  background: rgba(255,255,255,0.08);
+  padding: 1px 4px;
+  border-radius: 2px;
+  text-transform: uppercase;
+}
 
 .alert-header {
   display: flex;

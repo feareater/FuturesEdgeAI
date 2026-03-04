@@ -44,7 +44,7 @@ function computeIndicators(candles, opts = {}) {
   const { current: atrCurrent } = _atr(candles, 14);
   const { pdh, pdl }            = _pdhl(candles);
   const { highs: swingHighs, lows: swingLows } = _swings(candles, swingLookback);
-  const fvgs        = detectFVGs(candles);
+  const fvgs        = detectFVGs(candles, atrCurrent);
   const orderBlocks = detectOrderBlocks(candles, atrCurrent, impulseThreshold);
 
   // Feature-gated indicators — only computed when the feature is enabled

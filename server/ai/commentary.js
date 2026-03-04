@@ -46,9 +46,61 @@ const TYPE_LABEL = {
   choch:          'Change of Character',
 };
 
+// ── Zone context helper ───────────────────────────────────────────────────────
+
+/**
+ * Formats nearby FVGs, OBs, session levels, volume profile, and historical
+ * perf stats into a readable block for the AI prompt.
+ * Returns null if no extras are available.
+ */
+function _zoneContext(entryPrice, extras) {
+  if (!extras) return null;
+  const { fvgs = [], orderBlocks = [], sessionLevels, volumeProfile, atrCurrent = 0, perfStats } = extras;
+  const tol  = atrCurrent > 0 ? atrCurrent * 2 : Infinity;
+  const lines = [];
+
+  const nearFvgs = fvgs.filter(f => f.status === 'open' && Math.abs((f.top + f.bottom) / 2 - entryPrice) < tol);
+  const nearObs  = orderBlocks.filter(o => o.status !== 'mitigated' && Math.abs((o.top + o.bottom) / 2 - entryPrice) < tol);
+
+  if (nearFvgs.length > 0) {
+    lines.push('FVGs: ' + nearFvgs.map(f => {
+      const dir = f.type === 'bullish' ? '↑' : '↓';
+      return `FVG${dir} ${f.bottom.toFixed(2)}–${f.top.toFixed(2)} (${f.strength})`;
+    }).join(', '));
+  }
+  if (nearObs.length > 0) {
+    lines.push('OBs: ' + nearObs.map(o => {
+      const dir = o.type === 'bullish' ? '↑' : '↓';
+      return `OB${dir} ${o.bottom.toFixed(2)}–${o.top.toFixed(2)} (${o.status}, ${o.strength})`;
+    }).join(', '));
+  }
+  if (volumeProfile?.poc != null) {
+    const d = (volumeProfile.poc - entryPrice).toFixed(2);
+    lines.push(`VP: POC ${volumeProfile.poc.toFixed(2)} (${d > 0 ? '+' : ''}${d}pts), VAH ${(volumeProfile.vah || 0).toFixed(2)}, VAL ${(volumeProfile.val || 0).toFixed(2)}`);
+  }
+  if (sessionLevels) {
+    const a = sessionLevels.asian;
+    const l = sessionLevels.london;
+    if (a?.high) lines.push(`Asian H/L: ${a.high.toFixed(2)} / ${a.low.toFixed(2)}`);
+    if (l?.high) lines.push(`London H/L: ${l.high.toFixed(2)} / ${l.low.toFixed(2)}`);
+  }
+  if (perfStats?.total >= 5) {
+    const wr = perfStats.winRate != null ? `${(perfStats.winRate * 100).toFixed(0)}% WR` : '—';
+    const pf = perfStats.profitFactor != null ? `, PF ${perfStats.profitFactor.toFixed(2)}` : '';
+    lines.push(`Historical: ${wr}${pf} (${perfStats.total} trades)`);
+  }
+
+  return lines.length > 0 ? lines.join('\n  ') : null;
+}
+
 // ── Prompt builder ────────────────────────────────────────────────────────────
 
-function _buildPrompt(alerts, getCandles) {
+/**
+ * @param {Array}    alerts      Alert objects
+ * @param {Function} getCandles  (symbol, tf) → candle array
+ * @param {Object}   [extrasMap] Keyed by "symbol:tf" — { fvgs, orderBlocks, sessionLevels, volumeProfile, atrCurrent, perfStats }
+ */
+function _buildPrompt(alerts, getCandles, extrasMap = {}) {
   const blocks = alerts.map((alert, i) => {
     const { symbol, timeframe, regime, setup: s } = alert;
     const entry = s.entry != null ? s.entry : s.price;
@@ -71,14 +123,20 @@ function _buildPrompt(alerts, getCandles) {
     const bqNote    = (s.scoreBreakdown?.bos || 0) > 0 ? ' · BOS-qualified' : '';
     const keyLevel  = (s.zoneLevel ?? s.sweptLevel ?? s.brokenLevel ?? s.pdLevel ?? entry).toFixed(2);
 
-    return [
+    const extras = extrasMap[`${symbol}:${timeframe}`];
+    const zones  = _zoneContext(entry, extras);
+
+    const lines = [
       `SETUP ${i + 1}: ${symbol} ${timeframe} — ${s.direction.toUpperCase()} ${typeLabel}`,
       `Time: ${time} MT | Entry: ${entry.toFixed(2)} | SL: ${(s.sl || 0).toFixed(2)} | TP: ${(s.tp || 0).toFixed(2)} | Risk: ${(s.riskPoints || 0).toFixed(2)} pts`,
       `Regime: ${regime?.type || '—'} ${regime?.direction || '—'} (strength ${regime?.strength || 0}/100${aligned})`,
       `Confidence: ${s.confidence}%${bqNote} | Key level: ${keyLevel}`,
       `Recent candles: ${candleStr}`,
       `Rationale: ${s.rationale}`,
-    ].join('\n');
+    ];
+    if (zones) lines.push(`Zone context:\n  ${zones}`);
+
+    return lines.join('\n');
   }).join('\n\n---\n\n');
 
   return [
@@ -94,9 +152,9 @@ function _buildPrompt(alerts, getCandles) {
     '"setupTime" (number — Unix timestamp), "commentary" (string — 3 to 4 sentences).',
     '',
     'Commentary structure per setup:',
-    '  1. What happened on the chart (the price action that triggered this setup).',
-    '  2. Quality assessment — what makes it high or low conviction.',
-    '  3. Key confirmation signal and the exact price level that invalidates the trade.',
+    '  1. What happened structurally at this price (the trigger and setup type).',
+    '  2. Do nearby FVG/OB zones support or threaten this trade? Reference specific prices.',
+    '  3. Key confirmation signal, exact price that invalidates beyond SL, and historical context if available.',
     '',
     'Be direct and specific. No generic disclaimers. Return only valid JSON.',
   ].join('\n');
@@ -107,13 +165,14 @@ function _buildPrompt(alerts, getCandles) {
 /**
  * Generate AI commentary for up to N alerts in a single Claude API call.
  *
- * @param {Array}    alerts     Alert objects (already filtered + sorted by caller)
- * @param {Function} getCandles (symbol, tf) → candle array
- * @param {Object}   settings   Config (uses settings.aiRateLimitMs)
- * @returns {Array|null}        Array of { symbol, timeframe, setupTime, commentary, alert }
- *                              or null if rate-limited or API unavailable.
+ * @param {Array}    alerts      Alert objects (already filtered + sorted by caller)
+ * @param {Function} getCandles  (symbol, tf) → candle array
+ * @param {Object}   settings    Config (uses settings.aiRateLimitMs)
+ * @param {Object}   [extrasMap] Keyed by "symbol:tf" — indicators context for richer commentary
+ * @returns {Array|null}         Array of { symbol, timeframe, setupTime, commentary, alert }
+ *                               or null if rate-limited or API unavailable.
  */
-async function generateCommentary(alerts, getCandles, settings) {
+async function generateCommentary(alerts, getCandles, settings, extrasMap = {}) {
   if (!alerts || alerts.length === 0) return [];
 
   const rateMs = settings?.aiRateLimitMs ?? 60_000;
@@ -132,14 +191,14 @@ async function generateCommentary(alerts, getCandles, settings) {
     'Never add generic disclaimers. Be technical and direct.',
   ].join(' ');
 
-  const userPrompt = _buildPrompt(alerts, getCandles);
+  const userPrompt = _buildPrompt(alerts, getCandles, extrasMap);
 
   console.log(`[ai] Generating commentary for ${alerts.length} setup(s)…`);
 
   try {
     const msg = await _getClient().messages.create({
       model:      'claude-sonnet-4-6',
-      max_tokens: 1200,
+      max_tokens: 2000,
       system,
       messages:   [{ role: 'user', content: userPrompt }],
     });
@@ -178,11 +237,12 @@ async function generateCommentary(alerts, getCandles, settings) {
  * Generate AI commentary for a single alert, with a per-key TTL cache so
  * the same setup isn't re-sent to Claude within 30 seconds.
  *
- * @param {Object}   alert      Full alert object from alertCache
- * @param {Function} getCandles (symbol, tf) → candle array
- * @returns {string|null}       Commentary text, or null on failure
+ * @param {Object}   alert       Full alert object from alertCache
+ * @param {Function} getCandles  (symbol, tf) → candle array
+ * @param {Object}   [extrasMap] Optional indicators context (keyed by "symbol:tf")
+ * @returns {string|null}        Commentary text, or null on failure
  */
-async function generateSingle(alert, getCandles) {
+async function generateSingle(alert, getCandles, extrasMap = {}) {
   const { symbol, timeframe, setup: s } = alert;
   const key = `${symbol}:${timeframe}:${s.type}:${s.time}`;
 
@@ -206,13 +266,13 @@ async function generateSingle(alert, getCandles) {
 
   // Reuse the batch prompt builder with a single-item array;
   // response is a JSON array — extract item[0].commentary.
-  const userPrompt = _buildPrompt([alert], getCandles);
+  const userPrompt = _buildPrompt([alert], getCandles, extrasMap);
   console.log(`[ai] Generating single commentary: ${key}`);
 
   try {
     const msg = await _getClient().messages.create({
       model:      'claude-sonnet-4-6',
-      max_tokens: 400,
+      max_tokens: 700,
       system,
       messages:   [{ role: 'user', content: userPrompt }],
     });

@@ -419,38 +419,56 @@
 
   function _drawIOFZones(fvgs, obs) {
     // ── Fair Value Gaps ──────────────────────────────────────────────────────
+    // strong: brighter, thicker; normal: standard; weak already filtered server-side
     for (const fvg of fvgs) {
-      const isB = fvg.type === 'bullish';
-      const col = isB ? 'rgba(0,230,118,0.55)' : 'rgba(239,83,80,0.55)';
-      const lbl = isB ? 'FVG↑' : 'FVG↓';
+      const isB     = fvg.type === 'bullish';
+      const isStrong = fvg.strength === 'strong';
+      const alpha   = isStrong ? '0.75' : '0.45';
+      const col     = isB ? `rgba(0,230,118,${alpha})` : `rgba(239,83,80,${alpha})`;
+      const lbl     = isB
+        ? (isStrong ? 'FVG↑★' : 'FVG↑')
+        : (isStrong ? 'FVG↓★' : 'FVG↓');
+      const width   = isStrong ? 2 : 1;
 
       iofPriceLines.push({ line: candleSeries.createPriceLine({
-        price: fvg.top, color: col, lineWidth: 1,
+        price: fvg.top, color: col, lineWidth: width,
         lineStyle: LightweightCharts.LineStyle.Dotted,
         axisLabelVisible: true, title: lbl,
       })});
       iofPriceLines.push({ line: candleSeries.createPriceLine({
-        price: fvg.bottom, color: col, lineWidth: 1,
+        price: fvg.bottom, color: col, lineWidth: width,
         lineStyle: LightweightCharts.LineStyle.Dotted,
         axisLabelVisible: false, title: '',
       })});
     }
 
     // ── Order Blocks ─────────────────────────────────────────────────────────
+    // untested: solid, full opacity; tested: dashed, dimmed; strong: thicker line + star label
     for (const ob of obs) {
-      const isB   = ob.type === 'bullish';
-      const col   = isB ? 'rgba(38,166,154,0.7)' : 'rgba(239,83,80,0.7)';
-      const style = ob.status === 'untested'
-        ? LightweightCharts.LineStyle.Solid
-        : LightweightCharts.LineStyle.Dashed;
-      const lbl = isB ? 'OB↑' : 'OB↓';
+      const isB      = ob.type === 'bullish';
+      const isStrong = ob.strength === 'strong';
+      const isTested = ob.status === 'tested';
+
+      // Tested OBs are dimmer (price has touched them — weakened but not broken)
+      const alpha = isTested ? '0.40' : '0.80';
+      const col   = isB ? `rgba(38,166,154,${alpha})` : `rgba(239,83,80,${alpha})`;
+      const style = isTested
+        ? LightweightCharts.LineStyle.Dashed
+        : LightweightCharts.LineStyle.Solid;
+      const width = isStrong ? 2 : 1;
+
+      // Label: untested = OB↑ or OB↑★; tested = OB↑~ (tilde = touched)
+      const baseDir = isB ? '↑' : '↓';
+      const lbl = isTested
+        ? `OB${baseDir}~`
+        : (isStrong ? `OB${baseDir}★` : `OB${baseDir}`);
 
       iofPriceLines.push({ line: candleSeries.createPriceLine({
-        price: ob.top, color: col, lineWidth: 1, lineStyle: style,
+        price: ob.top, color: col, lineWidth: width, lineStyle: style,
         axisLabelVisible: true, title: lbl,
       })});
       iofPriceLines.push({ line: candleSeries.createPriceLine({
-        price: ob.bottom, color: col, lineWidth: 1, lineStyle: style,
+        price: ob.bottom, color: col, lineWidth: width, lineStyle: style,
         axisLabelVisible: false, title: '',
       })});
     }

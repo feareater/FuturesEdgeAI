@@ -14,10 +14,11 @@
  *
  * The gap's "anchor time" is the middle candle (the impulse bar).
  *
- * @param {Array} candles
- * @returns {Array} [{type, top, bottom, time, status}]
+ * @param {Array}  candles
+ * @param {number} [atrCurrent=0]  — used for strength classification
+ * @returns {Array} [{type, top, bottom, time, status, atrRatio, strength}]
  */
-function detectFVGs(candles) {
+function detectFVGs(candles, atrCurrent = 0) {
   const fvgs = [];
 
   for (let i = 2; i < candles.length; i++) {
@@ -27,18 +28,22 @@ function detectFVGs(candles) {
 
     // Bullish FVG: gap between c0 high and c2 low — price skipped this zone upward
     if (c2.low > c0.high) {
-      const bottom = c0.high;
-      const top    = c2.low;
-      const status = _fvgStatus(candles, i, bottom, top, 'bullish');
-      fvgs.push({ type: 'bullish', top, bottom, time: c1.time, status });
+      const bottom   = c0.high;
+      const top      = c2.low;
+      const status   = _fvgStatus(candles, i, bottom, top, 'bullish');
+      const atrRatio = atrCurrent > 0 ? +((top - bottom) / atrCurrent).toFixed(3) : 0;
+      const strength = atrRatio >= 0.8 ? 'strong' : atrRatio >= 0.35 ? 'normal' : 'weak';
+      fvgs.push({ type: 'bullish', top, bottom, time: c1.time, status, atrRatio, strength });
     }
 
     // Bearish FVG: gap between c0 low and c2 high — price skipped this zone downward
     if (c2.high < c0.low) {
-      const top    = c0.low;
-      const bottom = c2.high;
-      const status = _fvgStatus(candles, i, bottom, top, 'bearish');
-      fvgs.push({ type: 'bearish', top, bottom, time: c1.time, status });
+      const top      = c0.low;
+      const bottom   = c2.high;
+      const status   = _fvgStatus(candles, i, bottom, top, 'bearish');
+      const atrRatio = atrCurrent > 0 ? +((top - bottom) / atrCurrent).toFixed(3) : 0;
+      const strength = atrRatio >= 0.8 ? 'strong' : atrRatio >= 0.35 ? 'normal' : 'weak';
+      fvgs.push({ type: 'bearish', top, bottom, time: c1.time, status, atrRatio, strength });
     }
   }
 
@@ -100,16 +105,20 @@ function detectOrderBlocks(candles, atrCurrent, impulseThreshold = 1.5) {
     if (seen.has(key)) continue;
     seen.add(key);
 
+    const obSize   = ob.high - ob.low;
+    const atrRatio = atrCurrent > 0 ? +(obSize / atrCurrent).toFixed(3) : 0;
+    const strength = atrRatio >= 1.2 ? 'strong' : atrRatio >= 0.5 ? 'normal' : 'weak';
+
     // Bullish OB: bearish candle followed by strong bullish impulse
     if (ob.close < ob.open && impulse.close > impulse.open) {
       const status = _obStatus(candles, i, ob.low, ob.high, 'bullish');
-      obs.push({ type: 'bullish', top: ob.high, bottom: ob.low, time: ob.time, status });
+      obs.push({ type: 'bullish', top: ob.high, bottom: ob.low, time: ob.time, status, atrRatio, strength });
     }
 
     // Bearish OB: bullish candle followed by strong bearish impulse
     if (ob.close > ob.open && impulse.close < impulse.open) {
       const status = _obStatus(candles, i, ob.low, ob.high, 'bearish');
-      obs.push({ type: 'bearish', top: ob.high, bottom: ob.low, time: ob.time, status });
+      obs.push({ type: 'bearish', top: ob.high, bottom: ob.low, time: ob.time, status, atrRatio, strength });
     }
   }
 

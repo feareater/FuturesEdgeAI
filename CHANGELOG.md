@@ -4,6 +4,48 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v4.0] — 2026-03-04 — Trading Intelligence Upgrade
+
+### Added — Historical Setup Archive
+- `server/storage/log.js` — `appendToArchive()`, `updateArchiveOutcome()`, `loadArchive()` functions.
+- `data/logs/setup_archive.json` — append-only archive; every setup snapshot is written on first detection, never evicted.
+- `server/index.js` — `_cacheAlert()` now calls `appendToArchive()`; re-evaluations sync resolved outcomes back to archive via `updateArchiveOutcome()`.
+- `GET /api/archive?symbol=&start=&end=&limit=` — query historical setups (newest-first, max 2000).
+- `server/index.js` — `userOverride: true` alerts are excluded from open-outcome re-evaluation loop.
+
+### Added — Manual Outcome Marking (Won/Lost buttons)
+- `PATCH /api/alerts/:key` — set `outcome: 'won'|'lost'|'open'` on any alert; sets `userOverride: true` so server won't re-evaluate it.
+- `public/js/alerts.js` — taken cards with `outcome: 'open'` now show ✓ Won / ✗ Lost buttons; clicking calls the new PATCH endpoint and refreshes the card.
+- `public/css/dashboard.css` — `outcome-won` cards now have green background tint; `outcome-lost` cards have red tint. New `.outcome-header-badge` shows ✓ WON or ✗ LOST prominently in the card header.
+
+### Added — Manual Trade Logging
+- `POST /api/trades` — `alertKey` is now optional; manual trades get a synthetic key `MANUAL:symbol:timestamp`.
+- `public/index.html` — `＋ Trade` button added to Alert Feed panel header; `#manual-trade-form` placeholder div added.
+- `public/js/alerts.js` — `_openManualForm()` / `_renderManualTrades()`: manual form with symbol, direction, entry/SL/TP/exit/setup type/notes; renders in a separate "Manual Trades" section in the feed.
+- `public/css/dashboard.css` — styles for manual trade form, `MANUAL` badge, `.mf-*` form elements.
+
+### Added — OB/FVG Quality Scoring
+- `server/analysis/iof.js` — `detectFVGs()` now accepts `atrCurrent`; both FVGs and OBs get `atrRatio` and `strength: 'strong'|'normal'|'weak'` fields.
+  - FVG strong threshold: `atrRatio ≥ 0.8`; weak: `< 0.35`.
+  - OB strong threshold: `atrRatio ≥ 1.2`; weak: `< 0.5`.
+- `server/analysis/indicators.js` — passes `atrCurrent` to `detectFVGs()`.
+- `server/index.js` — API filters updated: weak FVGs excluded; weak tested OBs excluded (mitigated already excluded).
+
+### Updated — Chart Zone Rendering
+- `public/js/chart.js` — OBs and FVGs now render with strength-based visual differentiation:
+  - Strong OBs: solid, 80% opacity, 2px wide, `OB↑★` label.
+  - Tested OBs: dashed, 40% opacity, 1px, `OB↑~` label (tilde = touched).
+  - Strong FVGs: 75% opacity, 2px; normal FVGs: 45% opacity, 1px; `FVG↑★` vs `FVG↑`.
+
+### Updated — Enhanced AI Commentary
+- `server/ai/commentary.js` — `_buildPrompt()` now accepts optional `extrasMap` per `symbol:tf`:
+  - Adds **Zone Context** block per setup: nearby open FVGs, untested/tested OBs (within 2×ATR), Volume Profile POC/VAH/VAL, Asian/London session H/L, historical WR/PF for this symbol.
+  - Updated commentary instructions: Claude now specifically asked to reference FVG/OB prices, identify zone-based invalidation, and compare to historical performance.
+  - `max_tokens` increased: single 400 → 700; batch 1200 → 2000.
+- `server/index.js` — `_refreshCommentary()` builds `extrasMap` from fresh indicators for each alert's `symbol:tf`; single commentary route also builds and passes context.
+
+---
+
 ## [v3.3] — 2026-03-04 — Filter Input Width Fix
 
 ### Updated — `public/css/dashboard.css`

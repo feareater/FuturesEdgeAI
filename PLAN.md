@@ -180,6 +180,110 @@ if (cfg.features?.openingRange && d.openingRange) {
 
 ---
 
+## [v4.0] COMPLETED — Trading Intelligence Upgrade
+
+**Status:** ✅ Complete as of 2026-03-04
+
+### Context
+System scans 4 instruments (MNQ, MGC, MES, MCL) with full feature set from v3.0. Six concrete improvements targeting usability as a real day-trading tool: permanent setup archive, manual outcome marking, manual trade logging, OB/FVG quality scoring, enhanced AI commentary with zone context, and chart visual differentiation by zone strength.
+
+---
+
+### Feature 1: Historical Setup Archive ✅
+
+**Problem:** `alertCache` holds max 100 items; setups evicted and lost from performance analysis.
+
+**Solution:** Append-only `data/logs/setup_archive.json` — every setup snapshot written on first detection, never evicted. Re-evaluations sync resolved outcomes back via `updateArchiveOutcome()`.
+
+**Files:**
+- `server/storage/log.js` — `loadArchive()`, `appendToArchive()` (dedup by key), `updateArchiveOutcome()`
+- `server/index.js` — `_cacheAlert()` calls `appendToArchive()` on new alerts; re-eval loop calls `updateArchiveOutcome()` when outcome changes from open
+- `GET /api/archive?symbol=&start=&end=&limit=` — query historical setups, newest-first, max 2000
+
+---
+
+### Feature 2: Manual Outcome Marking (Won/Lost buttons) ✅
+
+**Problem:** User knows immediately when a trade won or lost, but the UI had no way to record it.
+
+**Solution:** `PATCH /api/alerts/:key` endpoint; sets `userOverride: true` so server re-evaluation never overwrites. Alert cards show ✓ Won / ✗ Lost action buttons for taken+open alerts; card gets green/red background tint after marking.
+
+**Files:**
+- `server/index.js` — `PATCH /api/alerts/:key`; re-eval loop skips `userOverride: true` entries
+- `public/js/alerts.js` — `_setOutcome()`, Won/Lost buttons in `_buildCard()`, outcome header badge
+- `public/css/dashboard.css` — `.outcome-won` green tint, `.outcome-lost` red tint, `.outcome-header-badge`
+
+---
+
+### Feature 3: Manual Trade Logging ✅
+
+**Problem:** No way to log trades taken outside of AI-detected setups.
+
+**Solution:** `alertKey` made optional in `POST /api/trades`; manual trades get synthetic key `MANUAL:symbol:timestamp`. Inline form accessible via "＋ Trade" button in alert panel header. Manual trades appear in a separate "Manual Trades" section with a `MANUAL` badge.
+
+**Files:**
+- `server/index.js` — `POST /api/trades` updated; `isManual`, `direction`, `manualSetupType` fields
+- `public/index.html` — `#log-trade-btn`, `#manual-trade-form`
+- `public/js/alerts.js` — `_openManualForm()`, `_renderManualTrades()`
+- `public/css/dashboard.css` — form styles, `.manual-badge`
+
+---
+
+### Feature 4: OB/FVG Quality Scoring ✅
+
+**Problem:** No way to distinguish strong institutional zones from noise; tested OBs were hidden entirely; weak zones cluttered the chart.
+
+**Solution:** ATR-ratio scoring assigns `strength: 'strong'|'normal'|'weak'` to each zone. Weak FVGs and weak+tested OBs filtered server-side. Tested (but held) OBs shown with distinct dashed/dim visual.
+
+**Thresholds:**
+- FVG: strong `atrRatio >= 0.8`, normal `>= 0.35`, weak `< 0.35`
+- OB: strong `atrRatio >= 1.2`, normal `>= 0.5`, weak `< 0.5`
+
+**Files:**
+- `server/analysis/iof.js` — `detectFVGs(candles, atrCurrent)` + OB detection both gain `atrRatio` and `strength`
+- `server/analysis/indicators.js` — passes `atrCurrent` to `detectFVGs()`
+- `server/index.js` — filters: weak FVGs excluded; weak+tested OBs excluded
+- `public/js/chart.js` — strength-based opacity, line width, labels (`OB↑★`, `OB↑~`, `FVG↑★`)
+
+---
+
+### Feature 5: Enhanced AI Commentary ✅
+
+**Problem:** Claude only received 5 candles + regime; missed active FVG/OB zones near entry, session levels, VP, historical WR — producing generic commentary.
+
+**Solution:** `extrasMap` (keyed by `symbol:tf`) passed to all commentary functions. `_zoneContext()` helper formats nearby zones into a readable block. Claude specifically asked to reference FVG/OB prices and zone-based invalidation.
+
+**Token budgets:** single 400 → 700; batch 1200 → 2000.
+
+**Files:**
+- `server/ai/commentary.js` — `_zoneContext()`, `_buildPrompt(alerts, getCandles, extrasMap)`, `generateCommentary(extrasMap)`, `generateSingle(extrasMap)`
+- `server/index.js` — `_refreshCommentary()` builds and passes `extrasMap`; single commentary route also passes context
+
+---
+
+### Files Created
+
+| File | Purpose |
+|---|---|
+| `data/logs/setup_archive.json` | Append-only archive — every setup snapshot ever fired |
+
+### Files Modified
+
+| File | Changes |
+|---|---|
+| `server/analysis/iof.js` | `atrRatio` + `strength` on FVGs and OBs |
+| `server/analysis/indicators.js` | Pass `atrCurrent` to `detectFVGs()` |
+| `server/storage/log.js` | Archive read/write functions |
+| `server/ai/commentary.js` | Zone context, extrasMap, larger token budget |
+| `server/index.js` | Archive wiring, PATCH + GET /api/archive, manual trades, OB/FVG filters, extrasMap build |
+| `public/js/chart.js` | Strength-based zone rendering |
+| `public/js/alerts.js` | Won/Lost buttons, outcome badge, manual form + trades |
+| `public/css/dashboard.css` | Outcome card tints, outcome badge, log-trade btn, manual form |
+| `public/index.html` | Log-trade button, manual-trade-form div |
+| `CHANGELOG.md` | v3.3 + v4.0 entries |
+
+---
+
 ## Future Plans
 
 _Next plan goes here._

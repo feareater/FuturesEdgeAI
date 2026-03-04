@@ -88,8 +88,11 @@
           <div class="panel-header">
             Alert Feed
             <span id="alert-stats" class="alert-stats-badge">—</span>
+            <button id="log-trade-btn" class="log-trade-btn" title="Log a manual trade not tied to a detected setup">＋ Trade</button>
             <a href="/docs.html" class="guide-btn" title="Setup Guide — learn what each alert means" target="_blank">? Guide</a>
           </div>
+          <!-- Manual trade entry form (hidden until button click) -->
+          <div id="manual-trade-form" style="display:none"></div>
 
           <!-- Win-rate stats row -->
           <div id="wr-bar">

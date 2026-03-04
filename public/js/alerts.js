@@ -35,6 +35,9 @@
   // Bridge for chart.js (which loads first) to check taken state
   window._isTaken = (key) => takenTrades.has(key);
 
+  // ── Manual trades (not tied to detected setups) ────────────────────────────
+  const manualTrades = [];
+
   // ── New-alert highlighting state ──────────────────────────────────────────
   let _prevAlertKeys = new Set();
 
@@ -54,6 +57,8 @@
   const dataAgeEl         = document.getElementById('data-age');
   const refreshIntervalEl = document.getElementById('refresh-interval');
   const refreshNowBtn     = document.getElementById('refresh-now-btn');
+  const logTradeBtnEl     = document.getElementById('log-trade-btn');
+  const manualFormEl      = document.getElementById('manual-trade-form');
 
   // ── Mobile tab DOM refs ────────────────────────────────────────────────────
   const rightPanel      = document.getElementById('right-panel');
@@ -473,6 +478,7 @@
     }
 
     _prevAlertKeys = new Set(); // clear after render
+    _renderManualTrades();
   }
 
   // ── Chart marker sync ──────────────────────────────────────────────────────
@@ -589,6 +595,19 @@
     card.className = `alert-card ${dirClass}${borderClass ? ` ${borderClass}` : ''}${suppressed ? ' suppressed' : ''}${overBudget ? ' over-budget' : ''}`;
     card.dataset.alertKey = aiKey;  // used by chart marker click handler
 
+    // Outcome header badge (shown prominently on taken + resolved cards)
+    const outcomeHeaderBadge = isTaken && setup.outcome === 'won'
+      ? `  <span class="outcome-header-badge won">✓ WON</span>`
+      : isTaken && setup.outcome === 'lost'
+        ? `  <span class="outcome-header-badge lost">✗ LOST</span>`
+        : '';
+
+    // Won/Lost mark buttons — only on taken cards still open (not yet manually marked)
+    const outcomeButtons = isTaken && setup.outcome === 'open' && !setup.userOverride
+      ? `<button class="outcome-btn won-btn" data-key="${aiKey}" title="Mark as Won">✓ Won</button>` +
+        `<button class="outcome-btn lost-btn" data-key="${aiKey}" title="Mark as Lost">✗ Lost</button>`
+      : '';
+
     card.innerHTML = [
       `<div class="alert-header">`,
       `  <span class="alert-sym">${symbol}</span>`,
@@ -597,6 +616,7 @@
       `  <span class="alert-dir ${dirClass}">${dirArrow}</span>`,
       suppressed ? `  <span class="alert-suppressed-tag">filtered</span>` : '',
       setup.nearEvent ? `  <span class="near-event-badge">⚠ Near Event</span>` : '',
+      outcomeHeaderBadge,
       `</div>`,
       `<div class="alert-rationale">${setup.rationale}</div>`,
       _fmtBreakdown(setup.scoreBreakdown),
@@ -609,6 +629,7 @@
       `  <span class="alert-conf">${setup.confidence}%</span>`,
       `  <span class="alert-outcome ${outcomeClass}">${outcomeLabel}</span>`,
       `  <span class="alert-risk ${riskClass}">${riskText}</span>`,
+      outcomeButtons,
       !suppressed ? `  <button class="ai-btn" data-key="${aiKey}" title="Get AI analysis">✦ AI</button>` : '',
       !suppressed && !isTaken
         ? `  <button class="take-btn" data-key="${aiKey}" title="Mark as taken">Take</button>`
@@ -791,6 +812,31 @@
           if (!isOpen) _openTradeForm(takenTrades.get(aiKey));
         });
       }
+
+      // ── Won / Lost outcome buttons ─────────────────────────────────────────
+      const wonBtn  = card.querySelector('.won-btn');
+      const lostBtn = card.querySelector('.lost-btn');
+
+      async function _setOutcome(outcome) {
+        try {
+          const res = await fetch(`/api/alerts/${encodeURIComponent(aiKey)}`, {
+            method:  'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ outcome }),
+          });
+          if (!res.ok) throw new Error(res.status);
+          // Update local alert object and re-render to reflect new outcome
+          alert.setup.outcome     = outcome;
+          alert.setup.userOverride = true;
+          _renderFeed();
+          _updateStats();
+        } catch (err) {
+          console.error('[outcome] Set failed:', err.message);
+        }
+      }
+
+      if (wonBtn)  wonBtn.addEventListener('click',  (e) => { e.stopPropagation(); _setOutcome('won');  });
+      if (lostBtn) lostBtn.addEventListener('click', (e) => { e.stopPropagation(); _setOutcome('lost'); });
     }
 
     return card;
@@ -809,11 +855,161 @@
     }
   }
 
+  // ── Manual trade form ──────────────────────────────────────────────────────
+
+  function _openManualForm() {
+    if (!manualFormEl) return;
+    manualFormEl.innerHTML = `
+      <div class="manual-form-inner">
+        <div class="mf-row">
+          <label>Symbol</label>
+          <select class="mf-sym filter-select">
+            <option>MNQ</option><option>MGC</option><option>MES</option><option>MCL</option>
+          </select>
+          <span class="mf-dir-toggle">
+            <button class="mf-dir-btn active" data-dir="bullish">Long</button>
+            <button class="mf-dir-btn" data-dir="bearish">Short</button>
+          </span>
+        </div>
+        <div class="mf-row">
+          <label>Entry</label><input class="mf-entry filter-input" type="number" step="0.25" placeholder="0.00">
+          <label>SL</label><input class="mf-sl filter-input" type="number" step="0.25" placeholder="0.00">
+          <label>TP</label><input class="mf-tp filter-input" type="number" step="0.25" placeholder="0.00">
+        </div>
+        <div class="mf-row">
+          <label>Exit</label><input class="mf-exit filter-input" type="number" step="0.25" placeholder="Optional">
+          <label>Setup</label><input class="mf-type filter-input wide" type="text" placeholder="e.g. VWAP reclaim">
+        </div>
+        <div class="mf-row">
+          <label>Notes</label><input class="mf-notes filter-input wide" type="text" placeholder="Optional notes">
+        </div>
+        <div class="mf-btns">
+          <button class="mf-save">Log Trade</button>
+          <button class="mf-cancel">Cancel</button>
+        </div>
+      </div>`;
+    manualFormEl.style.display = 'block';
+
+    let selectedDir = 'bullish';
+    manualFormEl.querySelectorAll('.mf-dir-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        manualFormEl.querySelectorAll('.mf-dir-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        selectedDir = btn.dataset.dir;
+      });
+    });
+
+    manualFormEl.querySelector('.mf-cancel').addEventListener('click', () => {
+      manualFormEl.style.display = 'none';
+    });
+
+    manualFormEl.querySelector('.mf-save').addEventListener('click', async () => {
+      const sym   = manualFormEl.querySelector('.mf-sym').value;
+      const entry = manualFormEl.querySelector('.mf-entry').value;
+      const sl    = manualFormEl.querySelector('.mf-sl').value;
+      const tp    = manualFormEl.querySelector('.mf-tp').value;
+      if (!entry || !sl || !tp) { alert('Entry, SL, and TP are required.'); return; }
+
+      const body = {
+        symbol:          sym,
+        direction:       selectedDir,
+        actualEntry:     entry,
+        actualSL:        sl,
+        actualTP:        tp,
+        actualExit:      manualFormEl.querySelector('.mf-exit').value  || null,
+        manualSetupType: manualFormEl.querySelector('.mf-type').value  || 'Manual',
+        notes:           manualFormEl.querySelector('.mf-notes').value || '',
+        isManual:        true,
+      };
+      try {
+        const res = await fetch('/api/trades', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify(body),
+        });
+        if (!res.ok) throw new Error(res.status);
+        const { trade } = await res.json();
+        manualTrades.push(trade);
+        manualFormEl.style.display = 'none';
+        _renderManualTrades();
+      } catch (err) {
+        console.error('[manual-trade] Save failed:', err.message);
+      }
+    });
+  }
+
+  function _renderManualTrades() {
+    // Remove existing manual section if present
+    const existing = alertFeed.querySelector('.manual-trades-section');
+    if (existing) existing.remove();
+    if (!manualTrades.length) return;
+
+    const section = document.createElement('div');
+    section.className = 'manual-trades-section';
+    section.innerHTML = `<div class="taken-section-header"><span>Manual Trades</span><span class="taken-count">${manualTrades.length}</span></div>`;
+
+    for (const t of manualTrades) {
+      const c = document.createElement('div');
+      const dir = t.direction === 'bearish' ? 'bear' : 'bull';
+      const arrow = t.direction === 'bearish' ? '▼' : '▲';
+      const outc = t.outcome || 'open';
+      const outcLabel = { won: '✓ WON', lost: '✗ LOST', open: '○ Open' }[outc] || '—';
+      const borderCls = outc === 'won' ? ' outcome-won' : outc === 'lost' ? ' outcome-lost' : '';
+      c.className = `alert-card ${dir} is-taken-card manual-card${borderCls}`;
+      c.innerHTML = `
+        <div class="alert-header">
+          <span class="alert-sym">${t.symbol || '—'}</span>
+          <span class="alert-tf">${t.timeframe || '—'}</span>
+          <span class="alert-type">${t.manualSetupType || 'Manual'}</span>
+          <span class="alert-dir ${dir}">${arrow}</span>
+          <span class="manual-badge">MANUAL</span>
+          ${outc !== 'open' ? `<span class="outcome-header-badge ${outc}">${outcLabel}</span>` : ''}
+        </div>
+        <div class="alert-prices">
+          <span class="price-label">Entry</span><span class="price-val">${(+t.actualEntry).toFixed(2)}</span>
+          <span class="price-label sl">SL</span><span class="price-val sl">${(+t.actualSL).toFixed(2)}</span>
+          <span class="price-label tp">TP</span><span class="price-val tp">${(+t.actualTP).toFixed(2)}</span>
+        </div>
+        <div class="alert-footer">
+          <span class="alert-outcome ${outc}">${outcLabel}</span>
+          ${outc === 'open'
+            ? `<button class="outcome-btn won-btn" data-tid="${t.id}">✓ Won</button><button class="outcome-btn lost-btn" data-tid="${t.id}">✗ Lost</button>`
+            : ''}
+          <span class="alert-time">${new Date(t.takenAt).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',hour12:true,timeZone:'America/Denver'})} MT</span>
+        </div>
+        ${t.notes ? `<div class="alert-rationale">${t.notes}</div>` : ''}`;
+
+      c.querySelectorAll('.outcome-btn').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const outcome = btn.classList.contains('won-btn') ? 'won' : 'lost';
+          t.outcome = outcome;
+          _renderManualTrades();
+        });
+      });
+
+      section.appendChild(c);
+    }
+    alertFeed.appendChild(section);
+  }
+
   // ── Input wiring ───────────────────────────────────────────────────────────
 
   let _rrTimer = null;
 
   function _wireInputs() {
+    // Log Trade button — opens manual trade entry form
+    if (logTradeBtnEl) {
+      logTradeBtnEl.addEventListener('click', () => {
+        const isOpen = manualFormEl && manualFormEl.style.display !== 'none';
+        if (isOpen) {
+          manualFormEl.style.display = 'none';
+        } else {
+          _openManualForm();
+        }
+      });
+    }
+
     // Confidence threshold — refetch from server (trade filter must see the new set)
     minConfInput.addEventListener('input', () => {
       minConf = parseInt(minConfInput.value) || 0;

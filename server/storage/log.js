@@ -101,8 +101,63 @@ function loadTradeLog() {
   }
 }
 
+// ── Setup archive (append-only historical record) ─────────────────────────────
+
+const ARCHIVE_FILE = path.join(LOG_DIR, 'setup_archive.json');
+
+/**
+ * Load the setup archive from disk.
+ * Returns [] if the file does not exist or cannot be parsed.
+ */
+function loadArchive() {
+  try {
+    if (!fs.existsSync(ARCHIVE_FILE)) return [];
+    return JSON.parse(fs.readFileSync(ARCHIVE_FILE, 'utf8'));
+  } catch (err) {
+    console.error('[log] loadArchive failed:', err.message);
+    return [];
+  }
+}
+
+/**
+ * Append a new alert snapshot to the archive (dedup by key).
+ * This is append-only — existing entries are never modified here.
+ */
+function appendToArchive(alert) {
+  try {
+    _ensureDir();
+    const key     = `${alert.symbol}:${alert.timeframe}:${alert.setup.type}:${alert.setup.time}`;
+    const archive = loadArchive();
+    if (archive.some(a => `${a.symbol}:${a.timeframe}:${a.setup.type}:${a.setup.time}` === key)) return;
+    archive.push(alert);
+    fs.writeFileSync(ARCHIVE_FILE, JSON.stringify(archive, null, 2));
+  } catch (err) {
+    console.error('[log] appendToArchive failed:', err.message);
+  }
+}
+
+/**
+ * Update the outcome of an archived setup.
+ * Only updates outcome + outcomeTime (preserves original snapshot otherwise).
+ */
+function updateArchiveOutcome(key, outcome, outcomeTime, userOverride = false) {
+  try {
+    _ensureDir();
+    const archive = loadArchive();
+    const entry   = archive.find(a => `${a.symbol}:${a.timeframe}:${a.setup.type}:${a.setup.time}` === key);
+    if (!entry) return;
+    entry.setup.outcome     = outcome;
+    entry.setup.outcomeTime = outcomeTime;
+    if (userOverride) entry.setup.userOverride = true;
+    fs.writeFileSync(ARCHIVE_FILE, JSON.stringify(archive, null, 2));
+  } catch (err) {
+    console.error('[log] updateArchiveOutcome failed:', err.message);
+  }
+}
+
 module.exports = {
   saveAlertCache, loadAlertCache,
   saveCommentaryCache, loadCommentaryCache,
   saveTradeLog, loadTradeLog,
+  loadArchive, appendToArchive, updateArchiveOutcome,
 };

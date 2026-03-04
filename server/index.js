@@ -15,7 +15,8 @@ const { detectTrendlines }  = require('./analysis/trendlines');
 const { generateCommentary, generateSingle } = require('./ai/commentary');
 const { checkTFZoneStack }  = require('./analysis/confluence');
 const { saveAlertCache, loadAlertCache, saveCommentaryCache, loadCommentaryCache,
-        saveTradeLog, loadTradeLog } = require('./storage/log');
+        saveTradeLog, loadTradeLog,
+        loadArchive, appendToArchive, updateArchiveOutcome } = require('./storage/log');
 const { fetchAll }              = require('./data/seedFetch');
 const autotrader                = require('./trading/autotrader');
 const simulator                 = require('./trading/simulator');
@@ -98,6 +99,15 @@ function _cacheAlert(alert) {
   alertSeenKeys.add(key);
   alertCache.unshift(alert);
   if (alertCache.length > MAX_ALERTS) alertCache.pop();
+  if (isReEval) {
+    // Re-evaluation: outcome may have changed from 'open' → sync archive if resolved
+    if (alert.setup.outcome !== 'open') {
+      updateArchiveOutcome(key, alert.setup.outcome, alert.setup.outcomeTime);
+    }
+  } else {
+    // First appearance: snapshot to archive
+    appendToArchive(alert);
+  }
   return !isReEval; // not "new" if re-evaluating an open outcome — avoids false-positive toasts
 }
 
@@ -142,8 +152,14 @@ app.get('/api/indicators', (req, res) => {
     const trendlines = detectTrendlines(candles, indicators.atrCurrent);
 
     // Filter IOF to active zones only (keeps payload small)
-    const fvgs        = (indicators.fvgs || []).filter(f => f.status === 'open').slice(-6);
-    const orderBlocks = (indicators.orderBlocks || []).filter(o => o.status !== 'mitigated').slice(-4);
+    // FVGs: open + not weak noise (atrRatio >= 0.35)
+    const fvgs = (indicators.fvgs || [])
+      .filter(f => f.status === 'open' && f.strength !== 'weak')
+      .slice(-6);
+    // OBs: untested or tested; exclude mitigated and weak-tested (likely noise)
+    const orderBlocks = (indicators.orderBlocks || [])
+      .filter(o => o.status !== 'mitigated' && !(o.strength === 'weak' && o.status === 'tested'))
+      .slice(-4);
 
     console.log(`[api] /indicators  symbol=${symbol}  tf=${timeframe}  fvgs=${fvgs.length}  obs=${orderBlocks.length}  trendlines=${trendlines.support?'S':'–'}${trendlines.resistance?'R':'–'}`);
     res.json({ symbol, timeframe, ...indicators, fvgs, orderBlocks, trendlines });
@@ -272,7 +288,27 @@ app.post('/api/commentary/single', async (req, res) => {
   if (!alert) return res.status(404).json({ error: 'alert not found in cache' });
 
   try {
-    const commentary = await generateSingle(alert, getCandles);
+    // Build indicators context for richer single-setup commentary
+    let extrasMap = {};
+    try {
+      const ind = computeIndicators(getCandles(symbol, timeframe), {
+        swingLookback:    settings.swingLookback,
+        impulseThreshold: settings.impulseThreshold,
+        symbol,
+        features:         settings.features || {},
+      });
+      const perfStats = computePerformanceStats(alertCache);
+      extrasMap[`${symbol}:${timeframe}`] = {
+        fvgs:          (ind.fvgs        || []).filter(f => f.status === 'open'),
+        orderBlocks:   (ind.orderBlocks || []).filter(o => o.status !== 'mitigated'),
+        sessionLevels: ind.sessionLevels  || null,
+        volumeProfile: ind.volumeProfile  || null,
+        atrCurrent:    ind.atrCurrent     || 0,
+        perfStats:     perfStats.bySymbol?.[symbol] || {},
+      };
+    } catch (_) {}
+
+    const commentary = await generateSingle(alert, getCandles, extrasMap);
     if (!commentary) return res.status(503).json({ error: 'could not generate commentary' });
     // generateSingle attaches commentary to alert.commentary — persist the update
     saveAlertCache(alertCache);
@@ -313,29 +349,78 @@ app.get('/api/trades', (_req, res) => {
   res.json({ trades: tradeLog });
 });
 
-// POST /api/trades — create or update a trade entry
+// POST /api/trades — create or update a trade entry (alertKey optional for manual trades)
 app.post('/api/trades', (req, res) => {
   const { alertKey, symbol, timeframe, setupType,
-          actualEntry, actualSL, actualTP, actualExit, notes } = req.body;
-  if (!alertKey || actualEntry == null || actualSL == null || actualTP == null) {
-    return res.status(400).json({ error: 'alertKey, actualEntry, actualSL, actualTP required' });
+          actualEntry, actualSL, actualTP, actualExit, notes,
+          direction, manualSetupType, isManual } = req.body;
+  if (actualEntry == null || actualSL == null || actualTP == null) {
+    return res.status(400).json({ error: 'actualEntry, actualSL, actualTP required' });
   }
+  const key = alertKey || `MANUAL:${symbol || 'UNK'}:${Date.now()}`;
   const trade = {
-    id:          Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-    alertKey,    symbol, timeframe, setupType,
-    takenAt:     new Date().toISOString(),
-    actualEntry: Number(actualEntry),
-    actualSL:    Number(actualSL),
-    actualTP:    Number(actualTP),
-    actualExit:  actualExit != null && actualExit !== '' ? Number(actualExit) : null,
-    notes:       notes || '',
+    id:              Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    alertKey:        key,
+    symbol,          timeframe, setupType,
+    takenAt:         new Date().toISOString(),
+    actualEntry:     Number(actualEntry),
+    actualSL:        Number(actualSL),
+    actualTP:        Number(actualTP),
+    actualExit:      actualExit != null && actualExit !== '' ? Number(actualExit) : null,
+    notes:           notes || '',
   };
-  const idx = tradeLog.findIndex(t => t.alertKey === alertKey);
+  if (isManual || !alertKey) {
+    trade.isManual       = true;
+    trade.direction      = direction || 'bullish';
+    trade.manualSetupType = manualSetupType || setupType || '';
+  }
+  const idx = tradeLog.findIndex(t => t.alertKey === key);
   if (idx >= 0) tradeLog[idx] = trade;
   else tradeLog.push(trade);
   saveTradeLog(tradeLog);
-  console.log(`[trade] ${idx >= 0 ? 'Updated' : 'Saved'} trade for ${alertKey}`);
+  console.log(`[trade] ${idx >= 0 ? 'Updated' : 'Saved'} trade for ${key}`);
   res.json({ trade });
+});
+
+// PATCH /api/alerts/:key — manually set outcome (won/lost/open) for a taken alert
+app.patch('/api/alerts/:key', (req, res) => {
+  const { key }    = req.params;
+  const { outcome, exitPrice } = req.body;
+  if (!['won', 'lost', 'open'].includes(outcome)) {
+    return res.status(400).json({ error: 'outcome must be won, lost, or open' });
+  }
+  const alert = alertCache.find(
+    a => `${a.symbol}:${a.timeframe}:${a.setup.type}:${a.setup.time}` === key
+  );
+  if (!alert) {
+    return res.status(404).json({ error: 'Alert not found in cache' });
+  }
+  alert.setup.outcome     = outcome;
+  alert.setup.userOverride = true;
+  alert.setup.outcomeTime  = exitPrice != null ? Math.floor(Date.now() / 1000) : alert.setup.outcomeTime;
+  saveAlertCache(alertCache);
+  updateArchiveOutcome(key, outcome, alert.setup.outcomeTime, true);
+  broadcast({ type: 'outcome_update', key, outcome });
+  console.log(`[alert] Manual outcome set: ${key} → ${outcome}`);
+  res.json({ ok: true, key, outcome });
+});
+
+// GET /api/archive — query historical setup archive (all setups ever fired)
+app.get('/api/archive', (req, res) => {
+  try {
+    let archive = loadArchive();
+    const { symbol, start, end, limit } = req.query;
+    if (symbol) archive = archive.filter(a => a.symbol === symbol.toUpperCase());
+    if (start)  archive = archive.filter(a => new Date(a.ts) >= new Date(start));
+    if (end)    archive = archive.filter(a => new Date(a.ts) <= new Date(end));
+    const lim = Math.min(Number(limit) || 500, 2000);
+    // Return newest-first slice
+    archive = archive.slice().reverse().slice(0, lim);
+    res.json({ count: archive.length, alerts: archive });
+  } catch (err) {
+    console.error('[api] /archive error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // POST /api/refresh — trigger an immediate data refresh and reset the interval timer
@@ -662,7 +747,33 @@ async function _refreshCommentary() {
 
   if (top.length === 0) return;
 
-  const items = await generateCommentary(top, getCandles, settings);
+  // Build indicators context map (keyed "symbol:tf") to enrich AI prompts
+  const perfStats = computePerformanceStats(alertCache);
+  const extrasMap = {};
+  const needed = [...new Set(top.map(a => `${a.symbol}:${a.timeframe}`))];
+  for (const key of needed) {
+    const [sym, tf] = key.split(':');
+    try {
+      const ind = computeIndicators(getCandles(sym, tf), {
+        swingLookback:    settings.swingLookback,
+        impulseThreshold: settings.impulseThreshold,
+        symbol:           sym,
+        features:         settings.features || {},
+      });
+      const symPerfKey  = `${sym}`;
+      const setupStats  = perfStats.bySymbol?.[symPerfKey] || {};
+      extrasMap[key] = {
+        fvgs:          (ind.fvgs        || []).filter(f => f.status === 'open'),
+        orderBlocks:   (ind.orderBlocks || []).filter(o => o.status !== 'mitigated'),
+        sessionLevels: ind.sessionLevels  || null,
+        volumeProfile: ind.volumeProfile  || null,
+        atrCurrent:    ind.atrCurrent     || 0,
+        perfStats:     setupStats,
+      };
+    } catch (_) {}
+  }
+
+  const items = await generateCommentary(top, getCandles, settings, extrasMap);
   if (!items) return; // null = rate-limited; keep existing cache
 
   // Attach commentary text to each alert object so it persists and can be
@@ -722,16 +833,17 @@ async function _autoRefresh({ fetchData = true } = {}) {
 
   // Evict open-outcome alerts so they get re-detected with potentially updated outcomes.
   // Historical resolved setups (won/lost) stay in alertSeenKeys — they won't re-fire.
+  // userOverride: true = user manually set outcome; never re-evaluate these.
   const openKeys = new Set(
     alertCache
-      .filter(a => a.setup.outcome === 'open')
+      .filter(a => a.setup.outcome === 'open' && !a.setup.userOverride)
       .map(a => `${a.symbol}:${a.timeframe}:${a.setup.type}:${a.setup.time}`)
   );
   // Track which keys are re-evaluations so _cacheAlert won't count them as new alerts.
   for (const k of openKeys) reEvalKeys.add(k);
   for (const k of openKeys) alertSeenKeys.delete(k);
   for (let i = alertCache.length - 1; i >= 0; i--) {
-    if (alertCache[i].setup.outcome === 'open') alertCache.splice(i, 1);
+    if (alertCache[i].setup.outcome === 'open' && !alertCache[i].setup.userOverride) alertCache.splice(i, 1);
   }
   if (openKeys.size > 0) {
     console.log(`[refresh] Evicted ${openKeys.size} open-outcome alert(s) for re-evaluation`);
