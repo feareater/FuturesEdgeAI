@@ -8,6 +8,8 @@ const { computeVolumeProfile }             = require('./volumeProfile');
 const { computeOpeningRange }              = require('./openingRange');
 const { computeSessionLevels }             = require('./sessionLevels');
 
+const CRYPTO_SYMBOLS = new Set(['BTC', 'ETH', 'XRP']);
+
 // EST = UTC-5. Simplified — not DST-aware (acceptable for Phase 2 seed data).
 const ET_OFFSET_MS = 5 * 60 * 60 * 1000;
 
@@ -48,9 +50,11 @@ function computeIndicators(candles, opts = {}) {
   const orderBlocks = detectOrderBlocks(candles, atrCurrent, impulseThreshold);
 
   // Feature-gated indicators — only computed when the feature is enabled
-  const volumeProfile  = features.volumeProfile  && symbol ? computeVolumeProfile(candles, symbol)  : null;
-  const openingRange   = features.openingRange               ? computeOpeningRange(candles)            : null;
-  const sessionLevels  = features.sessionLevels              ? computeSessionLevels(candles)           : null;
+  // Crypto assets (BTC/ETH/XRP) trade 24/7 — no RTH session, opening range, or Asian/London levels
+  const isCrypto = CRYPTO_SYMBOLS.has(symbol);
+  const volumeProfile  = !isCrypto && features.volumeProfile && symbol ? computeVolumeProfile(candles, symbol) : null;
+  const openingRange   = !isCrypto && features.openingRange            ? computeOpeningRange(candles)           : null;
+  const sessionLevels  = !isCrypto && features.sessionLevels           ? computeSessionLevels(candles)          : null;
 
   console.log(
     `[indicators] ema9:${ema9.length} ema21:${ema21.length} ema50:${ema50.length}` +

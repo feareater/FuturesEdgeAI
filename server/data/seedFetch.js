@@ -22,14 +22,15 @@ const SYMBOLS = {
   MCL: 'CL=F',
 };
 
-// Yahoo Finance supports: 1m (max 7d), 2m (max 60d), 5m (max 60d), 15m/30m (max 60d).
-// 3m is not native — we derive it by aggregating 1m candles after the fetch.
+// Yahoo Finance supports: 1m (max 7d), 2m (max 60d), 5m (max 60d), 15m/30m (max 60d),
+// 60m (max 730d). 3m/2h/4h are not native — derived by aggregating after fetch.
 const TIMEFRAMES = [
   { tf: '1m',  yf: '1m',  range: '5d'  },
   { tf: '2m',  yf: '2m',  range: '5d'  },
   { tf: '5m',  yf: '5m',  range: '30d' },
   { tf: '15m', yf: '15m', range: '30d' },
   { tf: '30m', yf: '30m', range: '60d' },
+  { tf: '1h',  yf: '60m', range: '60d' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -137,7 +138,21 @@ async function fetchAll() {
       fs.writeFileSync(thirtyMPath, JSON.stringify(thirtyMDer, null, 2));
       console.log(`[seedFetch] ${symbol} 30m  ${thirtyMDer.candles.length} candles → ${thirtyMPath} (derived from 5m)`);
     }
+
+    // Derive 2h and 4h by aggregating the 1h candles
+    const oneHPath = path.join(SEED_DIR, `${symbol}_1h.json`);
+    const oneH     = JSON.parse(fs.readFileSync(oneHPath, 'utf8'));
+    const twoH     = aggregate(symbol, '2h', oneH.candles, 2);
+    fs.writeFileSync(path.join(SEED_DIR, `${symbol}_2h.json`), JSON.stringify(twoH, null, 2));
+    console.log(`[seedFetch] ${symbol} 2h  ${twoH.candles.length} candles → ${symbol}_2h.json (derived from 1h)`);
+    const fourH    = aggregate(symbol, '4h', oneH.candles, 4);
+    fs.writeFileSync(path.join(SEED_DIR, `${symbol}_4h.json`), JSON.stringify(fourH, null, 2));
+    console.log(`[seedFetch] ${symbol} 4h  ${fourH.candles.length} candles → ${symbol}_4h.json (derived from 1h)`);
   }
+
+  // Fetch crypto perpetual futures from Coinbase International Exchange
+  const { fetchAllCrypto } = require('./coinbaseFetch');
+  await fetchAllCrypto();
 }
 
 // ---------------------------------------------------------------------------

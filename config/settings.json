@@ -35,6 +35,9 @@
     "mgcContracts": 3,
     "mesContracts": 2,
     "mclContracts": 2,
+    "btcContracts": 1,
+    "ethContracts": 1,
+    "xrpContracts": 1,
     "maxRiskDollars": 200,
     "rrRatio": 1
   }

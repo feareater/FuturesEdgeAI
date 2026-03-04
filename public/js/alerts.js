@@ -12,11 +12,14 @@
   // MGC: tick = 0.10 pts, tick value = $1.00/contract  →  $10.00 / point
   // MES: tick = 0.25 pts, tick value = $1.25/contract  →  $5.00 / point
   // MCL: tick = 0.01 pts, tick value = $1.00/contract  →  $100 / point
-  const TICK_SIZE  = { MNQ: 0.25, MGC: 0.10, MES: 0.25, MCL: 0.01 };
-  const TICK_VALUE = { MNQ: 0.50, MGC: 1.00, MES: 1.25, MCL: 1.00 };
+  // Crypto perps (Coinbase INTX): modeled as 1:1 per point per contract
+  // BTC: $1 move = $1/contract  |  ETH: $0.01 move = $0.01/contract  |  XRP: $0.0001 = $0.0001
+  const TICK_SIZE  = { MNQ: 0.25, MGC: 0.10, MES: 0.25, MCL: 0.01, BTC: 1.0, ETH: 0.01, XRP: 0.0001 };
+  const TICK_VALUE = { MNQ: 0.50, MGC: 1.00, MES: 1.25, MCL: 1.00, BTC: 1.0, ETH: 0.01, XRP: 0.0001 };
 
   // ── Settings (loaded from server defaults, overridden by localStorage) ─────
   let cfg = { mnqContracts: 5, mgcContracts: 3, mesContracts: 2, mclContracts: 2,
+              btcContracts: 1, ethContracts: 1, xrpContracts: 1,
               maxRiskDollars: 200, rrRatio: 2.0, features: {} };
   let minConf = 65;
 
@@ -61,6 +64,9 @@
   const minConfInput   = document.getElementById('min-conf');
   const mnqInput       = document.getElementById('mnq-contracts');
   const mgcInput       = document.getElementById('mgc-contracts');
+  const btcInput       = document.getElementById('btc-contracts');
+  const ethInput       = document.getElementById('eth-contracts');
+  const xrpInput       = document.getElementById('xrp-contracts');
   const maxRiskInput   = document.getElementById('max-risk');
   const rrInput        = document.getElementById('rr-ratio');
   const rrStatusEl        = document.getElementById('rr-status');
@@ -391,6 +397,9 @@
     if (saved) {
       cfg.mnqContracts   = saved.mnqContracts   ?? cfg.mnqContracts;
       cfg.mgcContracts   = saved.mgcContracts   ?? cfg.mgcContracts;
+      cfg.btcContracts   = saved.btcContracts   ?? cfg.btcContracts;
+      cfg.ethContracts   = saved.ethContracts   ?? cfg.ethContracts;
+      cfg.xrpContracts   = saved.xrpContracts   ?? cfg.xrpContracts;
       cfg.maxRiskDollars = saved.maxRiskDollars ?? cfg.maxRiskDollars;
     }
     minConf = saved?.minConfidence ?? cfg.minConfidence ?? 0;
@@ -399,6 +408,9 @@
     minConfInput.value  = minConf;
     mnqInput.value      = cfg.mnqContracts;
     mgcInput.value      = cfg.mgcContracts;
+    if (btcInput) btcInput.value = cfg.btcContracts;
+    if (ethInput) ethInput.value = cfg.ethContracts;
+    if (xrpInput) xrpInput.value = cfg.xrpContracts;
     maxRiskInput.value  = cfg.maxRiskDollars;
     rrInput.value       = cfg.rrRatio;
 
@@ -607,6 +619,9 @@
                     : alert.symbol === 'MGC' ? cfg.mgcContracts
                     : alert.symbol === 'MES' ? cfg.mesContracts
                     : alert.symbol === 'MCL' ? cfg.mclContracts
+                    : alert.symbol === 'BTC' ? cfg.btcContracts
+                    : alert.symbol === 'ETH' ? cfg.ethContracts
+                    : alert.symbol === 'XRP' ? cfg.xrpContracts
                     : 1;
     const ticks = pts / TICK_SIZE[alert.symbol];
     return Math.round(ticks * TICK_VALUE[alert.symbol] * contracts);
@@ -1105,11 +1120,14 @@
     });
 
     // Contract counts + max risk — client-side recalc only, no refetch
-    const riskInputs = [mnqInput, mgcInput, maxRiskInput];
+    const riskInputs = [mnqInput, mgcInput, btcInput, ethInput, xrpInput, maxRiskInput].filter(Boolean);
     riskInputs.forEach(el => {
       el.addEventListener('input', () => {
         cfg.mnqContracts   = parseInt(mnqInput.value)   || 1;
         cfg.mgcContracts   = parseInt(mgcInput.value)   || 1;
+        cfg.btcContracts   = parseInt(btcInput?.value)  || 1;
+        cfg.ethContracts   = parseInt(ethInput?.value)  || 1;
+        cfg.xrpContracts   = parseInt(xrpInput?.value)  || 1;
         cfg.maxRiskDollars = parseInt(maxRiskInput.value) || 200;
         _saveLocal();
         _renderFeed();   // rebuild cards with new dollar values
@@ -1352,6 +1370,9 @@
     localStorage.setItem(LS_KEY, JSON.stringify({
       mnqContracts:  cfg.mnqContracts,
       mgcContracts:  cfg.mgcContracts,
+      btcContracts:  cfg.btcContracts,
+      ethContracts:  cfg.ethContracts,
+      xrpContracts:  cfg.xrpContracts,
       maxRiskDollars: cfg.maxRiskDollars,
       minConfidence: minConf,
       rrRatio:       cfg.rrRatio,

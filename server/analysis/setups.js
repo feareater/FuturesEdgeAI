@@ -11,6 +11,8 @@
 
 const { iofConfluenceScore } = require('./iof');
 
+const CRYPTO_SYMBOLS = new Set(['BTC', 'ETH', 'XRP']);
+
 const SCAN_WINDOW           = 100; // how many recent candles to examine
 const TRENDLINE_SCAN_WINDOW = 10;  // only look at last N candles for fresh trendline breaks
 
@@ -26,7 +28,7 @@ const BOS_QUAL_BONUS = 15;          // confidence pts added to the qualifying zo
 //   MGC → 1:1 (tighter ATR range; ★ $2,856 PF 4.02 on 30d backtest)
 //   MES → 2:1 (equity index micro, same breakout behavior as MNQ — pending backtest)
 //   MCL → 1.5:1 (crude oil, wider ATR than gold — pending backtest)
-const PDH_RR = { MNQ: 2.0, MGC: 1.0, MES: 2.0, MCL: 1.5 };
+const PDH_RR = { MNQ: 2.0, MGC: 1.0, MES: 2.0, MCL: 1.5, BTC: 2.0, ETH: 2.0, XRP: 2.0 };
 
 /**
  * Detect trade setups in the candle history.
@@ -70,8 +72,8 @@ function detectSetups(candles, indicators, regime, opts = {}) {
     ? _trendlineBreak(scanCandles, candles, trendlines, atrCurrent, regime, fvgs, orderBlocks, rrRatio)
     : [];
 
-  // Opening Range breakouts — only when OR is formed and feature data is present.
-  const orSetups = openingRange?.formed
+  // Opening Range breakouts — only for non-crypto (no OR concept for 24/7 markets).
+  const orSetups = (!CRYPTO_SYMBOLS.has(symbol) && openingRange?.formed)
     ? _orBreakout(scanCandles, candles, openingRange, atrCurrent, regime, fvgs, orderBlocks, rrRatio)
     : [];
 
@@ -510,9 +512,10 @@ function _pdhBreakout(scanCandles, allCandles, pdh, pdl, atrCurrent, regime, fvg
     const c    = scanCandles[idx];
     const prev = scanCandles[idx - 1];
 
-    // RTH filter (UTC): 13:00–21:30 covers both EST and EDT sessions
+    // RTH filter (UTC): 13:00–21:30 covers both EST and EDT sessions.
+    // Crypto trades 24/7 — skip the RTH gate entirely for BTC/ETH/XRP.
     const utcHour = Math.floor((c.time % 86400) / 3600);
-    if (utcHour < 13 || utcHour >= 22) continue;
+    if (!CRYPTO_SYMBOLS.has(symbol) && (utcHour < 13 || utcHour >= 22)) continue;
 
     // ── Bullish breakout: closes above PDH, prior close was at or below PDH ──
     if (c.close > pdh && prev.close <= pdh) {

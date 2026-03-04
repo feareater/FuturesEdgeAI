@@ -316,6 +316,51 @@ New `server/data/options.js` module (1h cache) fetches Yahoo Finance options cha
 
 ---
 
+## [v6.0] COMPLETED — Multi-Timeframe + Crypto Futures
+
+**Status:** ✅ Complete as of 2026-03-04
+
+### Context
+Two parallel expansions: 1h/2h/4h timeframes for all instruments (Yahoo 60m + derived); BTC, ETH, XRP perpetual futures via Coinbase International Exchange (`BTC-PERP`, `ETH-PERP`, `XRP-PERP`), public REST, no auth.
+
+### New timeframes (1h / 2h / 4h)
+- Yahoo Finance 60m fetched for MNQ/MGC/MES/MCL → `{sym}_1h.json`
+- `2h` and `4h` derived by aggregating 1h candles (2× and 4× respectively)
+- `snapshot.js` on-the-fly derivation fallback if seed files missing
+- `SCAN_TIMEFRAMES = ['5m','15m','30m','1h','2h','4h']`
+- UI: 1h / 2h / 4h buttons in topbar TF group
+
+### Crypto perpetuals (BTC / ETH / XRP)
+- Data source: `api.international.coinbase.com/api/v1/instruments/{instrument}/candles` — public, no auth; response field: `aggregations`
+- Instruments: `BTC-PERP`, `ETH-PERP`, `XRP-PERP`; internal symbols: `BTC`, `ETH`, `XRP`
+- Timeframes fetched: 5m/15m/30m/1h/2h native; 4h derived from 1h
+- Crypto gating: no `volumeProfile`, `openingRange`, or `sessionLevels`; no RTH filter in PDH breakout; no OR breakout
+- CVD resets at midnight UTC for crypto (not RTH 13:30)
+- TICK_SIZE: BTC=1.0, ETH=0.01, XRP=0.0001; TICK_VALUE same (1:1 per point)
+- Default contracts: btcContracts=1, ethContracts=1, xrpContracts=1
+- Calendar: crypto symbols bypass ForexFactory fetches (return [])
+
+### Files Created
+| File | Purpose |
+|---|---|
+| `server/data/coinbaseFetch.js` | Coinbase INTX candle fetcher + pagination + 4h derivation |
+
+### Files Modified
+| File | Changes |
+|---|---|
+| `server/data/seedFetch.js` | Add 1h (60m) to TIMEFRAMES; derive 2h/4h; call fetchAllCrypto |
+| `server/data/snapshot.js` | VALID_SYMBOLS + VALID_TIMEFRAMES + CRYPTO_SYMBOLS; 2h/4h derived paths |
+| `server/analysis/indicators.js` | CRYPTO_SYMBOLS guard for VP/OR/sessionLevels |
+| `server/analysis/setups.js` | CRYPTO_SYMBOLS guards for RTH filter + OR breakout; PDH_RR crypto entries |
+| `server/index.js` | SCAN_SYMBOLS/SCAN_TIMEFRAMES expansion; fetchAllCrypto call; calendar skip |
+| `config/settings.json` | btcContracts, ethContracts, xrpContracts added to risk block |
+| `public/index.html` | BTC/ETH/XRP symbol buttons; 1h/2h/4h TF buttons; crypto contract inputs |
+| `public/js/alerts.js` | TICK_SIZE/TICK_VALUE for crypto; contract wiring; _saveLocal/_loadLocal |
+| `public/js/chart.js` | Symbol-aware _computeCVD: crypto resets at midnight UTC |
+| `CHANGELOG.md` | v6.0 entry |
+
+---
+
 ## Future Plans
 
 _Next plan goes here._

@@ -570,15 +570,24 @@
   // ── CVD (Cumulative Volume Delta) ──────────────────────────────────────────
 
   function _computeCVD(candles) {
-    const RTH_SECS = 13 * 3600 + 30 * 60; // 13:30 UTC = 09:30 ET
+    // Crypto (24/7): reset CVD at midnight UTC each day.
+    // Futures: reset at RTH session open (13:30 UTC = 09:30 ET).
+    const isCrypto = ['BTC', 'ETH', 'XRP'].includes(activeSymbol);
+    const RTH_SECS = 13 * 3600 + 30 * 60; // 13:30 UTC
     let cumDelta = 0, currentDay = null;
     const histData = [], lineData = [];
     for (const c of candles) {
       const d = new Date(c.time * 1000);
       const dayKey = `${d.getUTCFullYear()}-${d.getUTCMonth()}-${d.getUTCDate()}`;
-      const utcSec = d.getUTCHours() * 3600 + d.getUTCMinutes() * 60;
-      if (dayKey !== currentDay && utcSec >= RTH_SECS) { cumDelta = 0; currentDay = dayKey; }
-      if (!currentDay) continue;
+      if (isCrypto) {
+        // Reset at each new UTC calendar day
+        if (dayKey !== currentDay) { cumDelta = 0; currentDay = dayKey; }
+      } else {
+        // Reset at RTH session open
+        const utcSec = d.getUTCHours() * 3600 + d.getUTCMinutes() * 60;
+        if (dayKey !== currentDay && utcSec >= RTH_SECS) { cumDelta = 0; currentDay = dayKey; }
+        if (!currentDay) continue;
+      }
       const hl = c.high - c.low;
       const delta = hl > 0 ? c.volume * (2 * (c.close - c.low) / hl - 1) : 0;
       cumDelta += delta;

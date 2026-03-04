@@ -18,6 +18,7 @@ const { saveAlertCache, loadAlertCache, saveCommentaryCache, loadCommentaryCache
         saveTradeLog, loadTradeLog,
         loadArchive, appendToArchive, updateArchiveOutcome } = require('./storage/log');
 const { fetchAll }              = require('./data/seedFetch');
+const { fetchAllCrypto }        = require('./data/coinbaseFetch');
 const autotrader                = require('./trading/autotrader');
 const simulator                 = require('./trading/simulator');
 const { computeRelativeStrength } = require('./analysis/relativeStrength');
@@ -654,10 +655,10 @@ function _applyTradeFilter(alerts) {
 // In seed mode it runs once at startup and is re-runnable via GET /api/scan.
 // ---------------------------------------------------------------------------
 
-const SCAN_SYMBOLS    = ['MNQ', 'MGC', 'MES', 'MCL'];
+const SCAN_SYMBOLS    = ['MNQ', 'MGC', 'MES', 'MCL', 'BTC', 'ETH', 'XRP'];
 // 1m/2m/3m removed: with 15-min delayed data they are stale by the time they display.
-// 5m/15m/30m give actionable signals even accounting for the data lag.
-const SCAN_TIMEFRAMES = ['5m', '15m', '30m'];
+// 5m/15m/30m/1h/2h/4h give actionable signals even accounting for the data lag.
+const SCAN_TIMEFRAMES = ['5m', '15m', '30m', '1h', '2h', '4h'];
 
 /**
  * Run a full scan. Returns the count of NEW alerts added to the cache.
@@ -670,6 +671,8 @@ async function runScan() {
   let calendarCache = {};
   if (settings.features?.economicCalendar) {
     for (const sym of SCAN_SYMBOLS) {
+      // Crypto symbols have no relevant ForexFactory calendar events
+      if (['BTC', 'ETH', 'XRP'].includes(sym)) { calendarCache[sym] = []; continue; }
       try { calendarCache[sym] = await getCalendarEvents(sym); } catch { calendarCache[sym] = []; }
     }
   }
@@ -841,6 +844,11 @@ async function _autoRefresh({ fetchData = true } = {}) {
     } catch (err) {
       console.error('[refresh] Yahoo fetch failed:', err.message, '— using existing data');
       // Non-fatal: continue with existing seed files; scan still re-evaluates open setups
+    }
+    try {
+      await fetchAllCrypto();
+    } catch (err) {
+      console.error('[refresh] Coinbase fetch failed:', err.message, '— using existing crypto data');
     }
   }
 

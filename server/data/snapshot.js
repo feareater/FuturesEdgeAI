@@ -14,8 +14,9 @@ const path = require('path');
 const DATA_SOURCE  = process.env.DATA_SOURCE ?? 'seed';
 const SEED_DIR     = path.join(__dirname, '..', '..', 'data', 'seed');
 
-const VALID_SYMBOLS    = ['MNQ', 'MGC', 'MES', 'MCL'];
-const VALID_TIMEFRAMES = ['1m', '2m', '3m', '5m', '15m', '30m'];
+const VALID_SYMBOLS    = ['MNQ', 'MGC', 'MES', 'MCL', 'BTC', 'ETH', 'XRP'];
+const VALID_TIMEFRAMES = ['1m', '2m', '3m', '5m', '15m', '30m', '1h', '2h', '4h'];
+const CRYPTO_SYMBOLS   = new Set(['BTC', 'ETH', 'XRP']);
 
 // ---------------------------------------------------------------------------
 // Public interface — these signatures stay constant regardless of data source
@@ -66,6 +67,14 @@ function _fromSeed(symbol, timeframe) {
       const fiveM = _fromSeed(symbol, '5m');
       return _aggregateCandles(fiveM, 6);
     }
+    if (timeframe === '2h') {
+      const oneH = _fromSeed(symbol, '1h');
+      return _aggregateCandles(oneH, 2);
+    }
+    if (timeframe === '4h') {
+      const oneH = _fromSeed(symbol, '1h');
+      return _aggregateCandles(oneH, 4);
+    }
     throw new Error(
       `Seed file not found: ${filePath}\n` +
       `Run "node server/data/seedFetch.js" to populate seed data.`
@@ -105,4 +114,4 @@ function _validate(symbol, timeframe) {
 
 // ---------------------------------------------------------------------------
 
-module.exports = { getCandles, getAllTimeframes, VALID_SYMBOLS, VALID_TIMEFRAMES };
+module.exports = { getCandles, getAllTimeframes, VALID_SYMBOLS, VALID_TIMEFRAMES, CRYPTO_SYMBOLS };
