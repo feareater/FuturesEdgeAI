@@ -1276,6 +1276,11 @@ html, body {
 }
 .alert-card.is-taken-card:hover { opacity: 0.85; }
 
+/* Active (taken + open) trades shown at top — full opacity, accent left border */
+.alert-card.is-active-taken {
+  border-left: 3px solid var(--accent);
+}
+
 
 /* ── Chart marker → alert card highlight ─────────────────────────────────────── */
 

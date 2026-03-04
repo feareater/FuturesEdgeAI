@@ -35,6 +35,17 @@
   // Bridge for chart.js (which loads first) to check taken state
   window._isTaken = (key) => takenTrades.has(key);
 
+  // ── Taken+open alerts across all symbols ──────────────────────────────────
+  // Persisted to localStorage so the section survives symbol changes and reloads.
+  const takenOpenAlertData = new Map(); // alertKey → full alert object
+  const _TAKEN_OPEN_LS = 'futuresedge_taken_open';
+
+  function _saveTakenOpen() {
+    try {
+      localStorage.setItem(_TAKEN_OPEN_LS, JSON.stringify([...takenOpenAlertData.values()]));
+    } catch {}
+  }
+
   // ── Manual trades (not tied to detected setups) ────────────────────────────
   const manualTrades = [];
 
@@ -367,6 +378,14 @@
       }
     } catch (_) {}
 
+    // Restore taken+open alert data from localStorage
+    try {
+      const saved = JSON.parse(localStorage.getItem(_TAKEN_OPEN_LS) || '[]');
+      saved.forEach(a => {
+        if (a?.setup?.outcome === 'open') takenOpenAlertData.set(_alertKey(a), a);
+      });
+    } catch (_) {}
+
     // Restore any locally saved overrides (client-only: contracts, maxRisk, minConf)
     const saved = _loadLocal();
     if (saved) {
@@ -455,6 +474,16 @@
         if (!res.ok) throw new Error(`/api/alerts ${res.status}`);
         const { alerts } = await res.json();
         currentAlerts = alerts;
+        // Sync server-resolved outcomes back into the cross-symbol cache
+        let takenOpenChanged = false;
+        for (const a of currentAlerts) {
+          const key = _alertKey(a);
+          if (takenOpenAlertData.has(key) && a.setup?.outcome !== 'open') {
+            takenOpenAlertData.delete(key);
+            takenOpenChanged = true;
+          }
+        }
+        if (takenOpenChanged) _saveTakenOpen();
         _renderFeed();
         _updateStats();
         _syncChartMarkers();
@@ -470,18 +499,38 @@
 
   function _renderFeed() {
     alertFeed.innerHTML = '';
+
+    // ── Active Trades — top, all symbols, taken+open ────────────────────────
+    const openTaken = [...takenOpenAlertData.values()];
+    if (openTaken.length > 0) {
+      const sep = document.createElement('div');
+      sep.className = 'taken-section-header';
+      sep.innerHTML = `<span>Active Trades</span><span class="taken-count">${openTaken.length}</span>`;
+      alertFeed.appendChild(sep);
+      for (const a of openTaken) {
+        const card = _buildCard(a);
+        card.classList.add('is-active-taken');
+        alertFeed.appendChild(card);
+      }
+    }
+
     if (!currentAlerts.length) {
-      const msg = minConf > 0
-        ? `No ${activeSymbol} setups at ≥${minConf}% confidence.`
-        : `No ${activeSymbol} setups detected yet.`;
-      alertFeed.innerHTML = `<p class="placeholder">${msg}</p>`;
-      // Clear prev keys so next refresh can detect new alerts correctly
+      if (openTaken.length === 0) {
+        const msg = minConf > 0
+          ? `No ${activeSymbol} setups at ≥${minConf}% confidence.`
+          : `No ${activeSymbol} setups detected yet.`;
+        alertFeed.innerHTML = `<p class="placeholder">${msg}</p>`;
+      }
       _prevAlertKeys = new Set();
+      _renderManualTrades();
       return;
     }
 
     const active = currentAlerts.filter(a => !takenTrades.has(_alertKey(a)));
-    const taken  = currentAlerts.filter(a =>  takenTrades.has(_alertKey(a)));
+    // Resolved taken alerts (not open, not already shown in top section)
+    const takenResolved = currentAlerts.filter(a =>
+      takenTrades.has(_alertKey(a)) && !takenOpenAlertData.has(_alertKey(a))
+    );
 
     // ── Active + suppressed alerts ──────────────────────────────────────────
     for (const a of active) {
@@ -494,14 +543,13 @@
       alertFeed.appendChild(card);
     }
 
-    // ── Taken Trades section ────────────────────────────────────────────────
-    if (taken.length > 0) {
+    // ── Resolved Taken Trades (current symbol only) ─────────────────────────
+    if (takenResolved.length > 0) {
       const sep = document.createElement('div');
       sep.className = 'taken-section-header';
-      sep.innerHTML = `<span>Taken Trades</span><span class="taken-count">${taken.length}</span>`;
+      sep.innerHTML = `<span>Taken Trades</span><span class="taken-count">${takenResolved.length}</span>`;
       alertFeed.appendChild(sep);
-
-      for (const a of taken) {
+      for (const a of takenResolved) {
         const card = _buildCard(a);
         card.classList.add('is-taken-card');
         alertFeed.appendChild(card);
@@ -804,6 +852,11 @@
             if (!res.ok) throw new Error(res.status);
             const { trade } = await res.json();
             takenTrades.set(aiKey, trade);
+            // Save full alert object for cross-symbol Active Trades section
+            if (alert.setup?.outcome === 'open' || alert.setup?.outcome == null) {
+              takenOpenAlertData.set(aiKey, alert);
+              _saveTakenOpen();
+            }
             tradeFormEl.style.display = 'none';
 
             // Swap Take button → TAKEN badge without full re-render
@@ -857,8 +910,11 @@
           });
           if (!res.ok) throw new Error(res.status);
           // Update local alert object and re-render to reflect new outcome
-          alert.setup.outcome     = outcome;
+          alert.setup.outcome      = outcome;
           alert.setup.userOverride = true;
+          // Remove from cross-symbol Active Trades section
+          takenOpenAlertData.delete(aiKey);
+          _saveTakenOpen();
           _renderFeed();
           _updateStats();
         } catch (err) {

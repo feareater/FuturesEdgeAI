@@ -212,6 +212,7 @@
 
     <div class="nav-section">Chart Layers</div>
     <a href="#layers">All Layers Explained</a>
+    <a href="#market-depth">CVD &amp; Options Levels</a>
 
     <div class="nav-section">Features &amp; Tools</div>
     <a href="#features">Feature Toggles</a>
@@ -1232,12 +1233,15 @@
         <div class="card">
           <h4>Volume Profile <code>volumeProfile</code></h4>
           <p>Displays volume distribution across price levels for the current and prior RTH
-          session. Three key lines: <strong>POC</strong> (Point of Control — white dashed,
-          price with the highest volume traded), <strong>VAH</strong> (Value Area High —
-          green dashed, upper bound of the 70% volume zone), <strong>VAL</strong> (Value Area
-          Low — red dashed, lower bound), and a prior session POC (<strong>pPOC</strong> —
-          dim dotted). Price tends to gravitate toward the POC and react at VAH/VAL as
-          natural support and resistance.</p>
+          session. Key lines: <strong>POC</strong> (Point of Control — white dashed, highest
+          volume price), <strong>VAH</strong> (Value Area High — green dashed, upper 70%
+          volume bound), <strong>VAL</strong> (Value Area Low — red dashed, lower bound),
+          and prior session POC (<strong>pPOC</strong> — dim dotted).<br/>
+          Also shows <strong>HVN</strong> (High Volume Nodes — amber dotted lines, buckets
+          ≥1.5× mean volume, up to 5) and <strong>LVN</strong> (Low Volume Nodes — lavender
+          dotted lines, buckets ≤0.4× mean within the value area, up to 3). HVNs act as
+          magnetic levels; LVNs are thin zones price tends to move through quickly.
+          All VP lines toggle together under this layer.</p>
         </div>
         <div class="card amber">
           <h4>Opening Range <code>openingRange</code></h4>
@@ -1268,6 +1272,37 @@
           MNQ and MES typically show 0.85+ correlation; MCL and MGC tend to have low or
           negative correlation with equities. When MNQ/MES correlation drops below 0.7,
           it signals potential intermarket stress — treat equity index setups with extra caution.</p>
+        </div>
+      </div>
+
+      <h3 id="market-depth">Market Depth Layers</h3>
+      <div class="cards">
+        <div class="card" style="border-top-color:#2196f3">
+          <h4>CVD — Cumulative Volume Delta <code>cvd</code></h4>
+          <p>A synchronized sub-panel below the price chart showing buying vs. selling
+          pressure estimated from OHLCV data. Each bar's delta is calculated as:
+          <code>volume × (2×(close−low)/(high−low) − 1)</code> — positive (green) when
+          close is near the high, negative (red) when near the low.<br/>
+          The <strong>histogram</strong> shows per-bar delta; the <strong>blue line</strong>
+          is the cumulative sum, resetting at the RTH session open (9:30 AM ET) each day.
+          Use CVD to confirm or question a price move: price rising with rising CVD =
+          genuine buying; price rising with falling CVD = short-covering, not conviction.
+          The sub-panel time scale is locked to the main chart.</p>
+        </div>
+        <div class="card" style="border-top-color:#ff5722">
+          <h4>Options Levels <code>optionsLevels</code></h4>
+          <p>Horizontal price lines derived from the nearest-expiry options chain for each
+          instrument (via Yahoo Finance, refreshed hourly):<br/>
+          <strong>OI Walls</strong> (orange dashed, up to 3 lines) — the strikes with the
+          highest combined call + put open interest. Market makers are delta-hedged around
+          these levels, creating gravitational pulls or repulsion depending on gamma.<br/>
+          <strong>Max Pain</strong> (magenta dotted) — the strike at which total intrinsic
+          value paid out to all option buyers is minimized; index prices tend to gravitate
+          toward max pain into expiry.<br/>
+          The topbar shows <strong>P/C ratio</strong> (put OI ÷ call OI — above 1.3 is
+          bearish skew, below 0.7 is bullish skew) and <strong>ATM IV%</strong> (implied
+          volatility of the call nearest to spot price). Widget and lines are hidden
+          automatically when Yahoo has no options data for that instrument.</p>
         </div>
       </div>
     </section>
