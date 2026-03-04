@@ -55,13 +55,25 @@ html, body {
 
 #chart-wrap {
   flex: 1;
-  position: relative;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 #chart-container {
-  position: absolute;
-  inset: 0;
+  flex: 1;
+  min-height: 0;
+}
+
+#cvd-container {
+  height: 120px;
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  display: none;
+}
+
+#cvd-container.cvd-visible {
+  display: block;
 }
 
 /* ── Brand ──────────────────────────────────────────────────────────────── */
@@ -1034,12 +1046,15 @@ html, body {
 
   #chart-wrap {
     flex: 1;
-    position: relative;
     overflow: hidden;
+    display: flex;
+    flex-direction: column;
     min-height: 0;
   }
 
-  #chart-container { position: absolute; inset: 0; }
+  #chart-container { flex: 1; min-height: 0; }
+
+  #cvd-container { height: 90px; }
 
   /* Left panel (alerts): in normal flow, fills #main when visible */
   #left-panel {
@@ -1440,6 +1455,25 @@ html, body {
 .rs-signal   { font-size: 11px; }
 .rs-bull     { color: var(--bull); }
 .rs-bear     { color: var(--bear); }
+
+/* ── Options Widget ──────────────────────────────────────────────────────── */
+
+.options-widget {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  padding: 2px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  white-space: nowrap;
+}
+.opt-label    { color: var(--text-dim); font-size: 10px; text-transform: uppercase; }
+.opt-value    { font-weight: 600; color: var(--text); }
+.opt-sep      { color: var(--text-dim); }
+.opt-bullish  { color: var(--bull); }
+.opt-bearish  { color: var(--bear); }
 
 /* ── Correlation Heatmap panel ───────────────────────────────────────────── */
 

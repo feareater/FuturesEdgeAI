@@ -55,6 +55,16 @@
   let sessionPriceLines = [];
   let lastSessionLevels = null;
 
+  // CVD sub-chart
+  let cvdChart      = null;
+  let cvdHistSeries = null;
+  let cvdLineSeries = null;
+  let rawCandles    = [];
+
+  // Options Levels price line handles
+  let optionsPriceLines = [];
+  let lastOptionsLevels = null;
+
   // Marker arrays merged into candleSeries
   let swingHighMarkers = [];
   let swingLowMarkers  = [];
@@ -85,6 +95,8 @@
     openingRange:       true,
     sessionLevels:      true,
     correlationHeatmap: true,
+    cvd:                true,
+    optionsLevels:      true,
   };
 
   // ── DOM refs ───────────────────────────────────────────────────────────────
@@ -202,11 +214,50 @@
       d ? setOHLC(d) : resetOHLC();
     });
 
+    // CVD sub-chart — initialized here but only shown when cvd layer is on
+    const cvdEl = document.getElementById('cvd-container');
+    if (cvdEl) {
+      cvdChart = LightweightCharts.createChart(cvdEl, {
+        width:  cvdEl.clientWidth,
+        height: cvdEl.clientHeight,
+        layout: {
+          background: { type: 'solid', color: '#131722' },
+          textColor: '#d1d4dc',
+        },
+        grid: {
+          vertLines: { color: '#1e222d' },
+          horzLines: { color: '#1e222d' },
+        },
+        rightPriceScale: { borderColor: '#2a2e39', autoScale: true },
+        timeScale: { borderColor: '#2a2e39', visible: false },
+        handleScroll: false,
+        handleScale: false,
+      });
+      cvdHistSeries = cvdChart.addHistogramSeries({
+        priceFormat: { type: 'volume' },
+        priceLineVisible: false,
+        lastValueVisible: false,
+      });
+      cvdLineSeries = cvdChart.addLineSeries({
+        color: '#2196f3', lineWidth: 1,
+        priceLineVisible: false, lastValueVisible: true, title: 'CVD',
+      });
+      // One-way time sync: main chart scroll/zoom drives CVD sub-chart
+      chart.timeScale().subscribeVisibleTimeRangeChange(range => {
+        if (!range || !vis.cvd) return;
+        try { cvdChart.timeScale().setVisibleRange(range); } catch (_) {}
+      });
+    }
+
     window.addEventListener('resize', () => {
       chart.applyOptions({
         width:  chartContainer.clientWidth,
         height: chartContainer.clientHeight,
       });
+      if (cvdChart && vis.cvd) {
+        const el = document.getElementById('cvd-container');
+        if (el) cvdChart.applyOptions({ width: el.clientWidth, height: el.clientHeight });
+      }
     });
 
     // Alert marker click — find alerts whose snapped time matches the clicked bar.
@@ -246,6 +297,7 @@
     if (!candles.length) throw new Error('No candles returned');
 
     candleSeries.setData(candles);
+    rawCandles = candles;
     chart.timeScale().scrollToRealTime();
     lastCandle = candles[candles.length - 1];
 
@@ -323,6 +375,14 @@
     lastSessionLevels = d.sessionLevels || null;
     clearSessionLines();
     if (vis.sessionLevels && lastSessionLevels) _drawSessionLevels(lastSessionLevels);
+
+    // CVD — recompute from rawCandles on every data load
+    clearCVD();
+    if (vis.cvd) _drawCVD();
+
+    // Options Levels — cleared here; fresh data arrives async via setOptionsLevels()
+    clearOptionsLines();
+    lastOptionsLevels = null;
 
     // Apply persisted visibility state
     for (const [key, visible] of Object.entries(vis)) {
@@ -497,6 +557,89 @@
     add(vp.vah,     'rgba(38,166,154,0.80)',  Dashed,  'VAH');
     add(vp.val,     'rgba(239,83,80,0.80)',   Dashed,  'VAL');
     add(vp.prevPoc, 'rgba(180,180,180,0.40)', Dotted,  'pPOC');
+    // HVN — amber dotted, axis label hidden to reduce clutter
+    for (const price of (vp.hvn || [])) {
+      add(price, 'rgba(255,193,7,0.55)', Dotted, 'HVN', false);
+    }
+    // LVN — lavender dotted, axis label hidden
+    for (const price of (vp.lvn || [])) {
+      add(price, 'rgba(179,136,255,0.55)', Dotted, 'LVN', false);
+    }
+  }
+
+  // ── CVD (Cumulative Volume Delta) ──────────────────────────────────────────
+
+  function _computeCVD(candles) {
+    const RTH_SECS = 13 * 3600 + 30 * 60; // 13:30 UTC = 09:30 ET
+    let cumDelta = 0, currentDay = null;
+    const histData = [], lineData = [];
+    for (const c of candles) {
+      const d = new Date(c.time * 1000);
+      const dayKey = `${d.getUTCFullYear()}-${d.getUTCMonth()}-${d.getUTCDate()}`;
+      const utcSec = d.getUTCHours() * 3600 + d.getUTCMinutes() * 60;
+      if (dayKey !== currentDay && utcSec >= RTH_SECS) { cumDelta = 0; currentDay = dayKey; }
+      if (!currentDay) continue;
+      const hl = c.high - c.low;
+      const delta = hl > 0 ? c.volume * (2 * (c.close - c.low) / hl - 1) : 0;
+      cumDelta += delta;
+      histData.push({ time: c.time, value: delta, color: delta >= 0 ? '#26a69a' : '#ef5350' });
+      lineData.push({ time: c.time, value: cumDelta });
+    }
+    return { histData, lineData };
+  }
+
+  function clearCVD() {
+    if (cvdHistSeries) cvdHistSeries.setData([]);
+    if (cvdLineSeries)  cvdLineSeries.setData([]);
+  }
+
+  function _drawCVD() {
+    if (!rawCandles.length || !cvdHistSeries) return;
+    const { histData, lineData } = _computeCVD(rawCandles);
+    cvdHistSeries.setData(histData);
+    cvdLineSeries.setData(lineData);
+    try {
+      const r = chart.timeScale().getVisibleRange();
+      if (r && cvdChart) cvdChart.timeScale().setVisibleRange(r);
+    } catch (_) {}
+  }
+
+  // ── Options Levels ─────────────────────────────────────────────────────────
+
+  function clearOptionsLines() {
+    for (const { line } of optionsPriceLines) {
+      try { candleSeries.removePriceLine(line); } catch (_) {}
+    }
+    optionsPriceLines = [];
+  }
+
+  function _drawOptionsLevels(data) {
+    if (!data) return;
+    const Dashed = LightweightCharts.LineStyle.Dashed;
+    const Dotted = LightweightCharts.LineStyle.Dotted;
+    // OI Walls — deep orange dashed, dimming by rank
+    (data.oiWalls || []).forEach((strike, i) => {
+      if (strike == null) return;
+      optionsPriceLines.push({ line: candleSeries.createPriceLine({
+        price: strike,
+        color: `rgba(255,87,34,${(0.85 - i * 0.15).toFixed(2)})`,
+        lineWidth: i === 0 ? 2 : 1,
+        lineStyle: Dashed,
+        axisLabelVisible: true,
+        title: `OI${i + 1}`,
+      })});
+    });
+    // Max Pain — magenta dotted
+    if (data.maxPain != null) {
+      optionsPriceLines.push({ line: candleSeries.createPriceLine({
+        price: data.maxPain,
+        color: 'rgba(233,30,99,0.80)',
+        lineWidth: 1,
+        lineStyle: Dotted,
+        axisLabelVisible: true,
+        title: 'MaxPain',
+      })});
+    }
   }
 
   // ── Opening Range ───────────────────────────────────────────────────────────
@@ -682,6 +825,27 @@
         if (panel) panel.style.display = visible ? '' : 'none';
         break;
       }
+
+      case 'cvd': {
+        const el = document.getElementById('cvd-container');
+        if (!el) break;
+        if (visible) {
+          el.classList.add('cvd-visible');
+          if (cvdChart) cvdChart.applyOptions({ width: el.clientWidth, height: el.clientHeight });
+          _drawCVD();
+        } else {
+          el.classList.remove('cvd-visible');
+          clearCVD();
+        }
+        // Trigger main chart to recalculate its flex height
+        chart.applyOptions({ width: chartContainer.clientWidth, height: chartContainer.clientHeight });
+        break;
+      }
+
+      case 'optionsLevels':
+        clearOptionsLines();
+        if (visible && lastOptionsLevels) _drawOptionsLevels(lastOptionsLevels);
+        break;
     }
   }
 
@@ -711,6 +875,13 @@
     reload() {
       loadData(activeSymbol, activeTf)
         .catch(err => console.error('[chart] reload:', err.message));
+    },
+
+    // Set options levels from /api/options — called by alerts.js after each symbol change.
+    setOptionsLevels(data) {
+      lastOptionsLevels = data;
+      clearOptionsLines();
+      if (vis.optionsLevels && data) _drawOptionsLevels(data);
     },
 
     // Plot colored alert arrows on the chart for the current symbol + TF.

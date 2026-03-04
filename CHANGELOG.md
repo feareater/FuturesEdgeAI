@@ -4,6 +4,31 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v5.0] — 2026-03-04 — Market Depth Upgrade
+
+### Added — HVN/LVN (High and Low Volume Nodes)
+- `server/analysis/volumeProfile.js` — new `_extractNodes()` helper: identifies up to 5 High Volume Nodes (buckets ≥ 1.5× mean volume, excluding POC) and up to 3 Low Volume Nodes (buckets ≤ 0.4× mean, within value area).
+- `computeVolumeProfile()` return now includes `hvn: []` and `lvn: []` price arrays alongside existing `poc/vah/val`.
+- `public/js/chart.js` — `_drawVolumeProfile()` extended: HVN lines drawn amber dotted, LVN lines lavender dotted; both toggled with the existing Volume Profile layer.
+
+### Added — CVD (Cumulative Volume Delta) Sub-Chart
+- `public/js/chart.js` — `_computeCVD(candles)`: estimates per-bar delta from OHLCV (`volume × (2×(close−low)/(high−low) − 1)`), resets at RTH open (13:30 UTC); accumulates into session CVD.
+- Second TradingView Lightweight Charts instance in `#cvd-container`: green/red histogram (per-bar delta) + blue cumulative line. Time scale synced one-way from main chart scroll/zoom.
+- `public/index.html` — `#cvd-container` div added inside `#chart-wrap`; CVD layer checkbox added.
+- `public/css/dashboard.css` — `#chart-wrap` changed from `position:relative` to `display:flex; flex-direction:column`; `#chart-container` changed to `flex:1`; `#cvd-container` 120px height (90px mobile), hidden until layer is toggled on.
+- Layer key: `cvd` — defaults on; toggling collapses/expands the sub-panel.
+
+### Added — Options Levels (OI Walls, Max Pain, P/C Ratio, ATM IV)
+- `server/data/options.js` — fetches Yahoo Finance nearest-expiry options chain for each futures ticker (NQ=F, ES=F, GC=F, CL=F). Computes: top-3 OI walls, max pain strike (standard intrinsic-value minimization), put/call ratio by OI, ATM implied volatility. 1-hour in-memory cache; returns `null` gracefully when data unavailable.
+- `GET /api/options?symbol=` — returns `{ symbol, options: {...} | null }`.
+- `public/js/chart.js` — `_drawOptionsLevels()`: OI walls rendered as deep-orange dashed lines (`OI1/2/3`, dimming by rank); max pain as magenta dotted line (`MaxPain`). New `ChartAPI.setOptionsLevels(data)` method.
+- `public/js/alerts.js` — `_fetchOptionsData()` called on page load and on every `chartViewChange`; `_updateOptionsWidget()` updates topbar P/C ratio and IV% display.
+- `public/index.html` — Options Levels layer checkbox; `#options-widget` topbar element (P/C + IV).
+- `public/css/dashboard.css` — `.options-widget` and supporting classes.
+- Layer key: `optionsLevels` — defaults on; gracefully hides when Yahoo has no options data.
+
+---
+
 ## [v4.0] — 2026-03-04 — Trading Intelligence Upgrade
 
 ### Added — Historical Setup Archive

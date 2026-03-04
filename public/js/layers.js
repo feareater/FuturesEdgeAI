@@ -21,6 +21,8 @@
     openingRange:       true,
     sessionLevels:      true,
     correlationHeatmap: true,
+    cvd:                true,
+    optionsLevels:      true,
   };
 
   function load() {

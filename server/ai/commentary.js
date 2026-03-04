@@ -198,7 +198,7 @@ async function generateCommentary(alerts, getCandles, settings, extrasMap = {}) 
   try {
     const msg = await _getClient().messages.create({
       model:      'claude-sonnet-4-6',
-      max_tokens: 2000,
+      max_tokens: 1200,
       system,
       messages:   [{ role: 'user', content: userPrompt }],
     });
@@ -272,7 +272,7 @@ async function generateSingle(alert, getCandles, extrasMap = {}) {
   try {
     const msg = await _getClient().messages.create({
       model:      'claude-sonnet-4-6',
-      max_tokens: 700,
+      max_tokens: 400,
       system,
       messages:   [{ role: 'user', content: userPrompt }],
     });

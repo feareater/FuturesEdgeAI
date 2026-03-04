@@ -284,6 +284,38 @@ System scans 4 instruments (MNQ, MGC, MES, MCL) with full feature set from v3.0.
 
 ---
 
+## [v5.0] COMPLETED — Market Depth Upgrade
+
+**Status:** ✅ Complete as of 2026-03-04
+
+### Feature 1: HVN/LVN ✅
+ATR-ratio scoring was already on zones; this adds volume-node classification to the VP histogram. HVN (≥1.5× mean vol) = magnetic levels; LVN (≤0.4× mean, within value area) = thin zones price moves through quickly. Both rendered as dotted lines under the existing VP layer toggle.
+
+### Feature 2: CVD ✅
+Cumulative Volume Delta estimated from OHLCV candles entirely client-side. Delta formula: `volume × (2×(close−low)/(high−low) − 1)`. Resets at RTH session open (13:30 UTC). Displayed as a second LW Charts instance (histogram + cumulative line) in a new `#cvd-container` below the main chart; flex-column layout replaces the previous absolute-positioning of `#chart-container`.
+
+### Feature 3: Options Levels ✅
+New `server/data/options.js` module (1h cache) fetches Yahoo Finance options chain for nearest expiry. Computes OI walls (top-3 strikes by combined OI), max pain (minimize intrinsic-value sum for option buyers), P/C ratio (put OI / call OI), ATM IV (nearest call to market price). Displayed as OI wall (orange dashed) and MaxPain (magenta dotted) price lines; topbar widget shows P/C + IV%. Gracefully returns `null` when Yahoo has no data — widget hides, no lines drawn.
+
+### Files Created
+| File | Purpose |
+|---|---|
+| `server/data/options.js` | Options chain fetch + metrics computation |
+
+### Files Modified
+| File | Changes |
+|---|---|
+| `server/analysis/volumeProfile.js` | `_extractNodes()` for HVN/LVN; `hvn/lvn` in return |
+| `server/index.js` | `/api/options` route |
+| `public/js/chart.js` | CVD sub-chart, `_computeCVD()`, options lines, `setOptionsLevels()` ChartAPI method |
+| `public/js/layers.js` | `cvd` + `optionsLevels` in DEFAULTS |
+| `public/js/alerts.js` | `_fetchOptionsData()`, `_updateOptionsWidget()`, wired to `chartViewChange` |
+| `public/css/dashboard.css` | Flex-column chart-wrap; CVD container; options widget styles |
+| `public/index.html` | `#cvd-container`, CVD + Options layer checkboxes, `#options-widget` |
+| `CHANGELOG.md` | v5.0 entry |
+
+---
+
 ## Future Plans
 
 _Next plan goes here._

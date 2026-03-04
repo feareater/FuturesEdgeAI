@@ -66,6 +66,15 @@
         <span id="rs-signal" class="rs-signal">—</span>
       </div>
 
+      <!-- Options data widget (P/C ratio + ATM IV) -->
+      <div id="options-widget" class="options-widget" style="display:none">
+        <span class="opt-label">P/C</span>
+        <span id="opt-pc" class="opt-value">—</span>
+        <span class="opt-sep">|</span>
+        <span class="opt-label">IV</span>
+        <span id="opt-iv" class="opt-value">—</span>
+      </div>
+
       <a href="/docs.html" id="docs-nav-link" title="Setup Guide">Guide</a>
       <a href="/commentary.html" id="ai-nav-link" title="AI Analysis">AI</a>
       <a href="/performance.html" id="perf-nav-link" title="Performance Analytics">Stats</a>
@@ -167,6 +176,7 @@
 
       <div id="chart-wrap">
         <div id="chart-container"></div>
+        <div id="cvd-container"></div>
       </div>
 
       <aside id="right-panel">
@@ -254,6 +264,18 @@
               <input type="checkbox" data-layer="correlationHeatmap" checked />
               <span class="swatch corr-swatch"></span>
               <span class="layer-name">Correlation</span>
+            </label>
+
+            <label class="layer-row">
+              <input type="checkbox" data-layer="cvd" checked />
+              <span class="swatch" style="background:rgba(33,150,243,0.7)"></span>
+              <span class="layer-name">CVD</span>
+            </label>
+
+            <label class="layer-row">
+              <input type="checkbox" data-layer="optionsLevels" checked />
+              <span class="swatch" style="background:rgba(255,87,34,0.7);border-style:dashed"></span>
+              <span class="layer-name">Options Levels</span>
             </label>
 
           </div>

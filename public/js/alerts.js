@@ -173,6 +173,35 @@
     } catch (_) {}
   }
 
+  // ── Options data (OI walls, max pain, P/C ratio, ATM IV) ───────────────────
+
+  async function _fetchOptionsData(symbol) {
+    try {
+      const res = await fetch(`/api/options?symbol=${symbol}`);
+      if (!res.ok) return;
+      const { options } = await res.json();
+      window.ChartAPI?.setOptionsLevels?.(options);
+      _updateOptionsWidget(options);
+    } catch (_) {}
+  }
+
+  function _updateOptionsWidget(data) {
+    const widget = document.getElementById('options-widget');
+    const pcEl   = document.getElementById('opt-pc');
+    const ivEl   = document.getElementById('opt-iv');
+    if (!widget) return;
+    if (!data) { widget.style.display = 'none'; return; }
+    widget.style.display = '';
+    if (pcEl) {
+      const v = data.pcRatio;
+      pcEl.textContent = v != null ? v.toFixed(2) : '—';
+      pcEl.className   = 'opt-value' + (v > 1.3 ? ' opt-bearish' : v < 0.7 ? ' opt-bullish' : '');
+    }
+    if (ivEl) {
+      ivEl.textContent = data.atmIV != null ? `${(data.atmIV * 100).toFixed(1)}%` : '—';
+    }
+  }
+
   // ── Correlation heatmap ─────────────────────────────────────────────────────
 
   const CORR_SYMBOLS = ['MNQ', 'MGC', 'MES', 'MCL'];
@@ -369,6 +398,7 @@
     if (cfg.features?.relativeStrength && (activeSymbol === 'MNQ' || activeSymbol === 'MES')) {
       _updateRSWidget();
     }
+    _fetchOptionsData(activeSymbol);
 
     // Listen for chart symbol/TF changes (dispatched by chart.js after each loadData)
     document.addEventListener('chartViewChange', (e) => {
@@ -386,6 +416,7 @@
         _updateRSWidget();
       }
       if (cfg.features?.economicCalendar) _updateCalendarBadge();
+      _fetchOptionsData(activeSymbol);
     });
 
     // Listen for chart marker clicks — scroll to and highlight the matching alert card

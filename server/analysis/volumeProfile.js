@@ -52,6 +52,8 @@ function computeVolumeProfile(candles, symbol) {
     poc:     current?.poc     ?? null,
     vah:     current?.vah     ?? null,
     val:     current?.val     ?? null,
+    hvn:     current?.hvn     ?? [],
+    lvn:     current?.lvn     ?? [],
     prevPoc: prev?.poc        ?? null,
     prevVah: prev?.vah        ?? null,
     prevVal: prev?.val        ?? null,
@@ -117,11 +119,36 @@ function _profileFromCandles(candles, bucketSize) {
     accumulated = sorted.slice(lo, hi + 1).reduce((s, [, v]) => s + v, 0);
   }
 
-  return {
-    poc,
-    vah: sorted[hi][0],
-    val: sorted[lo][0],
-  };
+  const vah = sorted[hi][0];
+  const val = sorted[lo][0];
+  const { hvn, lvn } = _extractNodes(sorted, poc, vah, val);
+
+  return { poc, vah, val, hvn, lvn };
+}
+
+/**
+ * Identify High Volume Nodes (HVN) and Low Volume Nodes (LVN) from a sorted histogram.
+ * HVN: up to 5 buckets with volume >= 1.5x mean, excluding POC.
+ * LVN: up to 3 buckets with volume <= 0.4x mean, within the value area [val, vah].
+ */
+function _extractNodes(sorted, poc, vah, val) {
+  if (!sorted || sorted.length === 0) return { hvn: [], lvn: [] };
+
+  const meanVol = sorted.reduce((s, [, v]) => s + v, 0) / sorted.length;
+
+  const hvn = sorted
+    .filter(([p, v]) => p !== poc && v >= meanVol * 1.5)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([price]) => price);
+
+  const lvn = sorted
+    .filter(([p, v]) => p >= val && p <= vah && v <= meanVol * 0.4)
+    .sort((a, b) => a[1] - b[1])
+    .slice(0, 3)
+    .map(([price]) => price);
+
+  return { hvn, lvn };
 }
 
 function _utcHour(unixSec) {

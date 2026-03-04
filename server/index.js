@@ -24,6 +24,7 @@ const { computeRelativeStrength } = require('./analysis/relativeStrength');
 const { computeCorrelationMatrix } = require('./analysis/correlation');
 const { computePerformanceStats }  = require('./analysis/performanceStats');
 const { getCalendarEvents, getNextEvent, isNearEvent } = require('./data/calendar');
+const { getOptionsData }                               = require('./data/options');
 const settings              = require('../config/settings.json');
 const fs                    = require('fs');
 const SETTINGS_PATH         = require('path').join(__dirname, '..', 'config', 'settings.json');
@@ -480,6 +481,18 @@ app.get('/api/calendar', async (req, res) => {
     res.json({ events });
   } catch (err) {
     console.error('[api] /calendar error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/options?symbol=MNQ — options chain metrics (OI walls, max pain, P/C ratio, ATM IV)
+app.get('/api/options', async (req, res) => {
+  try {
+    const { symbol = 'MNQ' } = req.query;
+    const options = await getOptionsData(symbol);
+    res.json({ symbol, options });
+  } catch (err) {
+    console.error('[api] /options error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
