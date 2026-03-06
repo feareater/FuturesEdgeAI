@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>FuturesEdge — Prop Firm Tracker</title>
+  <link rel="manifest" href="/manifest.json" />
+  <meta name="theme-color" content="#0d0f1a" />
+  <link rel="stylesheet" href="/css/dashboard.css" />
+  <link rel="stylesheet" href="/css/propfirms.css" />
+</head>
+<body>
+  <div id="app">
+
+    <header id="topbar">
+      <div id="brand">FuturesEdge AI</div>
+      <nav class="page-nav">
+        <a href="/">Dashboard</a>
+        <a href="/scanner.html">Scanner</a>
+        <a href="/performance.html">Stats</a>
+        <a href="/backtest.html">Replay</a>
+        <a href="/propfirms.html" class="active">Prop Firms</a>
+        <a href="/docs.html">Guide</a>
+      </nav>
+    </header>
+
+    <main id="pf-main">
+
+      <!-- ── Summary cards ─────────────────────────────────────────────── -->
+      <div class="pf-summary">
+        <div class="pf-card">
+          <div class="pf-card-label">Prop Firm Spend</div>
+          <div class="pf-card-value" id="stat-firm-spend">$0</div>
+        </div>
+        <div class="pf-card">
+          <div class="pf-card-label">Tools &amp; Services</div>
+          <div class="pf-card-value" id="stat-expenses">$0</div>
+        </div>
+        <div class="pf-card pf-card-green">
+          <div class="pf-card-label">Payouts Received</div>
+          <div class="pf-card-value" id="stat-payouts">$0</div>
+        </div>
+        <div class="pf-card pf-card-red">
+          <div class="pf-card-label">Net Cost</div>
+          <div class="pf-card-value" id="stat-net">$0</div>
+        </div>
+        <div class="pf-card">
+          <div class="pf-card-label">Attempts</div>
+          <div class="pf-card-value" id="stat-attempts">0</div>
+        </div>
+        <div class="pf-card">
+          <div class="pf-card-label">Pass Rate</div>
+          <div class="pf-card-value" id="stat-passrate">—</div>
+        </div>
+        <div class="pf-card pf-card-active">
+          <div class="pf-card-label">Active</div>
+          <div class="pf-card-value" id="stat-active">0</div>
+        </div>
+        <div class="pf-card">
+          <div class="pf-card-label">Avg Cost / Attempt</div>
+          <div class="pf-card-value" id="stat-avgcost">—</div>
+        </div>
+      </div>
+
+      <!-- ── Tabs ──────────────────────────────────────────────────────── -->
+      <div class="pf-tabs">
+        <button class="pf-tab active" data-tab="accounts">Prop Accounts</button>
+        <button class="pf-tab" data-tab="expenses">Tools &amp; Services</button>
+        <button class="pf-tab" data-tab="payouts">Payouts</button>
+        <button class="pf-tab" data-tab="analysis">Analysis</button>
+      </div>
+
+      <!-- ── Prop Accounts tab ──────────────────────────────────────────── -->
+      <section class="pf-tab-content active" id="tab-accounts">
+        <div class="pf-toolbar">
+          <button class="pf-add-btn" id="btn-add-account">+ Add Account</button>
+          <div class="pf-filter-group">
+            <label class="pf-filter-label">Status</label>
+            <select id="filter-status" class="pf-select">
+              <option value="ALL">All</option>
+              <option value="active">Active</option>
+              <option value="passed">Passed</option>
+              <option value="failed">Failed</option>
+            </select>
+          </div>
+          <div class="pf-filter-group">
+            <label class="pf-filter-label">Firm</label>
+            <select id="filter-firm" class="pf-select">
+              <option value="ALL">All Firms</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Add/Edit form -->
+        <div id="account-form-wrap" class="pf-form-wrap" style="display:none">
+          <div class="pf-form">
+            <div class="pf-form-title" id="account-form-title">Add Prop Account</div>
+            <input type="hidden" id="af-id" />
+            <div class="pf-form-grid">
+              <div class="pf-field">
+                <label>Firm</label>
+                <input id="af-firm" type="text" list="firm-list" placeholder="Apex, Take Profit Trader…" />
+                <datalist id="firm-list">
+                  <option value="Apex">
+                  <option value="AlgoOne">
+                  <option value="FFN">
+                  <option value="My Funded Future">
+                  <option value="The Legends">
+                  <option value="Top Step">
+                  <option value="Trade Day">
+                  <option value="Tradeify">
+                  <option value="Take Profit Trader">
+                </datalist>
+              </div>
+              <div class="pf-field">
+                <label>Date</label>
+                <input id="af-date" type="date" />
+              </div>
+              <div class="pf-field">
+                <label>Account Size</label>
+                <select id="af-size">
+                  <option value="25000">$25K</option>
+                  <option value="50000" selected>$50K</option>
+                  <option value="100000">$100K</option>
+                  <option value="150000">$150K</option>
+                  <option value="200000">$200K</option>
+                  <option value="custom">Custom…</option>
+                </select>
+              </div>
+              <div class="pf-field" id="af-size-custom-wrap" style="display:none">
+                <label>Custom Size ($)</label>
+                <input id="af-size-custom" type="number" placeholder="75000" />
+              </div>
+              <div class="pf-field">
+                <label>Cost ($)</label>
+                <input id="af-cost" type="number" step="0.01" placeholder="0.00" />
+              </div>
+              <div class="pf-field">
+                <label>Status</label>
+                <select id="af-status">
+                  <option value="active">Active</option>
+                  <option value="passed">Passed</option>
+                  <option value="failed">Failed</option>
+                </select>
+              </div>
+              <div class="pf-field pf-field-wide" id="af-blow-wrap">
+                <label>Reason Blown / Notes on Failure</label>
+                <input id="af-blow" type="text" placeholder="Overtraded news event, sized too large…" />
+              </div>
+              <div class="pf-field pf-field-wide">
+                <label>General Notes</label>
+                <textarea id="af-notes" rows="2" placeholder="Platform feel, rules, anything worth remembering…"></textarea>
+              </div>
+            </div>
+            <div class="pf-form-actions">
+              <button class="pf-save-btn" id="af-save">Save</button>
+              <button class="pf-cancel-btn" id="af-cancel">Cancel</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="pf-table-wrap">
+          <table class="pf-table" id="accounts-table">
+            <thead>
+              <tr>
+                <th>Firm</th>
+                <th>Date</th>
+                <th>Size</th>
+                <th>Cost</th>
+                <th>Status</th>
+                <th>Reason / Notes</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="accounts-tbody">
+              <tr><td colspan="7" class="pf-empty">No accounts yet — add your first above.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ── Tools & Services tab ───────────────────────────────────────── -->
+      <section class="pf-tab-content" id="tab-expenses">
+        <div class="pf-toolbar">
+          <button class="pf-add-btn" id="btn-add-expense">+ Add Expense</button>
+        </div>
+
+        <div id="expense-form-wrap" class="pf-form-wrap" style="display:none">
+          <div class="pf-form">
+            <div class="pf-form-title" id="expense-form-title">Add Expense</div>
+            <input type="hidden" id="ef-id" />
+            <div class="pf-form-grid">
+              <div class="pf-field">
+                <label>Item / Service</label>
+                <input id="ef-item" type="text" list="expense-list" placeholder="TradingView, indicators…" />
+                <datalist id="expense-list">
+                  <option value="TradingView">
+                  <option value="Affordable Indicators">
+                  <option value="Trade Phantoms">
+                  <option value="Initial Investment">
+                  <option value="Data Feed">
+                  <option value="Education / Course">
+                </datalist>
+              </div>
+              <div class="pf-field">
+                <label>Date</label>
+                <input id="ef-date" type="date" />
+              </div>
+              <div class="pf-field">
+                <label>Amount ($)</label>
+                <input id="ef-amount" type="number" step="0.01" placeholder="0.00" />
+              </div>
+              <div class="pf-field pf-field-wide">
+                <label>Notes</label>
+                <input id="ef-notes" type="text" placeholder="Annual sub, one-time purchase…" />
+              </div>
+            </div>
+            <div class="pf-form-actions">
+              <button class="pf-save-btn" id="ef-save">Save</button>
+              <button class="pf-cancel-btn" id="ef-cancel">Cancel</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="pf-table-wrap">
+          <table class="pf-table" id="expenses-table">
+            <thead>
+              <tr>
+                <th>Item</th>
+                <th>Date</th>
+                <th>Amount</th>
+                <th>Notes</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="expenses-tbody">
+              <tr><td colspan="5" class="pf-empty">No expenses yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ── Payouts tab ────────────────────────────────────────────────── -->
+      <section class="pf-tab-content" id="tab-payouts">
+        <div class="pf-toolbar">
+          <button class="pf-add-btn" id="btn-add-payout">+ Add Payout</button>
+        </div>
+
+        <div id="payout-form-wrap" class="pf-form-wrap" style="display:none">
+          <div class="pf-form">
+            <div class="pf-form-title" id="payout-form-title">Add Payout</div>
+            <input type="hidden" id="pf-id" />
+            <div class="pf-form-grid">
+              <div class="pf-field">
+                <label>Firm</label>
+                <input id="pf-firm" type="text" list="firm-list" placeholder="Firm name…" />
+              </div>
+              <div class="pf-field">
+                <label>Date</label>
+                <input id="pf-date" type="date" />
+              </div>
+              <div class="pf-field">
+                <label>Amount ($)</label>
+                <input id="pf-amount" type="number" step="0.01" placeholder="0.00" />
+              </div>
+              <div class="pf-field pf-field-wide">
+                <label>Notes</label>
+                <input id="pf-notes" type="text" placeholder="First payout, withdrawal…" />
+              </div>
+            </div>
+            <div class="pf-form-actions">
+              <button class="pf-save-btn" id="pf-save">Save</button>
+              <button class="pf-cancel-btn" id="pf-cancel">Cancel</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="pf-table-wrap">
+          <table class="pf-table" id="payouts-table">
+            <thead>
+              <tr>
+                <th>Firm</th>
+                <th>Date</th>
+                <th>Amount</th>
+                <th>Notes</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="payouts-tbody">
+              <tr><td colspan="5" class="pf-empty">No payouts recorded yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ── Analysis tab ───────────────────────────────────────────────── -->
+      <section class="pf-tab-content" id="tab-analysis">
+        <div class="pf-analysis-grid">
+
+          <div class="pf-analysis-card">
+            <div class="pf-analysis-title">Cost by Firm</div>
+            <div id="analysis-by-firm" class="pf-analysis-body"></div>
+          </div>
+
+          <div class="pf-analysis-card">
+            <div class="pf-analysis-title">Pass Rate by Firm</div>
+            <div id="analysis-passrate" class="pf-analysis-body"></div>
+          </div>
+
+          <div class="pf-analysis-card">
+            <div class="pf-analysis-title">Monthly Spend</div>
+            <div id="analysis-monthly" class="pf-analysis-body"></div>
+          </div>
+
+          <div class="pf-analysis-card">
+            <div class="pf-analysis-title">Failure Patterns</div>
+            <div id="analysis-failures" class="pf-analysis-body"></div>
+          </div>
+
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <script src="/js/propfirms.js"></script>
+</body>
+</html>

@@ -19,11 +19,14 @@ const { saveAlertCache, loadAlertCache, saveCommentaryCache, loadCommentaryCache
         loadArchive, appendToArchive, updateArchiveOutcome } = require('./storage/log');
 const { fetchAll }              = require('./data/seedFetch');
 const { fetchAllCrypto }        = require('./data/coinbaseFetch');
+const coinbaseWS                = require('./data/coinbaseWS');
+const { getForexRate, getOptionsFlow } = require('./data/polygonFetch');
 const autotrader                = require('./trading/autotrader');
 const simulator                 = require('./trading/simulator');
 const { computeRelativeStrength } = require('./analysis/relativeStrength');
 const { computeCorrelationMatrix } = require('./analysis/correlation');
 const { computePerformanceStats }  = require('./analysis/performanceStats');
+const { predict }                  = require('./analysis/predictor');
 const { getCalendarEvents, getNextEvent, isNearEvent } = require('./data/calendar');
 const { getOptionsData }                               = require('./data/options');
 const settings              = require('../config/settings.json');
@@ -36,7 +39,7 @@ const DATA_SOURCE = process.env.DATA_SOURCE || 'seed';
 // Auto-refresh interval for seed mode (15 minutes).
 // Live-mode integration point: replace the setInterval in start() with a broker
 // WebSocket candle-close subscription, then call _autoRefresh({ fetchData: false }).
-const REFRESH_INTERVAL_MS = 15 * 60 * 1000;
+const REFRESH_INTERVAL_MS = 2 * 60 * 1000;  // 2-minute refresh — seed data is 15-min delayed
 let   refreshIntervalMs   = REFRESH_INTERVAL_MS; // mutable — changed via POST /api/settings
 let   lastRefreshTs       = null; // ISO string, exposed via /api/health
 let   nextRefreshTs       = null; // ISO string, set when schedule is established
@@ -497,6 +500,31 @@ app.get('/api/options', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+// GET /api/forex?pair=GBPUSD — Polygon.io forex rate (free tier, 15-min delayed)
+app.get('/api/forex', async (req, res) => {
+  try {
+    const { pair = 'GBPUSD' } = req.query;
+    const data = await getForexRate(pair.toUpperCase());
+    res.json({ pair, data });
+  } catch (err) {
+    console.error('[api] /forex error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/options/flow?symbol=MNQ — Polygon.io options chain via ETF proxy (QQQ/SPY)
+// Returns raw ETF strikes + futures-scaled strikes (when futuresPrice provided)
+app.get('/api/options/flow', async (req, res) => {
+  try {
+    const { symbol = 'MNQ', futuresPrice } = req.query;
+    const fp = futuresPrice ? parseFloat(futuresPrice) : null;
+    const data = await getOptionsFlow(symbol.toUpperCase(), fp);
+    res.json({ symbol, data });
+  } catch (err) {
+    console.error('[api] /options/flow error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // GET /api/correlation — 4×4 rolling correlation matrix for all symbols
 app.get('/api/correlation', (req, res) => {
@@ -523,6 +551,45 @@ app.get('/api/relativestrength', (req, res) => {
     res.json({ base, compare, ...result });
   } catch (err) {
     console.error('[api] /relativestrength error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/predict?symbol=MNQ&timeframe=5m
+// Returns a Long/Short/Neutral prediction for the most recent confirmed candle,
+// scored from all available indicator and regime data.
+app.get('/api/predict', async (req, res) => {
+  try {
+    const { symbol = 'MNQ', timeframe = '5m' } = req.query;
+    const candles  = getCandles(symbol, timeframe);
+    if (!candles || candles.length < 20) {
+      return res.status(404).json({ error: 'Insufficient candle data' });
+    }
+    const ind      = computeIndicators(candles, {
+      symbol, features: settings.features,
+      swingLookback: settings.swingLookback || 10,
+      impulseThreshold: settings.impulseThreshold || 1.5,
+    });
+    const regime   = classifyRegime(ind);
+    const tlResult = detectTrendlines(candles, ind.atrCurrent);
+    // predictor expects a flat array of trendline objects with {type, anchor, slope, anchorTime}
+    const tls = [
+      tlResult.support    ? { ...tlResult.support,    type: 'support',    anchor: tlResult.support.startPrice,    anchorTime: tlResult.support.startTime,    slope: (tlResult.support.endPrice - tlResult.support.startPrice) / ((tlResult.support.endTime - tlResult.support.startTime) || 1) } : null,
+      tlResult.resistance ? { ...tlResult.resistance, type: 'resistance', anchor: tlResult.resistance.startPrice, anchorTime: tlResult.resistance.startTime, slope: (tlResult.resistance.endPrice - tlResult.resistance.startPrice) / ((tlResult.resistance.endTime - tlResult.resistance.startTime) || 1) } : null,
+    ].filter(Boolean);
+
+    // Open setups from alert cache for this symbol+timeframe (any TF for context)
+    const openSetups = alertCache.filter(a =>
+      a.symbol === symbol && a.setup?.outcome === 'open'
+    );
+
+    const result = predict(candles, ind, regime, tls, openSetups);
+    if (!result) return res.status(500).json({ error: 'Prediction failed' });
+
+    console.log(`[predict] ${symbol} ${timeframe}: ${result.direction} conf=${result.confidence} score=${result.score}`);
+    res.json({ symbol, timeframe, ...result });
+  } catch (err) {
+    console.error('[api] /predict error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -585,6 +652,195 @@ app.post('/api/simulator/reset', (_req, res) => {
   simulator.reset();
   console.log('[sim] Positions reset via API');
   res.json({ status: 'ok', message: 'All simulator positions cleared' });
+});
+
+// ---------------------------------------------------------------------------
+// Prop Firm Tracker — persistent JSON store
+// ---------------------------------------------------------------------------
+
+const PF_PATH = path.join(__dirname, '..', 'data', 'logs', 'propfirms.json');
+
+function _loadPF() {
+  try {
+    if (fs.existsSync(PF_PATH)) return JSON.parse(fs.readFileSync(PF_PATH, 'utf8'));
+  } catch (_) {}
+  return { accounts: [], expenses: [], payouts: [] };
+}
+function _savePF(data) {
+  fs.writeFileSync(PF_PATH, JSON.stringify(data, null, 2));
+}
+
+// GET /api/propfirms — full dataset
+app.get('/api/propfirms', (_req, res) => {
+  res.json(_loadPF());
+});
+
+// POST /api/propfirms/account — add or update a prop account entry
+app.post('/api/propfirms/account', (req, res) => {
+  const data = _loadPF();
+  const { id, firm, date, accountSize, cost, status, blowReason, notes } = req.body;
+  if (id) {
+    // update
+    const idx = data.accounts.findIndex(a => a.id === id);
+    if (idx === -1) return res.status(404).json({ error: 'Not found' });
+    data.accounts[idx] = { ...data.accounts[idx], firm, date, accountSize, cost, status, blowReason, notes };
+  } else {
+    data.accounts.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2,6),
+      firm, date, accountSize: +accountSize || 0, cost: +cost || 0, status, blowReason, notes, createdAt: new Date().toISOString() });
+  }
+  _savePF(data);
+  res.json({ ok: true });
+});
+
+// DELETE /api/propfirms/account/:id
+app.delete('/api/propfirms/account/:id', (req, res) => {
+  const data = _loadPF();
+  data.accounts = data.accounts.filter(a => a.id !== req.params.id);
+  _savePF(data);
+  res.json({ ok: true });
+});
+
+// POST /api/propfirms/expense — add or update an expense
+app.post('/api/propfirms/expense', (req, res) => {
+  const data = _loadPF();
+  const { id, item, date, amount, notes } = req.body;
+  if (id) {
+    const idx = data.expenses.findIndex(e => e.id === id);
+    if (idx === -1) return res.status(404).json({ error: 'Not found' });
+    data.expenses[idx] = { ...data.expenses[idx], item, date, amount: +amount || 0, notes };
+  } else {
+    data.expenses.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2,6),
+      item, date, amount: +amount || 0, notes, createdAt: new Date().toISOString() });
+  }
+  _savePF(data);
+  res.json({ ok: true });
+});
+
+// DELETE /api/propfirms/expense/:id
+app.delete('/api/propfirms/expense/:id', (req, res) => {
+  const data = _loadPF();
+  data.expenses = data.expenses.filter(e => e.id !== req.params.id);
+  _savePF(data);
+  res.json({ ok: true });
+});
+
+// POST /api/propfirms/payout — add or update a payout
+app.post('/api/propfirms/payout', (req, res) => {
+  const data = _loadPF();
+  const { id, firm, date, amount, notes } = req.body;
+  if (id) {
+    const idx = data.payouts.findIndex(p => p.id === id);
+    if (idx === -1) return res.status(404).json({ error: 'Not found' });
+    data.payouts[idx] = { ...data.payouts[idx], firm, date, amount: +amount || 0, notes };
+  } else {
+    data.payouts.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2,6),
+      firm, date, amount: +amount || 0, notes, createdAt: new Date().toISOString() });
+  }
+  _savePF(data);
+  res.json({ ok: true });
+});
+
+// DELETE /api/propfirms/payout/:id
+app.delete('/api/propfirms/payout/:id', (req, res) => {
+  const data = _loadPF();
+  data.payouts = data.payouts.filter(p => p.id !== req.params.id);
+  _savePF(data);
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// Real Account Tracker — persistent JSON store
+// ---------------------------------------------------------------------------
+
+const RA_PATH = path.join(__dirname, '..', 'data', 'logs', 'realaccount.json');
+
+function _loadRA() {
+  try {
+    if (fs.existsSync(RA_PATH)) return JSON.parse(fs.readFileSync(RA_PATH, 'utf8'));
+  } catch (_) {}
+  return { trades: [], deposits: [] };
+}
+function _saveRA(data) {
+  fs.writeFileSync(RA_PATH, JSON.stringify(data, null, 2));
+}
+
+// GET /api/realaccount — full dataset
+app.get('/api/realaccount', (_req, res) => {
+  res.json(_loadRA());
+});
+
+// POST /api/realaccount/trade — add or update a trade
+app.post('/api/realaccount/trade', (req, res) => {
+  const data = _loadRA();
+  const { id, date, symbol, buy, sell, pnl, fees, coq, cashOut, notes } = req.body;
+  const feeObj = {
+    commission:  +fees?.commission  || 0,
+    clearingFee: +fees?.clearingFee || 0,
+    exchangeFee: +fees?.exchangeFee || 0,
+    nfaFee:      +fees?.nfaFee      || 0,
+    platformFee: +fees?.platformFee || 0,
+    total:       +fees?.total       || 0,
+    perContract: {
+      commission:  +fees?.perContract?.commission  || 0,
+      clearingFee: +fees?.perContract?.clearingFee || 0,
+      exchangeFee: +fees?.perContract?.exchangeFee || 0,
+      nfaFee:      +fees?.perContract?.nfaFee      || 0,
+      platformFee: +fees?.perContract?.platformFee || 0,
+    },
+  };
+  const coqObj = { platform: +coq?.platform || 0, marketData: +coq?.marketData || 0 };
+  if (id) {
+    const idx = data.trades.findIndex(t => t.id === id);
+    if (idx === -1) return res.status(404).json({ error: 'Not found' });
+    data.trades[idx] = { ...data.trades[idx], date, symbol,
+      buy: +buy || 0, sell: +sell || 0, pnl: +pnl || 0,
+      fees: feeObj, coq: coqObj, cashOut: +cashOut || 0, notes };
+  } else {
+    data.trades.push({
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      date, symbol,
+      buy: +buy || 0, sell: +sell || 0, pnl: +pnl || 0,
+      fees: feeObj, coq: coqObj, cashOut: +cashOut || 0, notes,
+      createdAt: new Date().toISOString(),
+    });
+  }
+  _saveRA(data);
+  res.json({ ok: true });
+});
+
+// DELETE /api/realaccount/trade/:id
+app.delete('/api/realaccount/trade/:id', (req, res) => {
+  const data = _loadRA();
+  data.trades = data.trades.filter(t => t.id !== req.params.id);
+  _saveRA(data);
+  res.json({ ok: true });
+});
+
+// POST /api/realaccount/deposit — add or update a deposit/withdrawal record
+app.post('/api/realaccount/deposit', (req, res) => {
+  const data = _loadRA();
+  const { id, date, amount, type, notes } = req.body;
+  if (id) {
+    const idx = data.deposits.findIndex(d => d.id === id);
+    if (idx === -1) return res.status(404).json({ error: 'Not found' });
+    data.deposits[idx] = { ...data.deposits[idx], date, amount: +amount || 0, type, notes };
+  } else {
+    data.deposits.push({
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      date, amount: +amount || 0, type: type || 'deposit', notes,
+      createdAt: new Date().toISOString(),
+    });
+  }
+  _saveRA(data);
+  res.json({ ok: true });
+});
+
+// DELETE /api/realaccount/deposit/:id
+app.delete('/api/realaccount/deposit/:id', (req, res) => {
+  const data = _loadRA();
+  data.deposits = data.deposits.filter(d => d.id !== req.params.id);
+  _saveRA(data);
+  res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------------------
@@ -684,6 +940,9 @@ async function runScan() {
     const alignment = computeAlignment(regime15m, regime5m);
     const calendarEvents = calendarCache[symbol] || [];
 
+    // ── Collect all setup candidates for this symbol across all TFs ──────────
+    const candidates = []; // { tf, setup, regime }
+
     for (const tf of SCAN_TIMEFRAMES) {
       try {
         const candles    = getCandles(symbol, tf);
@@ -704,37 +963,55 @@ async function runScan() {
           // IOF zone on a higher timeframe. Adds up to +20 confidence + badge.
           const stack = checkTFZoneStack(setup, symbol, tf, getCandles, computeIndicators, settings);
           if (stack.bonus > 0) {
-            setup.confidence    = Math.min(100, setup.confidence + stack.bonus);
-            setup.tfStack       = stack;
+            setup.confidence     = Math.min(100, setup.confidence + stack.bonus);
+            setup.tfStack        = stack;
             setup.scoreBreakdown = { ...setup.scoreBreakdown, tfStack: stack.bonus };
-            setup.rationale    += ` · ${stack.tfs.join('/')} stack`;
+            setup.rationale     += ` · ${stack.tfs.join('/')} stack`;
           }
-
-          const alert = {
-            symbol,
-            timeframe: tf,
-            regime,
-            setup,
-            ts: new Date().toISOString(),
-          };
-          if (_cacheAlert(alert)) {
-            broadcast({ type: 'setup', ...alert });
-            newCount++;
-            // Auto-order trigger — non-blocking; passes saveTradeLog + tradeLog refs
-            autotrader.onNewAlert(alert, settings, saveTradeLog, tradeLog)
-              .then(result => {
-                if (result.placed) {
-                  console.log(`[autotrader] Order placed: orderId=${result.orderId} — ${alert.symbol} ${alert.setup.direction}`);
-                  broadcast({ type: 'order', ...result });
-                } else {
-                  console.log(`[autotrader] Skipped ${alert.symbol} ${alert.setup.type}: ${result.reason}`);
-                }
-              })
-              .catch(err => console.error('[autotrader] Error:', err.message));
-          }
+          candidates.push({ tf, setup, regime });
         }
       } catch (err) {
         console.error(`[scan] ${symbol} ${tf} error: ${err.message}`);
+      }
+    }
+
+    // ── MTF confluence: boost confidence when same direction fires on ≥2 TFs ─
+    for (const cand of candidates) {
+      const confirming = candidates.filter(
+        o => o !== cand && o.setup.direction === cand.setup.direction && o.tf !== cand.tf
+      );
+      if (confirming.length > 0) {
+        const tfs   = [...new Set(confirming.map(o => o.tf))];
+        const bonus = Math.min(20, 10 * tfs.length);
+        cand.setup.confidence    = Math.min(100, cand.setup.confidence + bonus);
+        cand.setup.mtfConfluence = { tfs, bonus };
+        cand.setup.rationale    += ` · MTF ${tfs.join('/')}`;
+      }
+    }
+
+    // ── Cache and broadcast ───────────────────────────────────────────────────
+    for (const { tf, setup, regime } of candidates) {
+      const alert = {
+        symbol,
+        timeframe: tf,
+        regime,
+        setup,
+        ts: new Date().toISOString(),
+      };
+      if (_cacheAlert(alert)) {
+        broadcast({ type: 'setup', ...alert });
+        newCount++;
+        // Auto-order trigger — non-blocking; passes saveTradeLog + tradeLog refs
+        autotrader.onNewAlert(alert, settings, saveTradeLog, tradeLog)
+          .then(result => {
+            if (result.placed) {
+              console.log(`[autotrader] Order placed: orderId=${result.orderId} — ${alert.symbol} ${alert.setup.direction}`);
+              broadcast({ type: 'order', ...result });
+            } else {
+              console.log(`[autotrader] Skipped ${alert.symbol} ${alert.setup.type}: ${result.reason}`);
+            }
+          })
+          .catch(err => console.error('[autotrader] Error:', err.message));
       }
     }
   }
@@ -974,6 +1251,13 @@ async function start() {
         _scheduleRefresh(); // start the recurring interval from this point
       }, refreshIntervalMs);
       console.log(`[startup] Auto-refresh scheduled every ${refreshIntervalMs / 60000} min`);
+
+    // Real-time crypto prices — Coinbase Exchange WebSocket (free, no auth)
+    coinbaseWS.start();
+    coinbaseWS.on('price', ({ symbol, price, time }) => {
+      broadcast({ type: 'live_price', symbol, price, time });
+    });
+    console.log('[startup] Coinbase WebSocket starting for BTC/ETH/XRP live prices');
     }
   });
 }

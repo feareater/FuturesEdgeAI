@@ -886,7 +886,24 @@
         .catch(err => console.error('[chart] reload:', err.message));
     },
 
-    // Set options levels from /api/options — called by alerts.js after each symbol change.
+    // Push a live price tick (from Coinbase WS) onto the last candle.
+    // Only applies when the tick matches the active symbol.
+    updateLivePrice(symbol, price, time) {
+      if (symbol !== activeSymbol || !candleSeries || !lastCandle) return;
+      const updatedCandle = {
+        time:  lastCandle.time,
+        open:  lastCandle.open,
+        high:  Math.max(lastCandle.high, price),
+        low:   Math.min(lastCandle.low,  price),
+        close: price,
+      };
+      candleSeries.update(updatedCandle);
+      lastCandle = updatedCandle;
+      // Update price display
+      priceValue.textContent = price.toFixed(price < 10 ? 4 : price < 1000 ? 2 : 0);
+    },
+
+        // Set options levels from /api/options — called by alerts.js after each symbol change.
     setOptionsLevels(data) {
       lastOptionsLevels = data;
       clearOptionsLines();

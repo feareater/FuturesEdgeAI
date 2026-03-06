@@ -4,6 +4,30 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v7.0] — 2026-03-04 — All-Setups Scanner + MTF Confluence
+
+### Added — All-Setups Scanner (`/scanner.html`)
+- `public/scanner.html` — new page: live table of every active setup across all symbols × timeframes.
+- `public/js/scanner.js` — fetches `/api/alerts?limit=100`; connects via WebSocket for instant push on `setup` / `data_refresh` / `outcome_update` events; new-row flash animation.
+- `public/css/scanner.css` — scanner-specific styles: confidence bar, MTF pills, near-event badge, sortable headers, WS status dot.
+- Columns: Symbol, TF, Setup Type, Direction, Confidence (bar + %), Entry / TP / SL, Regime, MTF confluence pills, Age, View↗ button.
+- Filters: Min Confidence, Direction (All/Long/Short), Setup type, Symbol, Status (Open/All), MTF-only toggle.
+- Summary bar: total count, MTF count, long/short split, last-update time.
+- "View ↗" button writes `bt_jump` to sessionStorage and navigates to the dashboard chart (reuses the existing backtest jump mechanism).
+- Scanner nav link added to all pages (index.html, commentary.html, performance.html, backtest.html).
+
+### Added — Multi-Timeframe Confluence
+- `server/index.js` `runScan()` — per-symbol, after collecting all setup candidates across all timeframes, annotates each setup where the **same direction** fires on ≥2 timeframes:
+  - `setup.mtfConfluence = { tfs: ['5m','15m'], bonus: N }` added to the setup object.
+  - Confidence boosted by **+10 per confirming TF** (max +20, capped at 100).
+  - Rationale string appended: `· MTF 5m/15m`.
+- MTF confluence is visible in the Scanner (TF pills) and in the Alert feed rationale on the dashboard.
+
+### Changed
+- `public/sw.js` — cache bumped to `futuresedge-v3`; `scanner.html`, `scanner.js`, `scanner.css` added to SHELL_ASSETS.
+
+---
+
 ## [v6.0] — 2026-03-04 — Multi-Timeframe + Crypto Futures
 
 ### Added — 1h / 2h / 4h Timeframes (all instruments)

@@ -53,7 +53,8 @@
   const manualTrades = [];
 
   // ── New-alert highlighting state ──────────────────────────────────────────
-  let _prevAlertKeys = new Set();
+  let _prevAlertKeys      = new Set();
+  let _lastKnownCandleTime = null;
 
   // ── DOM refs ───────────────────────────────────────────────────────────────
   const alertFeed      = document.getElementById('alert-feed');
@@ -192,13 +193,87 @@
 
   // ── Options data (OI walls, max pain, P/C ratio, ATM IV) ───────────────────
 
-  async function _fetchOptionsData(symbol) {
+  // ── Forex rate (Polygon.io) ───────────────────────────────────────────────
+
+  async function _fetchForexRate() {
+    const priceEl  = document.getElementById('forex-price');
+    const changeEl = document.getElementById('forex-change');
+    if (!priceEl) return;
     try {
-      const res = await fetch(`/api/options?symbol=${symbol}`);
+      const res = await fetch('/api/forex?pair=GBPUSD');
       if (!res.ok) return;
-      const { options } = await res.json();
-      window.ChartAPI?.setOptionsLevels?.(options);
-      _updateOptionsWidget(options);
+      const { data } = await res.json();
+      if (!data || data.price == null) return;
+      priceEl.textContent  = data.price.toFixed(4);
+      const chg = data.change;
+      if (chg != null) {
+        const label = data.label === 'prev-day' ? ' prev' : '';
+        changeEl.textContent = (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%' + label;
+        changeEl.className = 'forex-change ' + (chg >= 0 ? 'forex-up' : 'forex-down');
+      }
+    } catch (_) {}
+  }
+
+  // ── Data age badge ─────────────────────────────────────────────────────────
+  // Shows how stale the last candle is relative to now.
+  // Called on initial load (with last candle time) and on live_price ticks.
+
+  const TF_SECS = { '1m':60,'2m':120,'3m':180,'5m':300,'15m':900,'30m':1800,'1h':3600,'2h':7200,'4h':14400 };
+
+  function _updateDataAgeBadge(symbol, candleTimeUnix) {
+    const el = document.getElementById('data-age-text');
+    if (!el) return;
+    const ageSecs  = Math.floor(Date.now() / 1000) - candleTimeUnix;
+    const tfSecs   = TF_SECS[activeTf] || 300;
+    const candles  = Math.floor(ageSecs / tfSecs);
+    const mins     = Math.round(ageSecs / 60);
+    const badge    = document.getElementById('data-age-badge');
+
+    if (ageSecs < 60)       el.textContent = ageSecs + 's old';
+    else if (mins < 60)     el.textContent = mins + 'm old';
+    else                    el.textContent = Math.round(mins / 60) + 'h old';
+
+    // Colour: green < 1 candle, amber 1-3 candles, red > 3 candles
+    if (badge) {
+      badge.className = 'data-age-badge ' + (
+        candles < 1 ? 'age-fresh' : candles < 3 ? 'age-stale' : 'age-old'
+      );
+    }
+  }
+
+    async function _fetchOptionsData(symbol) {
+    // Try Polygon.io options flow first (better data), fall back to Yahoo Finance
+    let usedPolygon = false;
+    try {
+      const candles = null; // we'll get lastPrice from a parallel fetch below
+      const [yahoRes, polyRes] = await Promise.all([
+        fetch(`/api/options?symbol=${symbol}`),
+        fetch(`/api/options/flow?symbol=${symbol}`),
+      ]);
+
+      // Polygon options (ETF proxy with scaled strikes)
+      if (polyRes.ok) {
+        const { data: polyData } = await polyRes.json();
+        if (polyData) {
+          // Build options levels from Polygon (prefer scaled futures strikes)
+          const walls = (polyData.scaled?.oiWalls ?? polyData.oiWalls ?? [])
+            .map(w => w.futuresStrike ?? w.strike)
+            .filter(Boolean)
+            .slice(0, 3);
+          const maxPain = polyData.scaled?.maxPain ?? polyData.maxPain ?? null;
+          const polyLevels = { oiWalls: walls, maxPain, pcRatio: polyData.pcRatio, atmIV: polyData.atmIV };
+          window.ChartAPI?.setOptionsLevels?.(polyLevels);
+          _updateOptionsWidget({ ...polyLevels, source: 'Polygon' });
+          usedPolygon = true;
+        }
+      }
+
+      // Yahoo Finance fallback
+      if (!usedPolygon && yahoRes.ok) {
+        const { options } = await yahoRes.json();
+        window.ChartAPI?.setOptionsLevels?.(options);
+        _updateOptionsWidget(options);
+      }
     } catch (_) {}
   }
 
@@ -216,6 +291,73 @@
     }
     if (ivEl) {
       ivEl.textContent = data.atmIV != null ? `${(data.atmIV * 100).toFixed(1)}%` : '—';
+    }
+  }
+
+  // ── Directional Prediction ───────────────────────────────────────────────
+
+  async function _fetchPrediction() {
+    const widget   = document.getElementById('prediction-widget');
+    const symLabel = document.getElementById('pred-symbol-label');
+    if (!widget) return;
+
+    if (symLabel) symLabel.textContent = `${activeSymbol} · ${activeTf}`;
+    widget.innerHTML = '<div class="pred-loading">Computing…</div>';
+
+    try {
+      const res = await fetch(`/api/predict?symbol=${activeSymbol}&timeframe=${activeTf}`);
+      if (!res.ok) { widget.innerHTML = '<div class="pred-loading">Unavailable</div>'; return; }
+      const d = await res.json();
+      if (!d || !d.direction) { widget.innerHTML = '<div class="pred-loading">No data</div>'; return; }
+
+      const cls   = d.direction === 'bullish' ? 'bull' : d.direction === 'bearish' ? 'bear' : 'neut';
+      const arrow = d.direction === 'bullish' ? '▲' : d.direction === 'bearish' ? '▼' : '—';
+      const label = d.direction === 'bullish' ? 'LONG' : d.direction === 'bearish' ? 'SHORT' : 'NEUTRAL';
+      const conf  = d.confidence ?? 0;
+      const score = d.score ?? 0;
+      const scoreStr = (score >= 0 ? '+' : '') + score;
+
+      const fmt = v => v != null ? v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) : '—';
+      const diff = (v, base) => {
+        if (v == null || base == null) return '';
+        const delta = v - base;
+        return `${delta >= 0 ? '+' : ''}${delta.toFixed(2)}`;
+      };
+
+      const factorsHtml = (d.factors || []).map(f => {
+        const ptsCls = f.pts >= 0 ? 'pos' : 'neg';
+        const ptsStr = (f.pts >= 0 ? '+' : '') + f.pts;
+        return `<div class="pred-factor-row"><span>${f.label}</span><span class="pf-pts ${ptsCls}">${ptsStr}</span></div>`;
+      }).join('');
+
+      const candleTime = d.candleTime
+        ? new Date(d.candleTime * 1000).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/New_York' }) + ' ET'
+        : '—';
+
+      widget.innerHTML = `
+        <div class="pred-direction">
+          <span class="pred-arrow ${cls}">${arrow}</span>
+          <span class="pred-label ${cls}">${label}</span>
+          <span style="font-size:10px;color:var(--text-dim);margin-left:auto">score: ${scoreStr}</span>
+        </div>
+        <div class="pred-conf-row">
+          <span style="font-size:10px;color:var(--text-dim)">Confidence</span>
+          <div class="pred-conf-bar"><div class="pred-conf-fill ${cls}" style="width:${conf}%"></div></div>
+          <span class="pred-conf-pct">${conf}%</span>
+        </div>
+        <div class="pred-prices">
+          <span class="pred-pl">Current</span><span class="pred-pv">${fmt(d.price)}</span><span></span>
+          <span class="pred-pl">Target TP</span><span class="pred-pv">${fmt(d.predictedTP)}</span><span class="pred-pp ${cls}">${diff(d.predictedTP, d.price)}</span>
+          <span class="pred-pl">Stop SL</span><span class="pred-pv">${fmt(d.predictedSL)}</span><span class="pred-pp ${d.direction === 'bullish' ? 'bear' : 'bull'}">${diff(d.predictedSL, d.price)}</span>
+          <span class="pred-pl">↑ ${fmt(d.targetUp)}</span><span class="pred-pv" style="font-size:10px;color:var(--bull)">+${d.movePoints}</span><span></span>
+          <span class="pred-pl">↓ ${fmt(d.targetDown)}</span><span class="pred-pv" style="font-size:10px;color:var(--bear)">−${d.movePoints}</span><span></span>
+        </div>
+        ${factorsHtml ? `<div class="pred-factors">${factorsHtml}</div>` : ''}
+        <div class="pred-candle-time">Candle: ${candleTime}</div>
+      `;
+    } catch (err) {
+      widget.innerHTML = '<div class="pred-loading">Error loading prediction</div>';
+      console.warn('[predict] fetch failed:', err.message);
     }
   }
 
@@ -430,6 +572,9 @@
       _updateRSWidget();
     }
     _fetchOptionsData(activeSymbol);
+    _fetchForexRate();
+    _fetchPrediction();
+    setInterval(_fetchForexRate, 10 * 60 * 1000); // refresh every 10 min
 
     // Listen for chart symbol/TF changes (dispatched by chart.js after each loadData)
     document.addEventListener('chartViewChange', (e) => {
@@ -448,6 +593,7 @@
       }
       if (cfg.features?.economicCalendar) _updateCalendarBadge();
       _fetchOptionsData(activeSymbol);
+      _fetchPrediction();
     });
 
     // Listen for chart marker clicks — scroll to and highlight the matching alert card
@@ -486,6 +632,14 @@
         if (!res.ok) throw new Error(`/api/alerts ${res.status}`);
         const { alerts } = await res.json();
         currentAlerts = alerts;
+        // Update data-age badge from the most-recent alert's candle time
+        if (alerts.length > 0) {
+          const newestCandle = Math.max(...alerts.map(a => a.setup.time || 0));
+          if (newestCandle > 0) {
+            _lastKnownCandleTime = newestCandle;
+            _updateDataAgeBadge(activeSymbol, newestCandle);
+          }
+        }
         // Sync server-resolved outcomes back into the cross-symbol cache
         let takenOpenChanged = false;
         for (const a of currentAlerts) {
@@ -501,7 +655,7 @@
         _syncChartMarkers();
         console.log(`[alerts] ${alerts.length} alerts  sym=${activeSymbol}  minConf=${minConf}`);
       } catch (err) {
-        console.error('[alerts] Fetch failed:', err.message);
+        console.error('[alerts] Fetch failed:', err.message, '\n', err.stack);
         alertFeed.innerHTML =
           '<p class="placeholder error">Could not load alerts. <a id="alerts-retry">Retry</a></p>';
         document.getElementById('alerts-retry')?.addEventListener('click', () => fetchAndRender());
@@ -1341,7 +1495,12 @@
           _pollAutotrader();
           fetchAndRender();
         }
-        if (msg.type === 'data_refresh') {
+        if (msg.type === 'live_price') {
+          // Real-time tick from Coinbase WS (BTC/ETH/XRP only)
+          window.ChartAPI?.updateLivePrice?.(msg.symbol, msg.price, msg.time);
+          _updateDataAgeBadge(msg.symbol, msg.time);
+        }
+                if (msg.type === 'data_refresh') {
           // Snapshot prev keys before refetch so new cards can be highlighted
           _prevAlertKeys = new Set(currentAlerts.map(_alertKey));
           window.ChartAPI?.reload();   // re-fetch chart candles + indicators

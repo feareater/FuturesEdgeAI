@@ -1,0 +1,329 @@
+'use strict';
+// FuturesEdge AI — Scanner page
+// Displays all active setups across every symbol × timeframe in a live,
+// sortable, filterable table. Connects via WebSocket for instant updates.
+
+(function () {
+
+  // ── State ──────────────────────────────────────────────────────────────────
+  let allAlerts   = [];   // raw from server (newest-first)
+  let sortCol     = 'confidence';
+  let sortDir     = 'desc';
+  let filterDir   = 'ALL';
+  let filterType  = 'ALL';
+  let filterSym   = 'ALL';
+  let filterStatus = 'open';
+  let mtfOnly     = false;
+  let minConf     = 65;
+
+  // Track which alert keys we've seen so new rows can be flashed
+  let prevKeys = new Set();
+
+  // ── DOM ────────────────────────────────────────────────────────────────────
+  const tbody       = document.getElementById('scan-body');
+  const scCount     = document.getElementById('sc-count');
+  const scMtf       = document.getElementById('sc-mtf-count');
+  const scBull      = document.getElementById('sc-bull-count');
+  const scBear      = document.getElementById('sc-bear-count');
+  const scTs        = document.getElementById('sc-ts');
+  const wsDot       = document.getElementById('sc-ws-dot');
+  const minConfEl   = document.getElementById('sc-minconf');
+  const mtfOnlyEl   = document.getElementById('sc-mtf-only');
+
+  // ── Setup type labels ──────────────────────────────────────────────────────
+  const TYPE_LABEL = {
+    zone_rejection: 'Zone Rej',
+    pdh_breakout:   'PDH Break',
+    or_breakout:    'OR Break',
+    trendline_break:'TL Break',
+    bos_retest:     'BOS Retest',
+  };
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+
+  function _alertKey(a) {
+    return `${a.symbol}:${a.timeframe}:${a.setup.type}:${a.setup.time}`;
+  }
+
+  function _age(ts) {
+    const secs = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
+    if (secs < 60)          return `${secs}s`;
+    if (secs < 3600)        return `${Math.floor(secs / 60)}m`;
+    if (secs < 86400)       return `${Math.floor(secs / 3600)}h`;
+    return `${Math.floor(secs / 86400)}d`;
+  }
+
+  function _px(price, sym) {
+    if (price == null || isNaN(price)) return '—';
+    const decimals = sym === 'XRP' ? 4 : sym === 'MCL' ? 2
+                   : sym === 'ETH' ? 2 : sym === 'BTC' ? 0
+                   : 2;
+    return price.toFixed(decimals);
+  }
+
+  // ── Filter + sort ──────────────────────────────────────────────────────────
+
+  function _filtered() {
+    return allAlerts.filter(a => {
+      if (a.setup.confidence < minConf)          return false;
+      if (filterDir  !== 'ALL' && a.setup.direction !== filterDir)  return false;
+      if (filterType !== 'ALL' && a.setup.type      !== filterType) return false;
+      if (filterSym  !== 'ALL' && a.symbol           !== filterSym)  return false;
+      if (filterStatus === 'open' && a.setup.outcome !== 'open')    return false;
+      if (mtfOnly && !a.setup.mtfConfluence)                        return false;
+      return true;
+    });
+  }
+
+  const TF_ORDER = { '5m':0, '15m':1, '30m':2, '1h':3, '2h':4, '4h':5 };
+
+  function _sorted(list) {
+    const mult = sortDir === 'asc' ? 1 : -1;
+    return list.slice().sort((a, b) => {
+      let va, vb;
+      switch (sortCol) {
+        case 'symbol':     va = a.symbol;         vb = b.symbol;         break;
+        case 'timeframe':  va = TF_ORDER[a.timeframe] ?? 99;
+                           vb = TF_ORDER[b.timeframe] ?? 99;             break;
+        case 'type':       va = a.setup.type;     vb = b.setup.type;     break;
+        case 'direction':  va = a.setup.direction; vb = b.setup.direction; break;
+        case 'confidence': va = a.setup.confidence; vb = b.setup.confidence; break;
+        case 'regime':     va = a.regime?.type ?? '';  vb = b.regime?.type ?? ''; break;
+        case 'mtf':        va = a.setup.mtfConfluence ? 1 : 0;
+                           vb = b.setup.mtfConfluence ? 1 : 0;           break;
+        case 'age':        va = new Date(a.ts).getTime();
+                           vb = new Date(b.ts).getTime();                break;
+        default:           va = 0; vb = 0;
+      }
+      if (typeof va === 'string') return mult * va.localeCompare(vb);
+      return mult * (va - vb);
+    });
+  }
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+
+  function _render() {
+    const filtered = _filtered();
+    const sorted   = _sorted(filtered);
+
+    const newKeys = new Set(sorted.map(_alertKey));
+
+    // Summary
+    const mtfCount  = filtered.filter(a => a.setup.mtfConfluence).length;
+    const bullCount = filtered.filter(a => a.setup.direction === 'bullish').length;
+    const bearCount = filtered.filter(a => a.setup.direction === 'bearish').length;
+    scCount.textContent = `${sorted.length} setup${sorted.length !== 1 ? 's' : ''}`;
+    scMtf.textContent   = `${mtfCount} with MTF`;
+    scBull.textContent  = `${bullCount} long`;
+    scBear.textContent  = `${bearCount} short`;
+
+    if (sorted.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="12" class="scan-empty">No setups match current filters.</td></tr>';
+      prevKeys = newKeys;
+      return;
+    }
+
+    const rows = sorted.map(a => {
+      const key     = _alertKey(a);
+      const isNew   = !prevKeys.has(key);
+      const conf    = a.setup.confidence;
+      const confCls = conf >= 80 ? 'high' : conf >= 65 ? 'med' : 'low';
+      const dirCls  = a.setup.direction === 'bullish' ? 'sc-dir-long' : 'sc-dir-short';
+      const dirArrow = a.setup.direction === 'bullish' ? '▲ Long' : '▼ Short';
+
+      const regime   = a.regime || {};
+      const regDir   = regime.direction || regime.dir || '';
+      const regClass = regime.type === 'trend' && regDir === 'bullish' ? 'trend-bull'
+                     : regime.type === 'trend' && regDir === 'bearish' ? 'trend-bear'
+                     : 'range-neut';
+      const regLabel = regime.type === 'trend'
+        ? `Trend ${regDir === 'bullish' ? '▲' : '▼'}`
+        : 'Range';
+
+      // MTF pills
+      const mtf = a.setup.mtfConfluence;
+      const mtfCell = mtf
+        ? mtf.tfs.map(tf => `<span class="sc-mtf-pill">${tf}</span>`).join('')
+        : '<span class="sc-mtf-none">—</span>';
+
+      // Near-event badge
+      const eventBadge = a.setup.nearEvent
+        ? '<span class="sc-event-badge">⚠ Event</span>'
+        : '';
+
+      return `<tr class="${isNew ? 'row-new' : ''}" data-key="${key}">
+        <td><span class="sc-sym">${a.symbol}</span>${eventBadge}</td>
+        <td><span class="sc-tf">${a.timeframe}</span></td>
+        <td><span class="sc-type">${TYPE_LABEL[a.setup.type] || a.setup.type}</span></td>
+        <td><span class="${dirCls}">${dirArrow}</span></td>
+        <td>
+          <div class="sc-conf-wrap">
+            <div class="sc-conf-bar"><div class="sc-conf-fill ${confCls}" style="width:${conf}%"></div></div>
+            <span class="sc-conf-val">${conf}</span>
+          </div>
+        </td>
+        <td>${_px(a.setup.entry, a.symbol)}</td>
+        <td>${_px(a.setup.tp,    a.symbol)}</td>
+        <td>${_px(a.setup.sl,    a.symbol)}</td>
+        <td><span class="sc-regime ${regClass}">${regLabel}</span></td>
+        <td><div class="sc-mtf">${mtfCell}</div></td>
+        <td><span class="sc-age">${_age(a.ts)}</span></td>
+        <td><button class="sc-view-btn" data-key="${key}">View ↗</button></td>
+      </tr>`;
+    }).join('');
+
+    tbody.innerHTML = rows;
+    prevKeys = newKeys;
+
+    // Bind view buttons
+    tbody.querySelectorAll('.sc-view-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const key   = btn.dataset.key;
+        const alert = allAlerts.find(a => _alertKey(a) === key);
+        if (!alert) return;
+        sessionStorage.setItem('bt_jump', JSON.stringify({
+          symbol:    alert.symbol,
+          timeframe: alert.timeframe,
+          setupTime: alert.setup.time,
+        }));
+        window.location.href = '/';
+      });
+    });
+
+    // Update age values every 30s without a full re-render
+    _scheduleAgeUpdate();
+  }
+
+  // ── Age ticker ─────────────────────────────────────────────────────────────
+  let _ageTimer = null;
+
+  function _scheduleAgeUpdate() {
+    clearTimeout(_ageTimer);
+    _ageTimer = setTimeout(() => {
+      tbody.querySelectorAll('.sc-age').forEach(el => {
+        const row = el.closest('tr');
+        if (!row) return;
+        const key   = row.dataset.key;
+        const alert = allAlerts.find(a => _alertKey(a) === key);
+        if (alert) el.textContent = _age(alert.ts);
+      });
+      _scheduleAgeUpdate();
+    }, 30_000);
+  }
+
+  // ── Sort headers ───────────────────────────────────────────────────────────
+
+  document.querySelectorAll('#scan-table th[data-sort]').forEach(th => {
+    th.addEventListener('click', () => {
+      const col = th.dataset.sort;
+      if (sortCol === col) {
+        sortDir = sortDir === 'desc' ? 'asc' : 'desc';
+      } else {
+        sortCol = col;
+        sortDir = col === 'age' ? 'desc' : 'desc';
+      }
+      // Update header classes
+      document.querySelectorAll('#scan-table th').forEach(h => {
+        h.classList.remove('sorted-asc', 'sorted-desc');
+      });
+      th.classList.add(sortDir === 'asc' ? 'sorted-asc' : 'sorted-desc');
+      _render();
+    });
+  });
+
+  // ── Filter controls ────────────────────────────────────────────────────────
+
+  function _bindToggle(selector, stateKey, onChange) {
+    document.querySelectorAll(selector).forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll(selector).forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        onChange(btn.dataset[stateKey] || btn.dataset.sym || btn.dataset.status || btn.dataset.dir || btn.dataset.type);
+        _render();
+      });
+    });
+  }
+
+  _bindToggle('.dir-btn',    'dir',    v => { filterDir    = v; });
+  _bindToggle('.type-btn',   'type',   v => { filterType   = v; });
+  _bindToggle('.sym-btn',    'sym',    v => { filterSym    = v; });
+  _bindToggle('.status-btn', 'status', v => { filterStatus = v; });
+
+  minConfEl.addEventListener('change', () => {
+    minConf = parseInt(minConfEl.value) || 0;
+    _render();
+  });
+
+  mtfOnlyEl.addEventListener('change', () => {
+    mtfOnly = mtfOnlyEl.checked;
+    _render();
+  });
+
+  // ── Data fetch ─────────────────────────────────────────────────────────────
+
+  async function fetchAlerts() {
+    try {
+      const res  = await fetch('/api/alerts?limit=100');
+      const data = await res.json();
+      // API returns { alerts: [...] } wrapper
+      allAlerts  = Array.isArray(data) ? data : (Array.isArray(data.alerts) ? data.alerts : []);
+      scTs.textContent = `updated ${new Date().toLocaleTimeString()}`;
+      _render();
+    } catch (err) {
+      console.error('[scanner] fetch error:', err.message);
+    }
+  }
+
+  // ── WebSocket ──────────────────────────────────────────────────────────────
+
+  function _connect() {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const ws = new WebSocket(`${proto}://${location.host}`);
+
+    ws.addEventListener('open', () => {
+      wsDot.className = 'sc-ws-dot connected';
+    });
+
+    ws.addEventListener('close', () => {
+      wsDot.className = 'sc-ws-dot disconnected';
+      setTimeout(_connect, 3000);
+    });
+
+    ws.addEventListener('error', () => {
+      wsDot.className = 'sc-ws-dot disconnected';
+    });
+
+    ws.addEventListener('message', e => {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg.type === 'setup') {
+          // Prepend new alert and re-render
+          const key = `${msg.symbol}:${msg.timeframe}:${msg.setup.type}:${msg.setup.time}`;
+          if (!allAlerts.find(a => _alertKey(a) === key)) {
+            allAlerts.unshift({
+              symbol:    msg.symbol,
+              timeframe: msg.timeframe,
+              regime:    msg.regime,
+              setup:     msg.setup,
+              ts:        msg.ts || new Date().toISOString(),
+            });
+            if (allAlerts.length > 100) allAlerts.pop();
+          }
+          scTs.textContent = `updated ${new Date().toLocaleTimeString()}`;
+          _render();
+        } else if (msg.type === 'data_refresh') {
+          fetchAlerts();
+        } else if (msg.type === 'outcome_update') {
+          const alert = allAlerts.find(a => _alertKey(a) === msg.key);
+          if (alert) { alert.setup.outcome = msg.outcome; _render(); }
+        }
+      } catch {}
+    });
+  }
+
+  // ── Init ───────────────────────────────────────────────────────────────────
+
+  fetchAlerts();
+  _connect();
+
+})();

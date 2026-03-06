@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>FuturesEdge — Scanner</title>
+  <link rel="manifest" href="/manifest.json" />
+  <meta name="theme-color" content="#0d0f1a" />
+  <link rel="stylesheet" href="/css/dashboard.css" />
+  <link rel="stylesheet" href="/css/scanner.css" />
+</head>
+<body>
+  <div id="app">
+
+    <header id="topbar">
+      <div id="brand">FuturesEdge AI</div>
+      <nav class="page-nav">
+        <a href="/">Dashboard</a>
+        <a href="/scanner.html" class="active">Scanner</a>
+        <a href="/commentary.html">AI</a>
+        <a href="/performance.html">Stats</a>
+        <a href="/backtest.html">Replay</a>
+        <a href="/propfirms.html">Prop Firms</a>
+        <a href="/tradingaccount.html">Real Account</a>
+        <a href="/api/export" download>Export</a>
+      </nav>
+      <div id="topbar-right">
+        <div class="sc-status-bar">
+          <span id="sc-ws-dot" class="sc-ws-dot connecting"></span>
+          <span id="sc-last-update">—</span>
+        </div>
+      </div>
+    </header>
+
+    <main id="scanner-main">
+
+      <!-- ── Filter bar ───────────────────────────────────────────────── -->
+      <section class="scan-filters">
+
+        <div class="sc-filter-group">
+          <span class="sc-filter-label">Min Conf</span>
+          <input id="sc-minconf" class="sc-input" type="number" value="65" min="0" max="99" step="5" />
+          <span class="sc-filter-label">%</span>
+        </div>
+
+        <div class="sc-filter-group">
+          <span class="sc-filter-label">Direction</span>
+          <div class="btn-group">
+            <button class="dir-btn active" data-dir="ALL">All</button>
+            <button class="dir-btn" data-dir="bullish">Long</button>
+            <button class="dir-btn" data-dir="bearish">Short</button>
+          </div>
+        </div>
+
+        <div class="sc-filter-group">
+          <span class="sc-filter-label">Setup</span>
+          <div class="btn-group">
+            <button class="type-btn active" data-type="ALL">All</button>
+            <button class="type-btn" data-type="zone_rejection">Zone</button>
+            <button class="type-btn" data-type="pdh_breakout">PDH</button>
+            <button class="type-btn" data-type="or_breakout">OR</button>
+            <button class="type-btn" data-type="trendline_break">TL</button>
+            <button class="type-btn" data-type="bos_retest">BOS</button>
+          </div>
+        </div>
+
+        <div class="sc-filter-group">
+          <span class="sc-filter-label">Symbol</span>
+          <div class="btn-group">
+            <button class="sym-btn active" data-sym="ALL">All</button>
+            <button class="sym-btn" data-sym="MNQ">MNQ</button>
+            <button class="sym-btn" data-sym="MGC">MGC</button>
+            <button class="sym-btn" data-sym="MES">MES</button>
+            <button class="sym-btn" data-sym="MCL">MCL</button>
+            <button class="sym-btn" data-sym="BTC">BTC</button>
+            <button class="sym-btn" data-sym="ETH">ETH</button>
+            <button class="sym-btn" data-sym="XRP">XRP</button>
+          </div>
+        </div>
+
+        <div class="sc-filter-group">
+          <span class="sc-filter-label">Status</span>
+          <div class="btn-group">
+            <button class="status-btn active" data-status="open">Open</button>
+            <button class="status-btn" data-status="ALL">All</button>
+          </div>
+        </div>
+
+        <div class="sc-filter-group">
+          <label class="sc-filter-label" for="sc-mtf-only" style="cursor:pointer">MTF Only</label>
+          <input id="sc-mtf-only" class="sc-checkbox" type="checkbox" />
+        </div>
+
+      </section>
+
+      <!-- ── Summary bar ──────────────────────────────────────────────── -->
+      <div class="scan-summary">
+        <span id="sc-count">— setups</span>
+        <span id="sc-mtf-count">— with MTF</span>
+        <span id="sc-bull-count">— long</span>
+        <span id="sc-bear-count">— short</span>
+        <span class="scan-last-update" id="sc-ts">updated —</span>
+      </div>
+
+      <!-- ── Table ─────────────────────────────────────────────────────── -->
+      <div class="scan-table-wrap">
+        <table id="scan-table">
+          <thead>
+            <tr>
+              <th data-sort="symbol">Symbol</th>
+              <th data-sort="timeframe">TF</th>
+              <th data-sort="type">Setup</th>
+              <th data-sort="direction">Dir</th>
+              <th data-sort="confidence" class="sorted-desc">Conf</th>
+              <th>Entry</th>
+              <th>TP</th>
+              <th>SL</th>
+              <th data-sort="regime">Regime</th>
+              <th data-sort="mtf">MTF</th>
+              <th data-sort="age">Age</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="scan-body">
+            <tr><td colspan="12" class="scan-empty">Loading setups…</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+    </main>
+  </div>
+
+  <script src="/js/scanner.js"></script>
+</body>
+</html>

@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>FuturesEdge — Real Account</title>
+  <link rel="manifest" href="/manifest.json" />
+  <meta name="theme-color" content="#0d0f1a" />
+  <link rel="stylesheet" href="/css/dashboard.css" />
+  <link rel="stylesheet" href="/css/tradingaccount.css" />
+</head>
+<body>
+  <div id="app">
+
+    <header id="topbar">
+      <div id="brand">FuturesEdge AI</div>
+      <nav class="page-nav">
+        <a href="/">Dashboard</a>
+        <a href="/scanner.html">Scanner</a>
+        <a href="/performance.html">Stats</a>
+        <a href="/backtest.html">Replay</a>
+        <a href="/propfirms.html">Prop Firms</a>
+        <a href="/tradingaccount.html" class="active">Real Account</a>
+        <a href="/docs.html">Guide</a>
+      </nav>
+    </header>
+
+    <main id="ra-main">
+
+      <!-- ── Summary cards ─────────────────────────────────────────────── -->
+      <div class="ra-summary">
+        <div class="ra-card">
+          <div class="ra-card-label">Starting Balance</div>
+          <div class="ra-card-value" id="stat-start-bal">$0</div>
+        </div>
+        <div class="ra-card" id="card-current">
+          <div class="ra-card-label">Current Balance</div>
+          <div class="ra-card-value" id="stat-current-bal">$0</div>
+        </div>
+        <div class="ra-card" id="card-net-pnl">
+          <div class="ra-card-label">Net P&amp;L</div>
+          <div class="ra-card-value" id="stat-net-pnl">$0</div>
+        </div>
+        <div class="ra-card ra-card-red">
+          <div class="ra-card-label">Total Fees Paid</div>
+          <div class="ra-card-value" id="stat-total-fees">$0</div>
+        </div>
+        <div class="ra-card">
+          <div class="ra-card-label">Trades</div>
+          <div class="ra-card-value" id="stat-trades">0</div>
+        </div>
+        <div class="ra-card">
+          <div class="ra-card-label">Win Rate</div>
+          <div class="ra-card-value" id="stat-winrate">—</div>
+        </div>
+        <div class="ra-card" id="card-gross-pnl">
+          <div class="ra-card-label">Gross P&amp;L</div>
+          <div class="ra-card-value" id="stat-gross-pnl">$0</div>
+        </div>
+        <div class="ra-card">
+          <div class="ra-card-label">Avg Fee / Trade</div>
+          <div class="ra-card-value" id="stat-avg-fee">—</div>
+        </div>
+      </div>
+
+      <!-- ── Tabs ──────────────────────────────────────────────────────── -->
+      <div class="ra-tabs">
+        <button class="ra-tab active" data-tab="trades">Trade Log</button>
+        <button class="ra-tab" data-tab="deposits">Deposits &amp; Withdrawals</button>
+        <button class="ra-tab" data-tab="fees">Fee Breakdown</button>
+        <button class="ra-tab" data-tab="analysis">Analysis</button>
+      </div>
+
+      <!-- ── Trade Log tab ───────────────────────────────────────────── -->
+      <section class="ra-tab-content active" id="tab-trades">
+        <div class="ra-toolbar">
+          <button class="ra-add-btn" id="btn-add-trade">+ Add Trade</button>
+          <div class="ra-filter-group">
+            <label class="ra-filter-label">Symbol</label>
+            <select id="filter-symbol" class="ra-select">
+              <option value="ALL">All</option>
+              <option value="MNQ">MNQ</option>
+              <option value="MGC">MGC</option>
+              <option value="MES">MES</option>
+              <option value="MCL">MCL</option>
+            </select>
+          </div>
+          <div class="ra-filter-group">
+            <label class="ra-filter-label">Result</label>
+            <select id="filter-result" class="ra-select">
+              <option value="ALL">All</option>
+              <option value="win">Win</option>
+              <option value="loss">Loss</option>
+              <option value="scratch">Scratch</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Add/Edit form -->
+        <div id="trade-form-wrap" class="ra-form-wrap" style="display:none">
+          <div class="ra-form">
+            <div class="ra-form-title" id="trade-form-title">Add Trade</div>
+            <input type="hidden" id="tf-id" />
+            <div class="ra-form-grid">
+              <div class="ra-field">
+                <label>Date</label>
+                <input id="tf-date" type="date" />
+              </div>
+              <div class="ra-field">
+                <label>Symbol</label>
+                <select id="tf-symbol">
+                  <option value="MNQ">MNQ</option>
+                  <option value="MGC">MGC</option>
+                  <option value="MES">MES</option>
+                  <option value="MCL">MCL</option>
+                </select>
+              </div>
+              <div class="ra-field">
+                <label>Buy (contracts)</label>
+                <input id="tf-buy" type="number" min="0" step="1" placeholder="0" />
+              </div>
+              <div class="ra-field">
+                <label>Sell (contracts)</label>
+                <input id="tf-sell" type="number" min="0" step="1" placeholder="0" />
+              </div>
+              <div class="ra-field">
+                <label>P&amp;L ($)</label>
+                <input id="tf-pnl" type="number" step="0.01" placeholder="0.00" />
+              </div>
+              <div class="ra-field">
+                <label>Cash Out ($)</label>
+                <input id="tf-cashout" type="number" step="0.01" placeholder="0.00" />
+              </div>
+            </div>
+
+            <div class="ra-form-section-title">Fees (USD)</div>
+            <div class="ra-form-grid">
+              <div class="ra-field">
+                <label>Commission</label>
+                <input id="tf-fee-comm" type="number" step="0.01" placeholder="0.00" />
+              </div>
+              <div class="ra-field">
+                <label>Clearing Fee</label>
+                <input id="tf-fee-clear" type="number" step="0.01" placeholder="0.00" />
+              </div>
+              <div class="ra-field">
+                <label>Exchange Fee</label>
+                <input id="tf-fee-exch" type="number" step="0.01" placeholder="0.00" />
+              </div>
+              <div class="ra-field">
+                <label>NFA Fee</label>
+                <input id="tf-fee-nfa" type="number" step="0.01" placeholder="0.00" />
+              </div>
+              <div class="ra-field">
+                <label>Platform Fee</label>
+                <input id="tf-fee-plat" type="number" step="0.01" placeholder="0.00" />
+              </div>
+              <div class="ra-field">
+                <label>COQ Platform</label>
+                <input id="tf-coq-plat" type="number" step="0.01" placeholder="0.00" />
+              </div>
+              <div class="ra-field">
+                <label>COQ Market Data</label>
+                <input id="tf-coq-mkt" type="number" step="0.01" placeholder="0.00" />
+              </div>
+            </div>
+
+            <div class="ra-form-grid" style="margin-top:6px">
+              <div class="ra-field ra-field-wide">
+                <label>Notes</label>
+                <input id="tf-notes" type="text" placeholder="Setup type, mistake, lesson learned…" />
+              </div>
+            </div>
+            <div class="ra-form-actions">
+              <button class="ra-save-btn" id="tf-save">Save</button>
+              <button class="ra-cancel-btn" id="tf-cancel">Cancel</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="ra-table-wrap">
+          <table class="ra-table" id="trades-table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Symbol</th>
+                <th>Qty</th>
+                <th>P&amp;L</th>
+                <th>Fees</th>
+                <th>Net</th>
+                <th>Cash Out</th>
+                <th>Balance</th>
+                <th>Notes</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="trades-tbody">
+              <tr><td colspan="10" class="ra-empty">No trades yet — add your first above.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ── Deposits & Withdrawals tab ──────────────────────────────── -->
+      <section class="ra-tab-content" id="tab-deposits">
+        <div class="ra-toolbar">
+          <button class="ra-add-btn" id="btn-add-deposit">+ Add Entry</button>
+        </div>
+
+        <div id="deposit-form-wrap" class="ra-form-wrap" style="display:none">
+          <div class="ra-form">
+            <div class="ra-form-title" id="deposit-form-title">Add Deposit / Withdrawal</div>
+            <input type="hidden" id="df-id" />
+            <div class="ra-form-grid">
+              <div class="ra-field">
+                <label>Date</label>
+                <input id="df-date" type="date" />
+              </div>
+              <div class="ra-field">
+                <label>Type</label>
+                <select id="df-type">
+                  <option value="deposit">Deposit</option>
+                  <option value="withdrawal">Withdrawal</option>
+                </select>
+              </div>
+              <div class="ra-field">
+                <label>Amount ($)</label>
+                <input id="df-amount" type="number" step="0.01" placeholder="0.00" />
+              </div>
+              <div class="ra-field ra-field-wide">
+                <label>Notes</label>
+                <input id="df-notes" type="text" placeholder="Initial funding, top-up, withdrawal…" />
+              </div>
+            </div>
+            <div class="ra-form-actions">
+              <button class="ra-save-btn" id="df-save">Save</button>
+              <button class="ra-cancel-btn" id="df-cancel">Cancel</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="ra-table-wrap">
+          <table class="ra-table" id="deposits-table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Type</th>
+                <th>Amount</th>
+                <th>Notes</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="deposits-tbody">
+              <tr><td colspan="5" class="ra-empty">No deposits recorded yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ── Fee Breakdown tab ───────────────────────────────────────── -->
+      <section class="ra-tab-content" id="tab-fees">
+        <div class="ra-analysis-grid">
+
+          <div class="ra-analysis-card">
+            <div class="ra-analysis-title">Total Fees by Type</div>
+            <div id="fees-by-type" class="ra-analysis-body"></div>
+          </div>
+
+          <div class="ra-analysis-card">
+            <div class="ra-analysis-title">Fees by Symbol</div>
+            <div id="fees-by-symbol" class="ra-analysis-body"></div>
+          </div>
+
+          <div class="ra-analysis-card">
+            <div class="ra-analysis-title">Per-Contract Avg (All Trades)</div>
+            <div id="fees-per-contract" class="ra-analysis-body"></div>
+          </div>
+
+          <div class="ra-analysis-card">
+            <div class="ra-analysis-title">Fee Impact on P&amp;L</div>
+            <div id="fees-impact" class="ra-analysis-body"></div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ── Analysis tab ────────────────────────────────────────────── -->
+      <section class="ra-tab-content" id="tab-analysis">
+        <div class="ra-analysis-grid">
+
+          <div class="ra-analysis-card">
+            <div class="ra-analysis-title">P&amp;L by Symbol</div>
+            <div id="analysis-by-symbol" class="ra-analysis-body"></div>
+          </div>
+
+          <div class="ra-analysis-card">
+            <div class="ra-analysis-title">Win Rate by Symbol</div>
+            <div id="analysis-winrate" class="ra-analysis-body"></div>
+          </div>
+
+          <div class="ra-analysis-card">
+            <div class="ra-analysis-title">Monthly P&amp;L</div>
+            <div id="analysis-monthly" class="ra-analysis-body"></div>
+          </div>
+
+          <div class="ra-analysis-card">
+            <div class="ra-analysis-title">Best &amp; Worst Trades</div>
+            <div id="analysis-extremes" class="ra-analysis-body"></div>
+          </div>
+
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <script src="/js/tradingaccount.js"></script>
+</body>
+</html>

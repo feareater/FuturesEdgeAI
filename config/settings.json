@@ -6,10 +6,10 @@
     "economicCalendar": true,
     "relativeStrength": true,
     "sessionLevels": true,
-    "alertReplay": true,
+    "alertReplay": false,
     "correlationHeatmap": true,
     "soundAlerts": false,
-    "pushNotifications": false
+    "pushNotifications": true
   },
   "layers": {
     "ema9": true,

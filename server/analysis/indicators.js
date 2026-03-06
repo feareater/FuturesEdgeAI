@@ -39,19 +39,20 @@ function computeIndicators(candles, opts = {}) {
     };
   }
 
+  const isCrypto = CRYPTO_SYMBOLS.has(symbol);
+
   const ema9   = _ema(candles, 9);
   const ema21  = _ema(candles, 21);
   const ema50  = _ema(candles, 50);
-  const vwap   = _vwap(candles);
+  const vwap   = _vwap(candles, isCrypto);
   const { current: atrCurrent } = _atr(candles, 14);
-  const { pdh, pdl }            = _pdhl(candles);
+  const { pdh, pdl }            = _pdhl(candles, isCrypto);
   const { highs: swingHighs, lows: swingLows } = _swings(candles, swingLookback);
   const fvgs        = detectFVGs(candles, atrCurrent);
   const orderBlocks = detectOrderBlocks(candles, atrCurrent, impulseThreshold);
 
   // Feature-gated indicators — only computed when the feature is enabled
   // Crypto assets (BTC/ETH/XRP) trade 24/7 — no RTH session, opening range, or Asian/London levels
-  const isCrypto = CRYPTO_SYMBOLS.has(symbol);
   const volumeProfile  = !isCrypto && features.volumeProfile && symbol ? computeVolumeProfile(candles, symbol) : null;
   const openingRange   = !isCrypto && features.openingRange            ? computeOpeningRange(candles)           : null;
   const sessionLevels  = !isCrypto && features.sessionLevels           ? computeSessionLevels(candles)          : null;
@@ -114,32 +115,41 @@ function _atr(candles, period) {
 // typical-price mean when volume data is absent (common with Yahoo Finance).
 // ---------------------------------------------------------------------------
 
-function _vwap(candles) {
+function _vwap(candles, isCrypto = false) {
   const result   = [];
   let cumTPV     = 0;      // cumulative typical-price × volume
   let cumVol     = 0;      // cumulative volume
   let sessionDay = null;
 
   for (const c of candles) {
-    const d      = new Date(c.time * 1000 - ET_OFFSET_MS);
-    const dayKey = `${d.getUTCFullYear()}-${d.getUTCMonth()}-${d.getUTCDate()}`;
-    const etHour = d.getUTCHours() + d.getUTCMinutes() / 60;
+    let dayKey, shouldReset;
+    if (isCrypto) {
+      // Crypto: reset at each UTC midnight — no RTH concept
+      const d  = new Date(c.time * 1000);
+      dayKey   = `${d.getUTCFullYear()}-${d.getUTCMonth()}-${d.getUTCDate()}`;
+      shouldReset = dayKey !== sessionDay;
+    } else {
+      // Futures: reset at the first candle on or after 09:30 ET each calendar day
+      const d      = new Date(c.time * 1000 - ET_OFFSET_MS);
+      dayKey       = `${d.getUTCFullYear()}-${d.getUTCMonth()}-${d.getUTCDate()}`;
+      const etHour = d.getUTCHours() + d.getUTCMinutes() / 60;
+      shouldReset  = dayKey !== sessionDay && etHour >= 9.5;
+    }
 
-    // Reset at the first candle on or after 09:30 ET for a new calendar day
-    if (dayKey !== sessionDay && etHour >= 9.5) {
+    if (shouldReset) {
       cumTPV     = 0;
       cumVol     = 0;
       sessionDay = dayKey;
     }
 
-    // Only accumulate once we're inside an active RTH session
-    if (sessionDay !== null) {
-      const tp   = (c.high + c.low + c.close) / 3;
-      const vol  = c.volume > 0 ? c.volume : 1;
-      cumTPV    += tp * vol;
-      cumVol    += vol;
-      result.push({ time: c.time, value: cumTPV / cumVol });
-    }
+    // For futures, skip candles before the RTH session starts
+    if (!isCrypto && sessionDay === null) continue;
+
+    const tp  = (c.high + c.low + c.close) / 3;
+    const vol = c.volume > 0 ? c.volume : 1;
+    cumTPV   += tp * vol;
+    cumVol   += vol;
+    result.push({ time: c.time, value: cumTPV / cumVol });
   }
 
   return result;
@@ -150,11 +160,12 @@ function _vwap(candles) {
 // Groups candles by ET calendar date, returns the most recent completed day's H/L.
 // ---------------------------------------------------------------------------
 
-function _pdhl(candles) {
+function _pdhl(candles, isCrypto = false) {
   const dayMap = new Map();
+  const offset = isCrypto ? 0 : ET_OFFSET_MS;  // crypto uses UTC midnight; futures use ET
 
   for (const c of candles) {
-    const d   = new Date(c.time * 1000 - ET_OFFSET_MS);
+    const d   = new Date(c.time * 1000 - offset);
     const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
     if (!dayMap.has(key)) dayMap.set(key, { high: -Infinity, low: Infinity });
     const entry = dayMap.get(key);

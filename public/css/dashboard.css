@@ -114,7 +114,10 @@ html, body {
 }
 
 .sym-btn,
-.tf-btn {
+.tf-btn,
+.dir-btn,
+.type-btn,
+.status-btn {
   background: transparent;
   border: 1px solid var(--border);
   color: var(--text-dim);
@@ -128,13 +131,19 @@ html, body {
 }
 
 .sym-btn:hover,
-.tf-btn:hover {
+.tf-btn:hover,
+.dir-btn:hover,
+.type-btn:hover,
+.status-btn:hover {
   border-color: var(--accent);
   color: var(--text);
 }
 
 .sym-btn.active,
-.tf-btn.active {
+.tf-btn.active,
+.dir-btn.active,
+.type-btn.active,
+.status-btn.active {
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
@@ -163,9 +172,14 @@ html, body {
 /* ── AI Analysis nav link ────────────────────────────────────────────────── */
 
 #docs-nav-link,
+#scanner-nav-link,
 #ai-nav-link,
+#perf-nav-link,
+#bt-nav-link,
+#propfirms-nav-link,
+#realaccount-nav-link,
 #export-nav-link {
-  margin-left: 16px;
+  margin-left: 6px;
   padding: 4px 12px;
   background: rgba(33,150,243,0.12);
   border: 1px solid rgba(33,150,243,0.3);
@@ -178,7 +192,12 @@ html, body {
   transition: background 0.15s;
 }
 #docs-nav-link:hover,
+#scanner-nav-link:hover,
 #ai-nav-link:hover,
+#perf-nav-link:hover,
+#bt-nav-link:hover,
+#propfirms-nav-link:hover,
+#realaccount-nav-link:hover,
 #export-nav-link:hover { background: rgba(33,150,243,0.22); }
 
 /* ── Last price ─────────────────────────────────────────────────────────── */
@@ -1032,9 +1051,12 @@ html, body {
   /* Desktop-only topbar elements */
   #ohlc-display    { display: none; }
   #data-age        { display: none; }
-  #docs-nav-link   { display: none; }
-  #ai-nav-link     { display: none; }
-  #export-nav-link { display: none; }
+  #docs-nav-link     { display: none; }
+  #scanner-nav-link  { display: none; }
+  #ai-nav-link       { display: none; }
+  #perf-nav-link     { display: none; }
+  #bt-nav-link       { display: none; }
+  #export-nav-link   { display: none; }
 
   /* ── Main content area ──────────────────────────────────────────────── */
 
@@ -1539,19 +1561,172 @@ html, body {
   border: none;
 }
 
-/* ── Topbar nav link style (compact) ─────────────────────────────────────── */
+/* ── Forex widget ─────────────────────────────────────────────────────────── */
 
-#perf-nav-link, #bt-nav-link {
-  font-size: 12px;
-  color: var(--text-dim);
-  text-decoration: none;
-  padding: 3px 6px;
-  border-radius: var(--radius);
+.forex-widget {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(255,255,255,0.04);
   border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 2px 8px;
+  font-size: 11px;
   white-space: nowrap;
-  transition: color 0.15s, border-color 0.15s;
 }
-#perf-nav-link:hover, #bt-nav-link:hover {
+
+.forex-label { color: var(--text-dim); }
+.forex-price { color: var(--text); font-weight: 600; font-family: monospace; }
+.forex-change { font-size: 10px; }
+.forex-up   { color: var(--bull); }
+.forex-down { color: var(--bear); }
+
+/* ── Data age badge ───────────────────────────────────────────────────────── */
+
+.data-age-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: var(--radius);
+  padding: 2px 7px;
+  font-size: 11px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  transition: background 0.5s, border-color 0.5s, color 0.5s;
+}
+
+.data-age-badge.age-fresh { background: rgba(38,166,154,0.12); border-color: rgba(38,166,154,0.3); color: var(--bull); }
+.data-age-badge.age-stale { background: rgba(255,193,7,0.12);  border-color: rgba(255,193,7,0.3);  color: #ffa726; }
+.data-age-badge.age-old   { background: rgba(239,83,80,0.12);  border-color: rgba(239,83,80,0.3);  color: var(--bear); }
+
+.data-age-icon { font-size: 10px; }
+
+/* ── Prediction Widget ────────────────────────────────────────────────────── */
+
+.pred-symbol-label {
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-left: 4px;
+  font-weight: 400;
+}
+
+.prediction-widget {
+  padding: 4px 0;
+}
+
+.pred-loading {
+  color: var(--text-dim);
+  font-size: 11px;
+  text-align: center;
+  padding: 12px 0;
+}
+
+.pred-direction {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.pred-arrow {
+  font-size: 26px;
+  line-height: 1;
+}
+
+.pred-arrow.bull { color: var(--bull); }
+.pred-arrow.bear { color: var(--bear); }
+.pred-arrow.neut { color: var(--text-dim); }
+
+.pred-label {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.pred-label.bull { color: var(--bull); }
+.pred-label.bear { color: var(--bear); }
+.pred-label.neut { color: var(--text-dim); }
+
+.pred-conf-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.pred-conf-bar {
+  flex: 1;
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.pred-conf-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.4s;
+}
+
+.pred-conf-fill.bull { background: var(--bull); }
+.pred-conf-fill.bear { background: var(--bear); }
+.pred-conf-fill.neut { background: var(--text-dim); }
+
+.pred-conf-pct {
+  font-size: 11px;
+  font-weight: 600;
   color: var(--text);
-  border-color: var(--accent);
+  min-width: 30px;
+  text-align: right;
+}
+
+.pred-prices {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 3px 6px;
+  font-size: 11px;
+  margin-bottom: 8px;
+  background: rgba(255,255,255,0.03);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+}
+
+.pred-pl { color: var(--text-dim); }
+.pred-pv { color: var(--text); font-family: monospace; font-weight: 600; }
+.pred-pp { font-size: 10px; }
+.pred-pp.bull { color: var(--bull); }
+.pred-pp.bear { color: var(--bear); }
+
+.pred-factors {
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+
+.pred-factor-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 10px;
+  padding: 2px 0;
+  color: var(--text-dim);
+}
+
+.pred-factor-row .pf-pts {
+  font-family: monospace;
+  font-weight: 600;
+  min-width: 28px;
+  text-align: right;
+}
+
+.pf-pts.pos { color: var(--bull); }
+.pf-pts.neg { color: var(--bear); }
+
+.pred-candle-time {
+  font-size: 10px;
+  color: var(--text-dim);
+  text-align: right;
+  margin-top: 6px;
+  border-top: 1px solid var(--border);
+  padding-top: 4px;
 }
