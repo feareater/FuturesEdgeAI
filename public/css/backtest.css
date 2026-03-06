@@ -282,3 +282,52 @@ body { overflow: auto; }
 .bt-outcome-lost { color: var(--bear); }
 .bt-outcome-open { color: var(--text-dim); }
 .bt-time { margin-left: auto; color: var(--text-dim); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Mobile layout (≤ 767px)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@media (max-width: 767px) {
+
+  #bt-main { padding: 12px; gap: 10px; }
+
+  /* Page nav: horizontal scroll */
+  .page-nav {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    flex-wrap: nowrap;
+    gap: 12px;
+  }
+  .page-nav::-webkit-scrollbar { display: none; }
+
+  /* Topbar: allow page-nav to scroll */
+  #topbar {
+    height: auto;
+    min-height: 48px;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 12px;
+    overflow: visible;
+  }
+
+  /* Controls: stack vertically */
+  .bt-controls { flex-direction: column; align-items: stretch; gap: 10px; }
+
+  .ctrl-group input[type="number"],
+  .ctrl-group input[type="date"] { width: 100%; }
+
+  .run-btn { width: 100%; padding: 10px; font-size: 13px; }
+
+  /* Step-through: wrap */
+  .bt-stepthrough { gap: 8px; }
+  .step-btns { flex-wrap: wrap; gap: 6px; }
+  .step-btn  { min-height: 36px; flex: 1; }
+
+  /* Filter buttons: touch-friendly */
+  .sym-filter, .type-filter { min-height: 36px; padding: 6px 10px; }
+
+  /* Alert feed: single column */
+  .bt-feed { grid-template-columns: 1fr; }
+
+}

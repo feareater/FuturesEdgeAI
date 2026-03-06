@@ -416,3 +416,60 @@
 
 .page-nav a:hover   { background: rgba(33,150,243,0.18); }
 .page-nav a.active  { background: rgba(33,150,243,0.22); color: var(--accent); border-color: rgba(33,150,243,0.5); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Mobile layout (≤ 767px)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@media (max-width: 767px) {
+
+  #pf-main { padding: 12px 14px; gap: 10px; }
+
+  /* Page nav: horizontal scroll */
+  .page-nav {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    flex-wrap: nowrap;
+  }
+  .page-nav::-webkit-scrollbar { display: none; }
+
+  /* Topbar: allow page-nav to scroll */
+  #topbar {
+    height: auto;
+    min-height: 48px;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 12px;
+    overflow: visible;
+  }
+
+  /* Summary cards: 2-column */
+  .pf-card { min-width: 0; flex-basis: calc(50% - 4px); padding: 8px 12px; }
+  .pf-card-value { font-size: 18px; }
+
+  /* Tabs: touch-friendly */
+  .pf-tab { min-height: 36px; padding: 8px 14px; }
+
+  /* Form: single column */
+  .pf-form-grid { grid-template-columns: 1fr; }
+  .pf-field input,
+  .pf-field select,
+  .pf-field textarea { min-height: 36px; font-size: 14px; padding: 6px 10px; }
+  .pf-save-btn, .pf-cancel-btn { min-height: 36px; flex: 1; }
+
+  /* Table: horizontal scroll */
+  .pf-table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .pf-table { min-width: 600px; }
+
+  /* Analysis grid: single column */
+  .pf-analysis-grid { grid-template-columns: 1fr; }
+
+  /* Toolbar: wrap */
+  .pf-toolbar { flex-wrap: wrap; }
+  .pf-add-btn { min-height: 36px; }
+
+}

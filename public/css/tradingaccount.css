@@ -411,3 +411,59 @@
 .an-row-plain:last-child { border-bottom: none; }
 .an-row-plain .an-key  { color: var(--text-dim); }
 .an-row-plain .an-val2 { font-family: monospace; color: var(--text); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Mobile layout (≤ 767px)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@media (max-width: 767px) {
+
+  #ra-main { padding: 12px 14px; gap: 10px; }
+
+  /* Page nav: horizontal scroll */
+  .page-nav {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    flex-wrap: nowrap;
+  }
+  .page-nav::-webkit-scrollbar { display: none; }
+
+  /* Topbar: allow page-nav to scroll */
+  #topbar {
+    height: auto;
+    min-height: 48px;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 12px;
+    overflow: visible;
+  }
+
+  /* Summary cards: 2-column */
+  .ra-card { min-width: 0; flex-basis: calc(50% - 4px); padding: 8px 12px; }
+  .ra-card-value { font-size: 18px; }
+
+  /* Tabs: touch-friendly */
+  .ra-tab { min-height: 36px; padding: 8px 14px; }
+
+  /* Toolbar: wrap */
+  .ra-toolbar { flex-wrap: wrap; }
+  .ra-add-btn { min-height: 36px; }
+
+  /* Form: single column */
+  .ra-form-grid { grid-template-columns: 1fr; }
+  .ra-field input,
+  .ra-field select { min-height: 36px; font-size: 14px; padding: 6px 10px; }
+  .ra-save-btn, .ra-cancel-btn { min-height: 36px; flex: 1; }
+
+  /* Table: horizontal scroll */
+  .ra-table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .ra-table { min-width: 580px; }
+
+  /* Analysis grid: single column */
+  .ra-analysis-grid { grid-template-columns: 1fr; }
+
+}

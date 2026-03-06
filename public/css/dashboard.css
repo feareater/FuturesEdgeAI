@@ -1049,14 +1049,19 @@ html, body {
   }
 
   /* Desktop-only topbar elements */
-  #ohlc-display    { display: none; }
-  #data-age        { display: none; }
-  #docs-nav-link     { display: none; }
-  #scanner-nav-link  { display: none; }
-  #ai-nav-link       { display: none; }
-  #perf-nav-link     { display: none; }
-  #bt-nav-link       { display: none; }
-  #export-nav-link   { display: none; }
+  #ohlc-display       { display: none; }
+  #data-age           { display: none; }
+  #data-age-badge     { display: none; }
+  #rs-widget          { display: none; }
+  #options-widget     { display: none; }
+  #docs-nav-link      { display: none; }
+  #scanner-nav-link   { display: none; }
+  #ai-nav-link        { display: none; }
+  #perf-nav-link      { display: none; }
+  #bt-nav-link        { display: none; }
+  #propfirms-nav-link { display: none; }
+  #realaccount-nav-link { display: none; }
+  #export-nav-link    { display: none; }
 
   /* ── Main content area ──────────────────────────────────────────────── */
 

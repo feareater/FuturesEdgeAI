@@ -316,3 +316,67 @@
   font-size: 11px;
   color: var(--text-dim);
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Mobile layout (≤ 767px)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@media (max-width: 767px) {
+
+  #scanner-main {
+    padding: 8px 10px;
+    gap: 8px;
+    height: calc(100vh - 56px);
+  }
+
+  /* Page nav: horizontal scroll, no wrap */
+  .page-nav {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    flex-wrap: nowrap;
+  }
+  .page-nav::-webkit-scrollbar { display: none; }
+
+  /* Topbar: allow wrapping so page-nav can scroll */
+  #topbar {
+    height: auto;
+    min-height: 48px;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 12px;
+  }
+  #topbar-right { margin-left: auto; }
+
+  /* Filter bar: wrap tighter on small screens */
+  .scan-filters {
+    padding: 8px 10px;
+    gap: 8px 12px;
+  }
+
+  /* Touch-friendly buttons */
+  .dir-btn, .type-btn, .sym-btn, .status-btn {
+    min-height: 36px;
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+
+  /* Summary bar */
+  .scan-summary {
+    font-size: 11px;
+    gap: 8px 12px;
+    flex-wrap: wrap;
+  }
+
+  /* Table: horizontal scroll */
+  .scan-table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  #scan-table { min-width: 640px; }
+
+  #scan-table th,
+  #scan-table td { padding: 6px 8px; }
+
+}

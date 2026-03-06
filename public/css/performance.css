@@ -241,3 +241,52 @@ body { overflow: auto; }
   padding: 24px;
   text-align: center;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Mobile layout (≤ 767px)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@media (max-width: 767px) {
+
+  #perf-main { padding: 12px; }
+
+  /* Page nav: horizontal scroll */
+  .page-nav {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    flex-wrap: nowrap;
+    gap: 12px;
+  }
+  .page-nav::-webkit-scrollbar { display: none; }
+
+  /* Topbar: allow page-nav to scroll */
+  #topbar {
+    height: auto;
+    min-height: 48px;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 12px;
+    overflow: visible;
+  }
+
+  /* Summary cards: 2-column grid */
+  .stat-cards { gap: 8px; }
+  .stat-card  { min-width: 0; flex-basis: calc(50% - 4px); padding: 10px 12px; }
+  .stat-value { font-size: 20px; }
+
+  /* Analytics grid: single column */
+  .perf-grid { grid-template-columns: 1fr; }
+
+  /* ToD heatmap: horizontal scroll */
+  .tod-heatmap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    flex-wrap: nowrap;
+  }
+
+  /* Alert table: horizontal scroll */
+  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  #alert-table { min-width: 560px; }
+
+}

@@ -200,3 +200,41 @@
 .brand-link:hover { color: var(--accent); }
 .brand-sep  { color: var(--text-dim); margin: 0 6px; }
 .brand-page { color: var(--text-dim); font-weight: 400; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Mobile layout (≤ 767px)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@media (max-width: 767px) {
+
+  #commentary-main { padding: 12px; gap: 12px; }
+
+  /* Topbar: allow actions to scroll */
+  #topbar {
+    height: auto;
+    min-height: 48px;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 12px;
+    overflow: visible;
+  }
+
+  /* Action buttons: horizontal scroll row */
+  #topbar-actions {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    flex-wrap: nowrap;
+    margin-left: 0;
+    width: 100%;
+  }
+  #topbar-actions::-webkit-scrollbar { display: none; }
+  .action-btn { white-space: nowrap; flex-shrink: 0; }
+
+  /* Commentary grid: single column */
+  #commentary-grid { grid-template-columns: 1fr; gap: 10px; }
+
+  /* Commentary cards: remove fixed min-width */
+  .commentary-card { padding: 12px; }
+
+}
