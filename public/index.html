@@ -112,7 +112,7 @@
             Alert Feed
             <span id="alert-stats" class="alert-stats-badge">—</span>
             <button id="log-trade-btn" class="log-trade-btn" title="Log a manual trade not tied to a detected setup">＋ Trade</button>
-            <a href="/docs.html" class="guide-btn" title="Setup Guide — learn what each alert means" target="_blank">? Guide</a>
+            <button class="tab-btn-inline" data-tab="chart" title="Switch to Chart view">📈 Chart</button>
           </div>
           <!-- Manual trade entry form (hidden until button click) -->
           <div id="manual-trade-form" style="display:none"></div>
@@ -339,16 +339,13 @@
         <span class="tab-badge" id="tab-alert-badge"></span>
       </button>
 
-      <button class="tab-btn" data-tab="layers" aria-label="Layers &amp; Settings">
-        <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
-          <line x1="4" y1="6" x2="20" y2="6"/>
-          <circle cx="8"  cy="6"  r="2.5" fill="currentColor" stroke="none"/>
-          <line x1="4" y1="12" x2="20" y2="12"/>
-          <circle cx="16" cy="12" r="2.5" fill="currentColor" stroke="none"/>
-          <line x1="4" y1="18" x2="20" y2="18"/>
-          <circle cx="10" cy="18" r="2.5" fill="currentColor" stroke="none"/>
+      <button class="tab-btn" data-tab="layers" aria-label="More — Layers, Settings &amp; Navigation">
+        <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="5"  cy="12" r="1.5" fill="currentColor" stroke="none"/>
+          <circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/>
+          <circle cx="19" cy="12" r="1.5" fill="currentColor" stroke="none"/>
         </svg>
-        <span class="tab-label">Layers</span>
+        <span class="tab-label">More</span>
       </button>
 
     </nav>

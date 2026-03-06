@@ -505,6 +505,9 @@ html, body {
 .outcome-btn.won-btn  { background: rgba(38,166,154,0.18); color: var(--bull); border-color: rgba(38,166,154,0.35); }
 .outcome-btn.lost-btn { background: rgba(239,83,80,0.18);  color: var(--bear); border-color: rgba(239,83,80,0.35); }
 
+/* Inline tab-switch button — only visible on mobile (hidden on desktop) */
+.tab-btn-inline { display: none; }
+
 /* ＋ Log Trade button in panel header */
 .log-trade-btn {
   background: rgba(255,255,255,0.06);
@@ -1083,18 +1086,35 @@ html, body {
 
   #cvd-container { height: 90px; }
 
-  /* Left panel (alerts): in normal flow, fills #main when visible */
+  /* Left panel (alerts): fills #main as a flex column so filters stay fixed
+     and only #alert-feed scrolls internally */
   #left-panel {
     position: static;
     width: 100%;
     flex: 1;
     display: none;           /* hidden on chart tab */
+    flex-direction: column;  /* stacks header → filters → feed */
     border-right: none;
     border-top: none;
+    overflow: hidden;        /* clips to #main bounds */
+    transition: none;
+    min-height: 0;
+  }
+
+  /* Alert section fills the panel */
+  #left-panel #alert-section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
+  }
+
+  /* Alert feed is the only scrollable part */
+  #alert-feed {
+    flex: 1;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
-    transition: none;
-    height: auto;
     min-height: 0;
   }
 
@@ -1167,6 +1187,28 @@ html, body {
 
   .alert-card { padding: 10px 14px; margin-bottom: 8px; }
   #wr-bar     { padding: 8px 16px; font-size: 12px; }
+
+  /* ── Inline tab-switch button (e.g. "📈 Chart" in alert header) ──────── */
+
+  .tab-btn-inline {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: rgba(33,150,243,0.12);
+    border: 1px solid rgba(33,150,243,0.3);
+    color: var(--accent);
+    border-radius: var(--radius);
+    font-size: 12px;
+    font-family: inherit;
+    padding: 4px 10px;
+    min-height: 30px;
+    cursor: pointer;
+    margin-left: auto;
+    white-space: nowrap;
+    transition: background 0.15s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .tab-btn-inline:active { background: rgba(33,150,243,0.25); }
 
   /* ── Bottom navigation bar ──────────────────────────────────────────── */
 

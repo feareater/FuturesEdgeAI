@@ -464,6 +464,11 @@
 
     tabBtns.forEach(btn => btn.addEventListener('click', () => _switchTab(btn.dataset.tab)));
 
+    // Also wire any inline tab-switch buttons inside panels (e.g. "📈 Chart" in alert header)
+    document.querySelectorAll('.tab-btn-inline[data-tab]').forEach(btn => {
+      btn.addEventListener('click', () => _switchTab(btn.dataset.tab));
+    });
+
     // On mobile default to Alerts so setups are immediately visible;
     // on desktop the bottom nav is hidden so this call has no effect.
     const startTab = window.matchMedia('(max-width: 767px)').matches ? 'alerts' : 'chart';
