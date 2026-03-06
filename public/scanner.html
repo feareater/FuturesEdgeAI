@@ -34,6 +34,14 @@
 
     <main id="scanner-main">
 
+      <!-- ── Mobile filter toggle ─────────────────────────────────────── -->
+      <div class="sc-filter-toggle-bar">
+        <button id="sc-filter-toggle" class="sc-filter-toggle-btn">
+          ⚙ Filters
+        </button>
+        <span id="sc-count-inline" class="sc-count-inline">—</span>
+      </div>
+
       <!-- ── Filter bar ───────────────────────────────────────────────── -->
       <section class="scan-filters">
 
@@ -102,8 +110,8 @@
         <span class="scan-last-update" id="sc-ts">updated —</span>
       </div>
 
-      <!-- ── Table ─────────────────────────────────────────────────────── -->
-      <div class="scan-table-wrap">
+      <!-- ── Table (desktop) ───────────────────────────────────────────── -->
+      <div class="scan-table-wrap" id="scan-table-wrap">
         <table id="scan-table">
           <thead>
             <tr>
@@ -126,6 +134,9 @@
           </tbody>
         </table>
       </div>
+
+      <!-- ── Cards (mobile) ────────────────────────────────────────────── -->
+      <div id="scan-cards" class="scan-cards"></div>
 
     </main>
   </div>

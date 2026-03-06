@@ -72,16 +72,16 @@ function renderAccounts() {
 
   tbody.innerHTML = rows.map(a => `
     <tr data-id="${a.id}">
-      <td><strong>${a.firm || '—'}</strong></td>
-      <td>${fmtDate(a.date)}</td>
-      <td>${fmtSize(a.accountSize)}</td>
-      <td style="font-family:monospace">${fmt(a.cost)}</td>
-      <td>${_statusBadge(a.status)}</td>
-      <td class="pf-notes-cell">
+      <td data-label="Firm"><strong>${a.firm || '—'}</strong></td>
+      <td data-label="Date">${fmtDate(a.date)}</td>
+      <td data-label="Size">${fmtSize(a.accountSize)}</td>
+      <td data-label="Cost" style="font-family:monospace">${fmt(a.cost)}</td>
+      <td data-label="Status">${_statusBadge(a.status)}</td>
+      <td data-label="Notes" class="pf-notes-cell">
         ${a.blowReason ? `<div class="pf-notes-reason">&#9888; ${_esc(a.blowReason)}</div>` : ''}
         ${a.notes      ? `<div class="pf-notes-text">${_esc(a.notes)}</div>` : ''}
       </td>
-      <td>
+      <td data-label="" class="pf-actions-cell">
         <div class="pf-row-actions">
           <button class="pf-edit-btn" onclick="editAccount('${a.id}')">Edit</button>
           <button class="pf-del-btn"  onclick="deleteAccount('${a.id}')">Del</button>
@@ -100,11 +100,11 @@ function renderExpenses() {
   }
   tbody.innerHTML = sorted.map(e => `
     <tr data-id="${e.id}">
-      <td><strong>${_esc(e.item || '—')}</strong></td>
-      <td>${fmtDate(e.date)}</td>
-      <td style="font-family:monospace">${fmt(e.amount)}</td>
-      <td class="pf-notes-text">${_esc(e.notes || '')}</td>
-      <td>
+      <td data-label="Item"><strong>${_esc(e.item || '—')}</strong></td>
+      <td data-label="Date">${fmtDate(e.date)}</td>
+      <td data-label="Amount" style="font-family:monospace">${fmt(e.amount)}</td>
+      <td data-label="Notes" class="pf-notes-text">${_esc(e.notes || '')}</td>
+      <td data-label="" class="pf-actions-cell">
         <div class="pf-row-actions">
           <button class="pf-edit-btn" onclick="editExpense('${e.id}')">Edit</button>
           <button class="pf-del-btn"  onclick="deleteExpense('${e.id}')">Del</button>
@@ -123,11 +123,11 @@ function renderPayouts() {
   }
   tbody.innerHTML = sorted.map(p => `
     <tr data-id="${p.id}">
-      <td><strong>${_esc(p.firm || '—')}</strong></td>
-      <td>${fmtDate(p.date)}</td>
-      <td style="font-family:monospace;color:var(--bull)">${fmt(p.amount)}</td>
-      <td class="pf-notes-text">${_esc(p.notes || '')}</td>
-      <td>
+      <td data-label="Firm"><strong>${_esc(p.firm || '—')}</strong></td>
+      <td data-label="Date">${fmtDate(p.date)}</td>
+      <td data-label="Amount" style="font-family:monospace;color:var(--bull)">${fmt(p.amount)}</td>
+      <td data-label="Notes" class="pf-notes-text">${_esc(p.notes || '')}</td>
+      <td data-label="" class="pf-actions-cell">
         <div class="pf-row-actions">
           <button class="pf-edit-btn" onclick="editPayout('${p.id}')">Edit</button>
           <button class="pf-del-btn"  onclick="deletePayout('${p.id}')">Del</button>

@@ -464,8 +464,10 @@
 
     tabBtns.forEach(btn => btn.addEventListener('click', () => _switchTab(btn.dataset.tab)));
 
-    // Start on chart tab
-    _switchTab('chart');
+    // On mobile default to Alerts so setups are immediately visible;
+    // on desktop the bottom nav is hidden so this call has no effect.
+    const startTab = window.matchMedia('(max-width: 767px)').matches ? 'alerts' : 'chart';
+    _switchTab(startTab);
   }
 
   // ── Sound alerts (Web Audio API) ──────────────────────────────────────────

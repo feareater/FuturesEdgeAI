@@ -456,12 +456,49 @@
   .ra-field select { min-height: 36px; font-size: 14px; padding: 6px 10px; }
   .ra-save-btn, .ra-cancel-btn { min-height: 36px; flex: 1; }
 
-  /* Table: horizontal scroll */
-  .ra-table-wrap {
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
+  /* Table: card-row layout */
+  .ra-table-wrap { border: none; border-radius: 0; overflow: visible; }
+
+  .ra-table thead { display: none; }
+
+  .ra-table tbody tr {
+    display: block;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 8px;
+    padding: 10px 12px;
   }
-  .ra-table { min-width: 580px; }
+  .ra-table tbody tr:hover { background: var(--bg-panel); }
+
+  .ra-table td {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 4px 0;
+    border-bottom: none;
+    font-size: 13px;
+    white-space: normal;
+  }
+
+  .ra-table td::before {
+    content: attr(data-label);
+    color: var(--text-dim);
+    font-size: 11px;
+    min-width: 62px;
+    flex-shrink: 0;
+    padding-top: 2px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  .ra-table td.ra-actions-cell {
+    padding-top: 8px;
+    margin-top: 4px;
+    border-top: 1px solid rgba(255,255,255,0.04);
+  }
+  .ra-table td.ra-actions-cell::before { display: none; }
+  .ra-edit-btn, .ra-del-btn { min-height: 32px; padding: 4px 14px; font-size: 12px; }
 
   /* Analysis grid: single column */
   .ra-analysis-grid { grid-template-columns: 1fr; }

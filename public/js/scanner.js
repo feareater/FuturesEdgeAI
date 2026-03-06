@@ -20,15 +20,20 @@
   let prevKeys = new Set();
 
   // ── DOM ────────────────────────────────────────────────────────────────────
-  const tbody       = document.getElementById('scan-body');
-  const scCount     = document.getElementById('sc-count');
-  const scMtf       = document.getElementById('sc-mtf-count');
-  const scBull      = document.getElementById('sc-bull-count');
-  const scBear      = document.getElementById('sc-bear-count');
-  const scTs        = document.getElementById('sc-ts');
-  const wsDot       = document.getElementById('sc-ws-dot');
-  const minConfEl   = document.getElementById('sc-minconf');
-  const mtfOnlyEl   = document.getElementById('sc-mtf-only');
+  const tbody         = document.getElementById('scan-body');
+  const scCount       = document.getElementById('sc-count');
+  const scMtf         = document.getElementById('sc-mtf-count');
+  const scBull        = document.getElementById('sc-bull-count');
+  const scBear        = document.getElementById('sc-bear-count');
+  const scTs          = document.getElementById('sc-ts');
+  const wsDot         = document.getElementById('sc-ws-dot');
+  const minConfEl     = document.getElementById('sc-minconf');
+  const mtfOnlyEl     = document.getElementById('sc-mtf-only');
+  const scanCards     = document.getElementById('scan-cards');
+  const scanTableWrap = document.getElementById('scan-table-wrap');
+  const filterToggle  = document.getElementById('sc-filter-toggle');
+  const scCountInline = document.getElementById('sc-count-inline');
+  const filtersEl     = document.querySelector('.scan-filters');
 
   // ── Setup type labels ──────────────────────────────────────────────────────
   const TYPE_LABEL = {
@@ -38,6 +43,12 @@
     trendline_break:'TL Break',
     bos_retest:     'BOS Retest',
   };
+
+  // ── Mobile detection ───────────────────────────────────────────────────────
+
+  function _isMobile() {
+    return window.matchMedia('(max-width: 767px)').matches;
+  }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -102,55 +113,41 @@
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
-  function _render() {
-    const filtered = _filtered();
-    const sorted   = _sorted(filtered);
+  function _buildAlertParts(a) {
+    const key      = _alertKey(a);
+    const conf     = a.setup.confidence;
+    const confCls  = conf >= 80 ? 'high' : conf >= 65 ? 'med' : 'low';
+    const dirCls   = a.setup.direction === 'bullish' ? 'sc-dir-long' : 'sc-dir-short';
+    const dirArrow = a.setup.direction === 'bullish' ? '▲ Long' : '▼ Short';
+    const regime   = a.regime || {};
+    const regDir   = regime.direction || regime.dir || '';
+    const regClass = regime.type === 'trend' && regDir === 'bullish' ? 'trend-bull'
+                   : regime.type === 'trend' && regDir === 'bearish' ? 'trend-bear'
+                   : 'range-neut';
+    const regLabel = regime.type === 'trend'
+      ? `Trend ${regDir === 'bullish' ? '▲' : '▼'}`
+      : 'Range';
+    const mtf      = a.setup.mtfConfluence;
+    const eventBadge = a.setup.nearEvent
+      ? '<span class="sc-event-badge">⚠</span>' : '';
+    return { key, conf, confCls, dirCls, dirArrow, regClass, regLabel, mtf, eventBadge };
+  }
 
-    const newKeys = new Set(sorted.map(_alertKey));
-
-    // Summary
-    const mtfCount  = filtered.filter(a => a.setup.mtfConfluence).length;
-    const bullCount = filtered.filter(a => a.setup.direction === 'bullish').length;
-    const bearCount = filtered.filter(a => a.setup.direction === 'bearish').length;
-    scCount.textContent = `${sorted.length} setup${sorted.length !== 1 ? 's' : ''}`;
-    scMtf.textContent   = `${mtfCount} with MTF`;
-    scBull.textContent  = `${bullCount} long`;
-    scBear.textContent  = `${bearCount} short`;
+  function _renderTable(sorted, newKeys) {
+    if (scanTableWrap) scanTableWrap.style.display = '';
+    if (scanCards)     scanCards.style.display = 'none';
 
     if (sorted.length === 0) {
       tbody.innerHTML = '<tr><td colspan="12" class="scan-empty">No setups match current filters.</td></tr>';
-      prevKeys = newKeys;
       return;
     }
 
     const rows = sorted.map(a => {
-      const key     = _alertKey(a);
-      const isNew   = !prevKeys.has(key);
-      const conf    = a.setup.confidence;
-      const confCls = conf >= 80 ? 'high' : conf >= 65 ? 'med' : 'low';
-      const dirCls  = a.setup.direction === 'bullish' ? 'sc-dir-long' : 'sc-dir-short';
-      const dirArrow = a.setup.direction === 'bullish' ? '▲ Long' : '▼ Short';
-
-      const regime   = a.regime || {};
-      const regDir   = regime.direction || regime.dir || '';
-      const regClass = regime.type === 'trend' && regDir === 'bullish' ? 'trend-bull'
-                     : regime.type === 'trend' && regDir === 'bearish' ? 'trend-bear'
-                     : 'range-neut';
-      const regLabel = regime.type === 'trend'
-        ? `Trend ${regDir === 'bullish' ? '▲' : '▼'}`
-        : 'Range';
-
-      // MTF pills
-      const mtf = a.setup.mtfConfluence;
+      const isNew = !prevKeys.has(_alertKey(a));
+      const { key, conf, confCls, dirCls, dirArrow, regClass, regLabel, mtf, eventBadge } = _buildAlertParts(a);
       const mtfCell = mtf
         ? mtf.tfs.map(tf => `<span class="sc-mtf-pill">${tf}</span>`).join('')
         : '<span class="sc-mtf-none">—</span>';
-
-      // Near-event badge
-      const eventBadge = a.setup.nearEvent
-        ? '<span class="sc-event-badge">⚠ Event</span>'
-        : '';
-
       return `<tr class="${isNew ? 'row-new' : ''}" data-key="${key}">
         <td><span class="sc-sym">${a.symbol}</span>${eventBadge}</td>
         <td><span class="sc-tf">${a.timeframe}</span></td>
@@ -173,24 +170,98 @@
     }).join('');
 
     tbody.innerHTML = rows;
-    prevKeys = newKeys;
 
-    // Bind view buttons
     tbody.querySelectorAll('.sc-view-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const key   = btn.dataset.key;
-        const alert = allAlerts.find(a => _alertKey(a) === key);
-        if (!alert) return;
-        sessionStorage.setItem('bt_jump', JSON.stringify({
-          symbol:    alert.symbol,
-          timeframe: alert.timeframe,
-          setupTime: alert.setup.time,
-        }));
-        window.location.href = '/';
-      });
+      btn.addEventListener('click', () => _jumpToChart(btn.dataset.key));
     });
+  }
 
-    // Update age values every 30s without a full re-render
+  function _renderCards(sorted, newKeys) {
+    if (scanTableWrap) scanTableWrap.style.display = 'none';
+    if (scanCards)     scanCards.style.display = '';
+
+    if (sorted.length === 0) {
+      scanCards.innerHTML = '<div class="sc-cards-empty">No setups match current filters.</div>';
+      return;
+    }
+
+    const cards = sorted.map(a => {
+      const isNew = !prevKeys.has(_alertKey(a));
+      const { key, conf, confCls, dirCls, dirArrow, regClass, regLabel, mtf, eventBadge } = _buildAlertParts(a);
+      const isBull = a.setup.direction === 'bullish';
+      const mtfHtml = mtf
+        ? `<div class="sc-card-mtf">${mtf.tfs.map(tf => `<span class="sc-mtf-pill">${tf}</span>`).join('')}</div>`
+        : '';
+      const rationale = a.setup.rationale
+        ? `<div class="sc-card-rationale">${a.setup.rationale}</div>`
+        : '';
+      return `<div class="sc-card ${isBull ? 'bull' : 'bear'} ${isNew ? 'card-new' : ''}" data-key="${key}">
+        <div class="sc-card-header">
+          <span class="sc-sym">${a.symbol}</span>
+          <span class="sc-tf">${a.timeframe}</span>
+          <span class="sc-type">${TYPE_LABEL[a.setup.type] || a.setup.type}</span>
+          <span class="${dirCls}">${dirArrow}</span>
+          ${eventBadge}
+          <span class="sc-card-age">${_age(a.ts)}</span>
+        </div>
+        <div class="sc-card-meta">
+          <div class="sc-conf-wrap sc-conf-wide">
+            <div class="sc-conf-bar"><div class="sc-conf-fill ${confCls}" style="width:${conf}%"></div></div>
+            <span class="sc-conf-val">${conf}%</span>
+          </div>
+          ${mtfHtml}
+          <span class="sc-regime ${regClass}">${regLabel}</span>
+        </div>
+        <div class="sc-card-levels">
+          <span class="sc-card-level"><span class="sc-level-label">Entry</span><span class="sc-level-val">${_px(a.setup.entry, a.symbol)}</span></span>
+          <span class="sc-card-level"><span class="sc-level-label tp">TP</span><span class="sc-level-val tp">${_px(a.setup.tp, a.symbol)}</span></span>
+          <span class="sc-card-level"><span class="sc-level-label sl">SL</span><span class="sc-level-val sl">${_px(a.setup.sl, a.symbol)}</span></span>
+        </div>
+        ${rationale}
+        <button class="sc-view-btn sc-view-btn-full" data-key="${key}">View on Chart ↗</button>
+      </div>`;
+    }).join('');
+
+    scanCards.innerHTML = cards;
+
+    scanCards.querySelectorAll('.sc-view-btn').forEach(btn => {
+      btn.addEventListener('click', () => _jumpToChart(btn.dataset.key));
+    });
+  }
+
+  function _jumpToChart(key) {
+    const alert = allAlerts.find(a => _alertKey(a) === key);
+    if (!alert) return;
+    sessionStorage.setItem('bt_jump', JSON.stringify({
+      symbol:    alert.symbol,
+      timeframe: alert.timeframe,
+      setupTime: alert.setup.time,
+    }));
+    window.location.href = '/';
+  }
+
+  function _render() {
+    const filtered = _filtered();
+    const sorted   = _sorted(filtered);
+    const newKeys  = new Set(sorted.map(_alertKey));
+
+    // Summary counts
+    const mtfCount  = filtered.filter(a => a.setup.mtfConfluence).length;
+    const bullCount = filtered.filter(a => a.setup.direction === 'bullish').length;
+    const bearCount = filtered.filter(a => a.setup.direction === 'bearish').length;
+    scCount.textContent = `${sorted.length} setup${sorted.length !== 1 ? 's' : ''}`;
+    scMtf.textContent   = `${mtfCount} with MTF`;
+    scBull.textContent  = `${bullCount} long`;
+    scBear.textContent  = `${bearCount} short`;
+    if (scCountInline) scCountInline.textContent = `${sorted.length} setup${sorted.length !== 1 ? 's' : ''}`;
+
+    if (_isMobile()) {
+      _renderCards(sorted, newKeys);
+    } else {
+      _renderTable(sorted, newKeys);
+    }
+
+    prevKeys = newKeys;
     _scheduleAgeUpdate();
   }
 
@@ -200,13 +271,22 @@
   function _scheduleAgeUpdate() {
     clearTimeout(_ageTimer);
     _ageTimer = setTimeout(() => {
+      // Update ages in table rows
       tbody.querySelectorAll('.sc-age').forEach(el => {
         const row = el.closest('tr');
         if (!row) return;
-        const key   = row.dataset.key;
-        const alert = allAlerts.find(a => _alertKey(a) === key);
+        const alert = allAlerts.find(a => _alertKey(a) === row.dataset.key);
         if (alert) el.textContent = _age(alert.ts);
       });
+      // Update ages in cards
+      if (scanCards) {
+        scanCards.querySelectorAll('.sc-card-age').forEach(el => {
+          const card = el.closest('.sc-card');
+          if (!card) return;
+          const alert = allAlerts.find(a => _alertKey(a) === card.dataset.key);
+          if (alert) el.textContent = _age(alert.ts);
+        });
+      }
       _scheduleAgeUpdate();
     }, 30_000);
   }
@@ -320,6 +400,20 @@
       } catch {}
     });
   }
+
+  // ── Filter toggle (mobile) ─────────────────────────────────────────────────
+
+  if (filterToggle && filtersEl) {
+    filterToggle.addEventListener('click', () => {
+      const hidden = filtersEl.classList.toggle('sc-filters-hidden');
+      filterToggle.classList.toggle('active', !hidden);
+    });
+    // Hide filters by default on mobile
+    if (_isMobile()) filtersEl.classList.add('sc-filters-hidden');
+  }
+
+  // Re-render on orientation/resize (switch between table and card layout)
+  window.addEventListener('resize', () => _render());
 
   // ── Init ───────────────────────────────────────────────────────────────────
 

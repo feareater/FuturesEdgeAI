@@ -253,6 +253,18 @@
   background: rgba(33, 150, 243, 0.25);
 }
 
+/* ── Filter toggle bar (mobile only — hidden on desktop) ─────────────────── */
+
+.sc-filter-toggle-bar {
+  display: none;
+}
+
+/* ── Mobile card grid (hidden on desktop) ────────────────────────────────── */
+
+.scan-cards {
+  display: none;
+}
+
 /* ── Empty state ─────────────────────────────────────────────────────────── */
 
 .scan-empty {
@@ -327,6 +339,7 @@
     padding: 8px 10px;
     gap: 8px;
     height: calc(100vh - 56px);
+    overflow-y: auto;
   }
 
   /* Page nav: horizontal scroll, no wrap */
@@ -338,7 +351,7 @@
   }
   .page-nav::-webkit-scrollbar { display: none; }
 
-  /* Topbar: allow wrapping so page-nav can scroll */
+  /* Topbar: allow wrapping */
   #topbar {
     height: auto;
     min-height: 48px;
@@ -348,13 +361,51 @@
   }
   #topbar-right { margin-left: auto; }
 
-  /* Filter bar: wrap tighter on small screens */
+  /* Filter toggle bar — visible only on mobile */
+  .sc-filter-toggle-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+
+  .sc-filter-toggle-btn {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-dim);
+    font-size: 13px;
+    padding: 8px 14px;
+    min-height: 38px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: color 0.15s, border-color 0.15s;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .sc-filter-toggle-btn.active {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+
+  .sc-count-inline {
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  /* Collapsible filter bar */
+  .scan-filters.sc-filters-hidden {
+    display: none;
+  }
+
+  /* Filter bar when visible: tighter */
   .scan-filters {
     padding: 8px 10px;
     gap: 8px 12px;
   }
 
-  /* Touch-friendly buttons */
+  /* Touch-friendly filter buttons */
   .dir-btn, .type-btn, .sym-btn, .status-btn {
     min-height: 36px;
     padding: 6px 10px;
@@ -368,15 +419,115 @@
     flex-wrap: wrap;
   }
 
-  /* Table: horizontal scroll */
-  .scan-table-wrap {
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
+  /* Hide desktop table on mobile (JS also sets display:none) */
+  .scan-table-wrap { display: none; }
+
+  /* ── Mobile card grid ─────────────────────────────────────────────────── */
+
+  .scan-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow-y: auto;
+    flex: 1;
+    padding-bottom: 8px;
   }
 
-  #scan-table { min-width: 640px; }
+  .sc-cards-empty {
+    text-align: center;
+    padding: 48px 0;
+    color: var(--text-dim);
+    font-size: 13px;
+  }
 
-  #scan-table th,
-  #scan-table td { padding: 6px 8px; }
+  .sc-card {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .sc-card.bull { border-left-color: var(--bull); }
+  .sc-card.bear { border-left-color: var(--bear); }
+
+  .sc-card.card-new {
+    animation: cardFlash 1.5s ease-out;
+  }
+  @keyframes cardFlash {
+    0%   { background: rgba(33,150,243,0.2); }
+    100% { background: var(--bg-panel); }
+  }
+
+  /* Card header row: sym · tf · type · dir · age */
+  .sc-card-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 5px 8px;
+  }
+
+  .sc-card-header .sc-sym { font-size: 15px; }
+
+  .sc-card-age {
+    margin-left: auto;
+    color: var(--text-dim);
+    font-size: 11px;
+  }
+
+  /* Meta row: conf bar · MTF pills · regime */
+  .sc-card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
+  }
+
+  .sc-conf-wide .sc-conf-bar { width: 80px; }
+
+  .sc-card-mtf {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px;
+  }
+
+  /* Price levels row */
+  .sc-card-levels {
+    display: flex;
+    gap: 6px 18px;
+    flex-wrap: wrap;
+    font-size: 13px;
+  }
+
+  .sc-card-level { display: flex; gap: 4px; align-items: baseline; }
+
+  .sc-level-label    { color: var(--text-dim); font-size: 11px; }
+  .sc-level-label.tp { color: var(--bull); }
+  .sc-level-label.sl { color: var(--bear); }
+
+  .sc-level-val    { font-weight: 600; }
+  .sc-level-val.tp { color: var(--bull); }
+  .sc-level-val.sl { color: var(--bear); }
+
+  /* Setup rationale */
+  .sc-card-rationale {
+    font-size: 11px;
+    color: var(--text-dim);
+    font-style: italic;
+    line-height: 1.4;
+  }
+
+  /* Full-width view button */
+  .sc-view-btn-full {
+    width: 100%;
+    padding: 10px;
+    font-size: 13px;
+    min-height: 40px;
+    border-radius: var(--radius);
+    justify-content: center;
+  }
 
 }

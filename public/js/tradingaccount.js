@@ -112,16 +112,16 @@ function renderTrades() {
     const balCls = t._runBal >= 0 ? '' : 'ra-neg';
     const co     = t.cashOut > 0 ? `<span class="ra-neg">${fmt(t.cashOut)}</span>` : '—';
     return `<tr>
-      <td>${t.date}</td>
-      <td><span class="ra-sym">${t.symbol}</span></td>
-      <td>${qty}</td>
-      <td class="${pnlCls}">${fmt(t.pnl)}</td>
-      <td class="ra-neg">${fmt(t._netFees)}</td>
-      <td class="${netCls}">${fmt(t._net)}</td>
-      <td>${co}</td>
-      <td class="${balCls}" style="font-family:monospace">${fmt(t._runBal)}</td>
-      <td style="color:var(--text-dim);font-size:11px">${t.notes || ''}</td>
-      <td><div class="ra-row-actions">
+      <td data-label="Date">${t.date}</td>
+      <td data-label="Symbol"><span class="ra-sym">${t.symbol}</span></td>
+      <td data-label="Qty">${qty}</td>
+      <td data-label="P&amp;L" class="${pnlCls}">${fmt(t.pnl)}</td>
+      <td data-label="Fees" class="ra-neg">${fmt(t._netFees)}</td>
+      <td data-label="Net" class="${netCls}">${fmt(t._net)}</td>
+      <td data-label="Cash Out">${co}</td>
+      <td data-label="Balance" class="${balCls}" style="font-family:monospace">${fmt(t._runBal)}</td>
+      <td data-label="Notes" style="color:var(--text-dim);font-size:11px">${t.notes || ''}</td>
+      <td data-label="" class="ra-actions-cell"><div class="ra-row-actions">
         <button class="ra-edit-btn" data-id="${t.id}">Edit</button>
         <button class="ra-del-btn"  data-id="${t.id}">Del</button>
       </div></td>
@@ -150,11 +150,11 @@ function renderDeposits() {
     const badgeCls = d.type === 'deposit' ? 'ra-badge-deposit' : 'ra-badge-withdrawal';
     const amtCls   = d.type === 'deposit' ? 'ra-pos' : 'ra-neg';
     return `<tr>
-      <td>${d.date}</td>
-      <td><span class="${badgeCls}">${d.type}</span></td>
-      <td class="${amtCls}">${fmt(d.amount)}</td>
-      <td style="color:var(--text-dim);font-size:11px">${d.notes || ''}</td>
-      <td><div class="ra-row-actions">
+      <td data-label="Date">${d.date}</td>
+      <td data-label="Type"><span class="${badgeCls}">${d.type}</span></td>
+      <td data-label="Amount" class="${amtCls}">${fmt(d.amount)}</td>
+      <td data-label="Notes" style="color:var(--text-dim);font-size:11px">${d.notes || ''}</td>
+      <td data-label="" class="ra-actions-cell"><div class="ra-row-actions">
         <button class="ra-edit-btn" data-id="${d.id}">Edit</button>
         <button class="ra-del-btn"  data-id="${d.id}">Del</button>
       </div></td>
