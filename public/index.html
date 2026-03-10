@@ -20,96 +20,120 @@
   <div id="app">
 
     <header id="topbar">
-      <div id="brand">FuturesEdge AI</div>
-      <span id="data-age" class="data-age">—</span>
 
-      <div id="controls">
-        <div class="control-group">
-          <span class="control-label">Symbol</span>
-          <div class="btn-group">
-            <button class="sym-btn active" data-symbol="MNQ">MNQ</button>
-            <button class="sym-btn"        data-symbol="MGC">MGC</button>
-            <button class="sym-btn"        data-symbol="MES">MES</button>
-            <button class="sym-btn"        data-symbol="MCL">MCL</button>
-            <button class="sym-btn"        data-symbol="BTC">BTC</button>
-            <button class="sym-btn"        data-symbol="ETH">ETH</button>
-            <button class="sym-btn"        data-symbol="XRP">XRP</button>
+      <!-- Row 1: Brand + status · Nav links (centered) -->
+      <div class="tb-row tb-row-nav">
+        <!-- Brand + status stacked in center -->
+        <div class="tb-brand-block">
+          <span id="brand">FuturesEdge AI</span>
+          <div id="topbar-status">
+            <span id="live-clock" class="live-clock" title="Current time (Mountain)">—</span>
+            <span id="calendar-badge" class="calendar-badge" style="display:none"></span>
+            <span id="session-badge" class="session-badge">—</span>
+            <span id="ws-status" class="ws-status ws-connecting" title="WebSocket status"></span>
           </div>
         </div>
-
-        <div class="control-group">
-          <span class="control-label">Timeframe</span>
-          <div class="btn-group">
-            <button class="tf-btn"        data-tf="1m">1m</button>
-            <button class="tf-btn"        data-tf="2m">2m</button>
-            <button class="tf-btn"        data-tf="3m">3m</button>
-            <button class="tf-btn active" data-tf="5m">5m</button>
-            <button class="tf-btn"        data-tf="15m">15m</button>
-            <button class="tf-btn"        data-tf="30m">30m</button>
-            <button class="tf-btn"        data-tf="1h">1h</button>
-            <button class="tf-btn"        data-tf="2h">2h</button>
-            <button class="tf-btn"        data-tf="4h">4h</button>
+        <!-- Nav links row, centered -->
+        <div class="tb-nav-links">
+          <div id="data-age-badge" class="data-age-badge" title="Age of last candle in seed data">
+            <span class="data-age-icon">⏱</span>
+            <span id="data-age-text">—</span>
           </div>
+          <a href="/docs.html"           id="docs-nav-link"       title="Setup Guide">Guide</a>
+          <a href="/scanner.html"        id="scanner-nav-link"    title="All-Setups Scanner">Scanner</a>
+          <a href="/commentary.html"     id="ai-nav-link"         title="AI Analysis">AI</a>
+          <a href="/performance.html"    id="perf-nav-link"       title="Performance Analytics">Stats</a>
+          <a href="/backtest.html"       id="bt-nav-link"         title="Alert Replay">Replay</a>
+          <a href="/propfirms.html"      id="propfirms-nav-link"  title="Prop Firm Tracker">Prop Firms</a>
+          <a href="/tradingaccount.html" id="realaccount-nav-link" title="Real Account Tracker">Real Account</a>
+          <a href="/api/export"          id="export-nav-link"     title="Export JSON" download>Export</a>
         </div>
       </div>
 
-      <div id="ohlc-display">
-        <span class="ohlc-label">O</span><span id="ohlc-o">—</span>
-        <span class="ohlc-label">H</span><span id="ohlc-h">—</span>
-        <span class="ohlc-label">L</span><span id="ohlc-l">—</span>
-        <span class="ohlc-label">C</span><span id="ohlc-c">—</span>
+      <!-- Row 2: Symbol selection -->
+      <div class="tb-row tb-row-sym">
+        <span class="control-label">Symbol</span>
+        <div class="sym-groups">
+          <div class="sym-group">
+            <span class="sym-group-label">Index</span>
+            <div class="btn-group">
+              <button class="sym-btn active" data-symbol="MNQ">MNQ</button>
+              <button class="sym-btn"        data-symbol="MES">MES</button>
+            </div>
+          </div>
+          <div class="sym-group-divider"></div>
+          <div class="sym-group">
+            <span class="sym-group-label">Commodities</span>
+            <div class="btn-group">
+              <button class="sym-btn" data-symbol="MGC">MGC</button>
+              <button class="sym-btn" data-symbol="MCL">MCL</button>
+            </div>
+          </div>
+          <div class="sym-group-divider"></div>
+          <div class="sym-group">
+            <span class="sym-group-label">Crypto</span>
+            <div class="btn-group">
+              <button class="sym-btn" data-symbol="BTC">BTC</button>
+              <button class="sym-btn" data-symbol="ETH">ETH</button>
+              <button class="sym-btn" data-symbol="XRP">XRP</button>
+            </div>
+          </div>
+        </div>
       </div>
 
-      <div id="last-price">
-        <span id="price-value">—</span>
-        <span id="price-symbol">MNQ · 5m</span>
+      <!-- Row 3: Timeframe selection -->
+      <div class="tb-row tb-row-tf">
+        <span class="control-label">Timeframe</span>
+        <div class="btn-group">
+          <button class="tf-btn active" data-tf="5m">5m</button>
+          <button class="tf-btn"        data-tf="15m">15m</button>
+          <button class="tf-btn"        data-tf="30m">30m</button>
+          <button class="tf-btn"        data-tf="1h">1h</button>
+          <button class="tf-btn"        data-tf="2h">2h</button>
+          <button class="tf-btn"        data-tf="4h">4h</button>
+        </div>
       </div>
 
-      <!-- Relative Strength widget (MNQ vs MES, only shown for equity symbols) -->
-      <div id="rs-widget" class="rs-widget" style="display:none">
-        <span class="rs-label">RS</span>
-        <span id="rs-ratio" class="rs-ratio">—</span>
-        <span id="rs-signal" class="rs-signal">—</span>
+      <!-- Row 4: OHLC · Last price · RS · Options -->
+      <div class="tb-row tb-row-data">
+        <div id="ohlc-display">
+          <span class="ohlc-label">O</span><span id="ohlc-o">—</span>
+          <span class="ohlc-label">H</span><span id="ohlc-h">—</span>
+          <span class="ohlc-label">L</span><span id="ohlc-l">—</span>
+          <span class="ohlc-label">C</span><span id="ohlc-c">—</span>
+        </div>
+        <div id="last-price">
+          <span id="price-value">—</span>
+          <span id="price-symbol">MNQ · 5m</span>
+        </div>
+        <div id="rs-widget" class="rs-widget" style="display:none">
+          <span class="rs-label">RS</span>
+          <span id="rs-ratio" class="rs-ratio">—</span>
+          <span id="rs-signal" class="rs-signal">—</span>
+        </div>
+        <div id="options-widget" class="options-widget" style="display:none">
+          <span class="opt-label">P/C</span>
+          <span id="opt-pc" class="opt-value">—</span>
+          <span class="opt-sep">|</span>
+          <span class="opt-label">IV</span>
+          <span id="opt-iv" class="opt-value">—</span>
+        </div>
+        <div id="gamma-widget" class="gamma-widget" style="display:none"></div>
+        <!-- Hidden span kept for JS compatibility -->
+        <span id="data-age" class="data-age" style="display:none">—</span>
       </div>
 
-      <!-- Options data widget (P/C ratio + ATM IV) -->
-      <div id="options-widget" class="options-widget" style="display:none">
-        <span class="opt-label">P/C</span>
-        <span id="opt-pc" class="opt-value">—</span>
-        <span class="opt-sep">|</span>
-        <span class="opt-label">IV</span>
-        <span id="opt-iv" class="opt-value">—</span>
-      </div>
-
-      <div id="data-age-badge" class="data-age-badge" title="Age of last candle in seed data">
-        <span class="data-age-icon">⏱</span>
-        <span id="data-age-text">—</span>
-      </div>
-
-      <a href="/docs.html" id="docs-nav-link" title="Setup Guide">Guide</a>
-      <a href="/scanner.html" id="scanner-nav-link" title="All-Setups Scanner">Scanner</a>
-      <a href="/commentary.html" id="ai-nav-link" title="AI Analysis">AI</a>
-      <a href="/performance.html" id="perf-nav-link" title="Performance Analytics">Stats</a>
-      <a href="/backtest.html" id="bt-nav-link" title="Alert Replay">Replay</a>
-      <a href="/propfirms.html" id="propfirms-nav-link" title="Prop Firm Tracker">Prop Firms</a>
-      <a href="/tradingaccount.html" id="realaccount-nav-link" title="Real Account Tracker">Real Account</a>
-      <a href="/api/export" id="export-nav-link" title="Export all alerts &amp; trades as JSON" download>Export</a>
-      <div id="topbar-status">
-        <span id="calendar-badge" class="calendar-badge" style="display:none"></span>
-        <span id="session-badge" class="session-badge">—</span>
-        <span id="ws-status" class="ws-status ws-connecting" title="WebSocket status"></span>
-      </div>
     </header>
 
     <main id="main">
 
       <aside id="left-panel">
 
-        <!-- ── Alert feed ──────────────────────────────────────────────── -->
+        <!-- ── Monitoring (taken trades) ────────────────────────────────── -->
         <div class="panel-section" id="alert-section">
 
           <div class="panel-header">
-            Alert Feed
+            Monitoring
             <span id="alert-stats" class="alert-stats-badge">—</span>
             <button id="log-trade-btn" class="log-trade-btn" title="Log a manual trade not tied to a detected setup">＋ Trade</button>
             <button class="tab-btn-inline" data-tab="chart" title="Switch to Chart view">📈 Chart</button>
@@ -188,126 +212,134 @@
 
         <!-- ── Directional Prediction ─────────────────────────────────── -->
         <div class="panel-section" id="prediction-section">
-          <div class="panel-header">Prediction <span id="pred-symbol-label" class="pred-symbol-label"></span></div>
-          <div id="prediction-widget" class="prediction-widget">
-            <div class="pred-loading">Computing…</div>
+          <div class="panel-header collapsible-header" data-section="prediction">
+            Bias <span id="pred-symbol-label" class="pred-symbol-label"></span>
+            <span class="section-chevron">▾</span>
+          </div>
+          <div class="section-body">
+            <div id="prediction-widget" class="prediction-widget">
+              <div class="pred-loading">Computing…</div>
+            </div>
           </div>
         </div>
 
-        <!-- ── Correlation Heatmap ─────────────────────────────────────── -->
-        <div class="panel-section" id="corr-heatmap-section">
-          <div class="panel-header">Correlation <span id="corr-updated" class="corr-updated"></span></div>
-          <div id="corr-grid" class="corr-grid">
-            <div class="corr-loading">—</div>
+        <!-- ── Scan Predictions ────────────────────────────────────────── -->
+        <div class="panel-section" id="scan-predictions-section">
+          <div class="panel-header collapsible-header" data-section="scan-predictions">
+            Predictions <span id="pred-count-badge" class="pred-count-badge"></span>
+            <span class="section-chevron">▾</span>
+          </div>
+          <div class="section-body">
+            <div id="daily-risk-banner" style="display:none"></div>
+            <div id="predictions-feed">
+              <p class="placeholder">Scanning…</p>
+            </div>
           </div>
         </div>
 
-        <!-- ── Layer toggles ───────────────────────────────────────────── -->
+        <!-- ── Layer toggles / Features / Navigation ───────────────────── -->
         <div class="panel-section" id="layers-section">
-          <div class="panel-header">Layers</div>
-          <div id="layer-list">
 
-            <label class="layer-row">
-              <input type="checkbox" data-layer="ema9" checked />
-              <span class="swatch" style="background:#2962ff"></span>
-              <span class="layer-name">EMA 9</span>
-            </label>
+          <div class="collapsible-section">
+            <div class="panel-header collapsible-header" data-section="layers">
+              Layers <span class="section-chevron">▾</span>
+            </div>
+            <div class="section-body">
+              <div id="layer-list">
 
-            <label class="layer-row">
-              <input type="checkbox" data-layer="ema21" checked />
-              <span class="swatch" style="background:#ff6d00"></span>
-              <span class="layer-name">EMA 21</span>
-            </label>
+                <label class="layer-row">
+                  <input type="checkbox" data-layer="ema9" checked />
+                  <span class="swatch" style="background:#2962ff"></span>
+                  <span class="layer-name">EMA 9</span>
+                </label>
 
-            <label class="layer-row">
-              <input type="checkbox" data-layer="ema50" checked />
-              <span class="swatch" style="background:#d500f9"></span>
-              <span class="layer-name">EMA 50</span>
-            </label>
+                <label class="layer-row">
+                  <input type="checkbox" data-layer="ema21" checked />
+                  <span class="swatch" style="background:#ff6d00"></span>
+                  <span class="layer-name">EMA 21</span>
+                </label>
 
-            <label class="layer-row">
-              <input type="checkbox" data-layer="vwap" checked />
-              <span class="swatch" style="background:#00bcd4; border-style:dashed"></span>
-              <span class="layer-name">VWAP</span>
-            </label>
+                <label class="layer-row">
+                  <input type="checkbox" data-layer="ema50" checked />
+                  <span class="swatch" style="background:#d500f9"></span>
+                  <span class="layer-name">EMA 50</span>
+                </label>
 
-            <label class="layer-row">
-              <input type="checkbox" data-layer="priorDayHighLow" checked />
-              <span class="swatch" style="background:#607d8b; border-style:dashed"></span>
-              <span class="layer-name">PDH / PDL</span>
-            </label>
+                <label class="layer-row">
+                  <input type="checkbox" data-layer="vwap" checked />
+                  <span class="swatch" style="background:#00bcd4; border-style:dashed"></span>
+                  <span class="layer-name">VWAP</span>
+                </label>
 
-            <label class="layer-row">
-              <input type="checkbox" data-layer="swingHighLow" checked />
-              <span class="swatch swing-swatch"></span>
-              <span class="layer-name">Swing H/L</span>
-            </label>
+                <label class="layer-row">
+                  <input type="checkbox" data-layer="priorDayHighLow" checked />
+                  <span class="swatch" style="background:#607d8b; border-style:dashed"></span>
+                  <span class="layer-name">PDH / PDL</span>
+                </label>
 
-            <label class="layer-row">
-              <input type="checkbox" data-layer="trendlines" checked />
-              <span class="swatch trendline-swatch"></span>
-              <span class="layer-name">Trendlines</span>
-            </label>
+                <label class="layer-row">
+                  <input type="checkbox" data-layer="swingHighLow" checked />
+                  <span class="swatch swing-swatch"></span>
+                  <span class="layer-name">Swing H/L</span>
+                </label>
 
-            <label class="layer-row">
-              <input type="checkbox" data-layer="iofZones" checked />
-              <span class="swatch iof-swatch"></span>
-              <span class="layer-name">IOF Zones</span>
-            </label>
+                <label class="layer-row">
+                  <input type="checkbox" data-layer="trendlines" checked />
+                  <span class="swatch trendline-swatch"></span>
+                  <span class="layer-name">Trendlines</span>
+                </label>
 
-            <label class="layer-row">
-              <input type="checkbox" data-layer="volumeProfile" checked />
-              <span class="swatch" style="background:rgba(255,255,255,0.7);border-style:dashed"></span>
-              <span class="layer-name">Volume Profile</span>
-            </label>
+                <label class="layer-row">
+                  <input type="checkbox" data-layer="iofZones" checked />
+                  <span class="swatch iof-swatch"></span>
+                  <span class="layer-name">IOF Zones</span>
+                </label>
 
-            <label class="layer-row">
-              <input type="checkbox" data-layer="openingRange" checked />
-              <span class="swatch" style="background:#ff9800"></span>
-              <span class="layer-name">Opening Range</span>
-            </label>
+                <label class="layer-row">
+                  <input type="checkbox" data-layer="volumeProfile" checked />
+                  <span class="swatch" style="background:rgba(255,255,255,0.7);border-style:dashed"></span>
+                  <span class="layer-name">Volume Profile</span>
+                </label>
 
-            <label class="layer-row">
-              <input type="checkbox" data-layer="sessionLevels" checked />
-              <span class="swatch" style="background:rgba(255,193,7,0.8);border-style:dashed"></span>
-              <span class="layer-name">Session Levels</span>
-            </label>
+                <label class="layer-row">
+                  <input type="checkbox" data-layer="openingRange" checked />
+                  <span class="swatch" style="background:#ff9800"></span>
+                  <span class="layer-name">Opening Range</span>
+                </label>
 
-            <label class="layer-row">
-              <input type="checkbox" data-layer="correlationHeatmap" checked />
-              <span class="swatch corr-swatch"></span>
-              <span class="layer-name">Correlation</span>
-            </label>
+                <label class="layer-row">
+                  <input type="checkbox" data-layer="sessionLevels" checked />
+                  <span class="swatch" style="background:rgba(255,193,7,0.8);border-style:dashed"></span>
+                  <span class="layer-name">Session Levels</span>
+                </label>
 
-            <label class="layer-row">
-              <input type="checkbox" data-layer="cvd" checked />
-              <span class="swatch" style="background:rgba(33,150,243,0.7)"></span>
-              <span class="layer-name">CVD</span>
-            </label>
 
-            <label class="layer-row">
-              <input type="checkbox" data-layer="optionsLevels" checked />
-              <span class="swatch" style="background:rgba(255,87,34,0.7);border-style:dashed"></span>
-              <span class="layer-name">Options Levels</span>
-            </label>
+                <label class="layer-row">
+                  <input type="checkbox" data-layer="cvd" checked />
+                  <span class="swatch" style="background:rgba(33,150,243,0.7)"></span>
+                  <span class="layer-name">CVD</span>
+                </label>
 
+                <label class="layer-row">
+                  <input type="checkbox" data-layer="optionsLevels" checked />
+                  <span class="swatch" style="background:rgba(255,87,34,0.7);border-style:dashed"></span>
+                  <span class="layer-name">Options Levels</span>
+                </label>
+
+              </div>
+            </div>
           </div>
 
           <!-- Feature toggles (server-rendered by layers.js) -->
-          <div class="panel-header features-header">Features</div>
-          <div id="feature-list"></div>
-
-          <!-- Mobile-only nav links (visible in Layers tab) -->
-          <div class="mobile-links-section">
-            <a href="/scanner.html" class="mobile-link-btn">Scanner</a>
-            <a href="/commentary.html" class="mobile-link-btn">AI Analysis</a>
-            <a href="/performance.html" class="mobile-link-btn">Performance</a>
-            <a href="/backtest.html" class="mobile-link-btn">Backtest</a>
-            <a href="/propfirms.html" class="mobile-link-btn">Prop Firms</a>
-            <a href="/tradingaccount.html" class="mobile-link-btn">Real Account</a>
-            <a href="/docs.html" class="mobile-link-btn">Setup Guide</a>
-            <a href="/api/export" class="mobile-link-btn" download>Export Data</a>
+          <div class="collapsible-section">
+            <div class="panel-header features-header collapsible-header" data-section="features">
+              Features <span class="section-chevron">▾</span>
+            </div>
+            <div class="section-body">
+              <div id="feature-list"></div>
+            </div>
           </div>
+
 
         </div>
 

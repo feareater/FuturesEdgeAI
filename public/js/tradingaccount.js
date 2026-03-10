@@ -2,20 +2,57 @@
 // Real Account Tracker — client-side CRUD + analytics
 
 const BASE = '';
+const BROKERS = ['Optimus Futures', 'Tradovate'];
 
 // ── State ─────────────────────────────────────────────────────────────────
 
+let _allTrades   = [];
+let _allDeposits = [];
+let _activeBroker = 'ALL'; // 'ALL' | 'Optimus Futures' | 'Tradovate'
+
+// Filtered views (updated when broker changes)
 let _trades   = [];
 let _deposits = [];
 
 // ── Boot ──────────────────────────────────────────────────────────────────
 
 async function boot() {
+  setupBrokerTabs();
   setupTabs();
   setupTradeForm();
   setupDepositForm();
   setupFilters();
   await load();
+}
+
+// ── Broker selector ───────────────────────────────────────────────────────
+
+function setupBrokerTabs() {
+  document.querySelectorAll('.ra-broker-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.ra-broker-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      _activeBroker = tab.dataset.broker;
+      _applyBrokerFilter();
+      renderAll();
+      // Pre-select broker in forms
+      const bv = _activeBroker === 'ALL' ? 'Optimus Futures' : _activeBroker;
+      const tfb = document.getElementById('tf-broker');
+      const dfb = document.getElementById('df-broker');
+      if (tfb) tfb.value = bv;
+      if (dfb) dfb.value = bv;
+    });
+  });
+}
+
+function _applyBrokerFilter() {
+  if (_activeBroker === 'ALL') {
+    _trades   = _allTrades;
+    _deposits = _allDeposits;
+  } else {
+    _trades   = _allTrades.filter(t => (t.broker || 'Optimus Futures') === _activeBroker);
+    _deposits = _allDeposits.filter(d => (d.broker || 'Optimus Futures') === _activeBroker);
+  }
 }
 
 // ── Data fetch ────────────────────────────────────────────────────────────
@@ -24,16 +61,21 @@ async function load() {
   try {
     const r = await fetch(`${BASE}/api/realaccount`);
     const d = await r.json();
-    _trades   = (d.trades   || []).sort((a, b) => a.date.localeCompare(b.date));
-    _deposits = (d.deposits || []).sort((a, b) => a.date.localeCompare(b.date));
-    renderSummary();
-    renderTrades();
-    renderDeposits();
-    renderFeeBreakdown();
-    renderAnalysis();
+    _allTrades   = (d.trades   || []).sort((a, b) => a.date.localeCompare(b.date));
+    _allDeposits = (d.deposits || []).sort((a, b) => a.date.localeCompare(b.date));
+    _applyBrokerFilter();
+    renderAll();
   } catch (err) {
     console.error('[RA] load error', err);
   }
+}
+
+function renderAll() {
+  renderSummary();
+  renderTrades();
+  renderDeposits();
+  renderFeeBreakdown();
+  renderAnalysis();
 }
 
 // ── Summary ───────────────────────────────────────────────────────────────
@@ -80,7 +122,7 @@ function renderTrades() {
   const sym = document.getElementById('filter-symbol')?.value || 'ALL';
   const res = document.getElementById('filter-result')?.value || 'ALL';
 
-  // Compute running balance — always from all trades sorted by date
+  // Running balance — computed from filtered trades in date order
   let runningBal = _computeStartBal();
   const withBal = _trades.map(t => {
     const netFees = (t.fees?.total || 0) + (t.coq?.platform || 0) + (t.coq?.marketData || 0);
@@ -101,7 +143,7 @@ function renderTrades() {
 
   const tbody = document.getElementById('trades-tbody');
   if (!filtered.length) {
-    tbody.innerHTML = `<tr><td colspan="10" class="ra-empty">No trades match the current filter.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="11" class="ra-empty">No trades match the current filter.</td></tr>`;
     return;
   }
 
@@ -111,8 +153,11 @@ function renderTrades() {
     const netCls = t._net > 0 ? 'ra-pos' : t._net < 0 ? 'ra-neg' : 'ra-zero';
     const balCls = t._runBal >= 0 ? '' : 'ra-neg';
     const co     = t.cashOut > 0 ? `<span class="ra-neg">${fmt(t.cashOut)}</span>` : '—';
+    const broker = t.broker || 'Optimus Futures';
+    const brokerShort = broker === 'Optimus Futures' ? 'Optimus' : broker;
     return `<tr>
       <td data-label="Date">${t.date}</td>
+      <td data-label="Broker"><span class="ra-broker-badge">${brokerShort}</span></td>
       <td data-label="Symbol"><span class="ra-sym">${t.symbol}</span></td>
       <td data-label="Qty">${qty}</td>
       <td data-label="P&amp;L" class="${pnlCls}">${fmt(t.pnl)}</td>
@@ -143,14 +188,17 @@ function _computeStartBal() {
 function renderDeposits() {
   const tbody = document.getElementById('deposits-tbody');
   if (!_deposits.length) {
-    tbody.innerHTML = `<tr><td colspan="5" class="ra-empty">No deposits recorded yet.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" class="ra-empty">No deposits recorded yet.</td></tr>`;
     return;
   }
   tbody.innerHTML = _deposits.map(d => {
     const badgeCls = d.type === 'deposit' ? 'ra-badge-deposit' : 'ra-badge-withdrawal';
     const amtCls   = d.type === 'deposit' ? 'ra-pos' : 'ra-neg';
+    const broker   = d.broker || 'Optimus Futures';
+    const brokerShort = broker === 'Optimus Futures' ? 'Optimus' : broker;
     return `<tr>
       <td data-label="Date">${d.date}</td>
+      <td data-label="Broker"><span class="ra-broker-badge">${brokerShort}</span></td>
       <td data-label="Type"><span class="${badgeCls}">${d.type}</span></td>
       <td data-label="Amount" class="${amtCls}">${fmt(d.amount)}</td>
       <td data-label="Notes" style="color:var(--text-dim);font-size:11px">${d.notes || ''}</td>
@@ -167,7 +215,6 @@ function renderDeposits() {
 // ── Fee Breakdown ─────────────────────────────────────────────────────────
 
 function renderFeeBreakdown() {
-  // Totals by fee type
   const totals = { commission: 0, clearingFee: 0, exchangeFee: 0, nfaFee: 0, platformFee: 0, coqPlatform: 0, coqMarketData: 0, wireFee: 0 };
   _trades.forEach(t => {
     totals.commission    += t.fees?.commission  || 0;
@@ -178,7 +225,6 @@ function renderFeeBreakdown() {
     totals.coqPlatform   += t.coq?.platform     || 0;
     totals.coqMarketData += t.coq?.marketData   || 0;
   });
-  // CQG/wire fees are stored as withdrawal entries in deposits, not on individual trades
   _deposits.forEach(d => {
     if (d.type !== 'withdrawal') return;
     const n = (d.notes || '').toLowerCase();
@@ -207,28 +253,25 @@ function renderFeeBreakdown() {
     </div>`;
   }).join('');
 
-  // Fees by symbol
-  const syms = ['MNQ', 'MGC', 'MES', 'MCL'];
+  const syms = ['MNQ', 'MGC', 'MES', 'MCL', 'BTC', 'ETH', 'XRP'];
   const symFees = {};
   syms.forEach(s => symFees[s] = 0);
   _trades.forEach(t => {
-    const sym = t.symbol;
-    if (symFees[sym] !== undefined) {
-      symFees[sym] += (t.fees?.total || 0) + (t.coq?.platform || 0) + (t.coq?.marketData || 0);
+    if (symFees[t.symbol] !== undefined) {
+      symFees[t.symbol] += (t.fees?.total || 0) + (t.coq?.platform || 0) + (t.coq?.marketData || 0);
     }
   });
   const maxSymFee = Math.max(...Object.values(symFees), 0.01);
   const bySymEl = document.getElementById('fees-by-symbol');
-  bySymEl.innerHTML = syms.map(s => {
+  bySymEl.innerHTML = syms.filter(s => symFees[s] > 0 || _trades.some(t => t.symbol === s)).map(s => {
     const pct = (symFees[s] / maxSymFee * 100);
     return `<div class="an-row">
       <span class="an-label">${s}</span>
       <div class="an-bar-wrap"><div class="an-bar an-bar-red" style="width:${pct.toFixed(1)}%"></div></div>
       <span class="an-val">${fmt(symFees[s])}</span>
     </div>`;
-  }).join('');
+  }).join('') || '<div style="color:var(--text-dim)">No trades yet.</div>';
 
-  // Per-contract averages
   const perC = { commission: 0, clearingFee: 0, exchangeFee: 0, nfaFee: 0, platformFee: 0 };
   let pcCount = 0;
   _trades.forEach(t => {
@@ -255,7 +298,6 @@ function renderFeeBreakdown() {
     ].map(([k, v]) => `<div class="an-row-plain"><span class="an-key">${k}</span><span class="an-val2">${v}</span></div>`).join('');
   }
 
-  // Fee impact
   const grossPnl = _trades.reduce((s, t) => s + (t.pnl || 0), 0);
   const netPnl   = grossPnl - grandTotal;
   const impactEl = document.getElementById('fees-impact');
@@ -271,9 +313,7 @@ function renderFeeBreakdown() {
 // ── Analysis ──────────────────────────────────────────────────────────────
 
 function renderAnalysis() {
-  const syms = ['MNQ', 'MGC', 'MES', 'MCL'];
-
-  // P&L by symbol
+  const syms = ['MNQ', 'MGC', 'MES', 'MCL', 'BTC', 'ETH', 'XRP'];
   const symPnl  = {};
   const symWins = {};
   const symTot  = {};
@@ -286,10 +326,11 @@ function renderAnalysis() {
       if (t.pnl > 0) symWins[t.symbol] += 1;
     }
   });
-  const maxAbsPnl = Math.max(...syms.map(s => Math.abs(symPnl[s])), 0.01);
+  const activeSym = syms.filter(s => symTot[s] > 0);
+  const maxAbsPnl = Math.max(...activeSym.map(s => Math.abs(symPnl[s])), 0.01);
 
   const pnlEl = document.getElementById('analysis-by-symbol');
-  pnlEl.innerHTML = syms.map(s => {
+  pnlEl.innerHTML = activeSym.length ? activeSym.map(s => {
     const pct   = (Math.abs(symPnl[s]) / maxAbsPnl * 100);
     const barCls = symPnl[s] >= 0 ? 'an-bar-green' : 'an-bar-red';
     const valCls = symPnl[s] >= 0 ? 'ra-pos' : symPnl[s] < 0 ? 'ra-neg' : '';
@@ -298,11 +339,10 @@ function renderAnalysis() {
       <div class="an-bar-wrap"><div class="an-bar ${barCls}" style="width:${pct.toFixed(1)}%"></div></div>
       <span class="an-val ${valCls}">${fmt(symPnl[s])}</span>
     </div>`;
-  }).join('');
+  }).join('') : '<div style="color:var(--text-dim)">No trades yet.</div>';
 
-  // Win rate by symbol
   const wrEl = document.getElementById('analysis-winrate');
-  wrEl.innerHTML = syms.map(s => {
+  wrEl.innerHTML = activeSym.length ? activeSym.map(s => {
     const wr  = symTot[s] > 0 ? (symWins[s] / symTot[s] * 100) : 0;
     const lbl = symTot[s] > 0 ? wr.toFixed(0) + '%' : '—';
     return `<div class="an-row">
@@ -310,9 +350,8 @@ function renderAnalysis() {
       <div class="an-bar-wrap"><div class="an-bar" style="width:${wr.toFixed(1)}%"></div></div>
       <span class="an-val">${lbl}</span>
     </div>`;
-  }).join('');
+  }).join('') : '<div style="color:var(--text-dim)">No trades yet.</div>';
 
-  // Monthly P&L
   const monthly = {};
   _trades.forEach(t => {
     const m = t.date.slice(0, 7);
@@ -337,7 +376,6 @@ function renderAnalysis() {
       }).join('')
     : '<div style="color:var(--text-dim)">No trades yet.</div>';
 
-  // Best & worst trades
   const sorted    = [..._trades].sort((a, b) => (b.pnl || 0) - (a.pnl || 0));
   const best3     = sorted.slice(0, 3);
   const worst3    = sorted.slice(-3).reverse();
@@ -393,10 +431,12 @@ function openTradeForm(id) {
   clearTradeForm();
 
   if (id) {
-    const t = _trades.find(x => x.id === id);
+    // Look in _allTrades so editing works regardless of active broker filter
+    const t = _allTrades.find(x => x.id === id);
     if (!t) return;
     title.textContent = 'Edit Trade';
     document.getElementById('tf-id').value        = t.id;
+    document.getElementById('tf-broker').value    = t.broker || 'Optimus Futures';
     document.getElementById('tf-date').value      = t.date;
     document.getElementById('tf-symbol').value    = t.symbol;
     document.getElementById('tf-buy').value       = t.buy || '';
@@ -413,7 +453,8 @@ function openTradeForm(id) {
     document.getElementById('tf-notes').value     = t.notes || '';
   } else {
     title.textContent = 'Add Trade';
-    document.getElementById('tf-date').value = new Date().toISOString().slice(0, 10);
+    document.getElementById('tf-date').value   = new Date().toISOString().slice(0, 10);
+    document.getElementById('tf-broker').value = _activeBroker === 'ALL' ? 'Optimus Futures' : _activeBroker;
   }
   wrap.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
@@ -439,6 +480,7 @@ async function saveTrade() {
 
   const body = {
     id:      get('tf-id') || undefined,
+    broker:  get('tf-broker') || 'Optimus Futures',
     date:    get('tf-date'),
     symbol:  get('tf-symbol'),
     buy:     fNum('tf-buy'),
@@ -493,10 +535,11 @@ function openDepositForm(id) {
   wrap.style.display = '';
 
   if (id) {
-    const d = _deposits.find(x => x.id === id);
+    const d = _allDeposits.find(x => x.id === id);
     if (!d) return;
     title.textContent = 'Edit Entry';
     document.getElementById('df-id').value     = d.id;
+    document.getElementById('df-broker').value = d.broker || 'Optimus Futures';
     document.getElementById('df-date').value   = d.date;
     document.getElementById('df-type').value   = d.type;
     document.getElementById('df-amount').value = d.amount;
@@ -504,6 +547,7 @@ function openDepositForm(id) {
   } else {
     title.textContent = 'Add Deposit / Withdrawal';
     document.getElementById('df-id').value     = '';
+    document.getElementById('df-broker').value = _activeBroker === 'ALL' ? 'Optimus Futures' : _activeBroker;
     document.getElementById('df-date').value   = new Date().toISOString().slice(0, 10);
     document.getElementById('df-type').value   = 'deposit';
     document.getElementById('df-amount').value = '';
@@ -516,6 +560,7 @@ async function saveDeposit() {
   const get = id => document.getElementById(id)?.value?.trim();
   const body = {
     id:     get('df-id') || undefined,
+    broker: get('df-broker') || 'Optimus Futures',
     date:   get('df-date'),
     type:   get('df-type'),
     amount: parseFloat(get('df-amount')) || 0,

@@ -65,6 +65,10 @@
   let optionsPriceLines = [];
   let lastOptionsLevels = null;
 
+  // Gamma Levels price line handles (gamma flip, call wall, put wall)
+  let gammaLines     = [];
+  let lastGammaData  = null;
+
   // Marker arrays merged into candleSeries
   let swingHighMarkers = [];
   let swingLowMarkers  = [];
@@ -295,6 +299,12 @@
     const tlData      = tlRes.ok ? await tlRes.json() : {};
 
     if (!candles.length) throw new Error('No candles returned');
+
+    // Apply symbol-specific price format (XRP needs 4 decimal places)
+    const dec = _priceDec(symbol);
+    candleSeries.applyOptions({
+      priceFormat: { type: 'price', precision: dec, minMove: dec === 4 ? 0.0001 : 0.01 },
+    });
 
     candleSeries.setData(candles);
     rawCandles = candles;
@@ -651,6 +661,58 @@
     }
   }
 
+  // ── Gamma Levels ───────────────────────────────────────────────────────────
+
+  function clearGammaLines() {
+    for (const l of gammaLines) {
+      try { candleSeries.removePriceLine(l); } catch (_) {}
+    }
+    gammaLines = [];
+  }
+
+  function _drawGammaLevels(data) {
+    if (!data) return;
+    const Dashed = LightweightCharts.LineStyle.Dashed;
+    const Dotted = LightweightCharts.LineStyle.Dotted;
+    // Use scaled (futures-space) levels when available, fall back to ETF-space
+    const s = data.scaled || {};
+
+    const flip     = s.flipLevel ?? data.flipLevel;
+    const callWall = s.callWall  ?? data.callWall;
+    const putWall  = s.putWall   ?? data.putWall;
+
+    if (flip != null) {
+      gammaLines.push(candleSeries.createPriceLine({
+        price: flip,
+        color: 'rgba(0,229,255,0.85)',   // bright cyan
+        lineWidth: 2,
+        lineStyle: Dashed,
+        axisLabelVisible: true,
+        title: 'γ Flip',
+      }));
+    }
+    if (callWall != null) {
+      gammaLines.push(candleSeries.createPriceLine({
+        price: callWall,
+        color: 'rgba(38,166,154,0.70)',  // teal
+        lineWidth: 1,
+        lineStyle: Dotted,
+        axisLabelVisible: true,
+        title: 'Call Wall',
+      }));
+    }
+    if (putWall != null) {
+      gammaLines.push(candleSeries.createPriceLine({
+        price: putWall,
+        color: 'rgba(239,83,80,0.70)',   // red
+        lineWidth: 1,
+        lineStyle: Dotted,
+        axisLabelVisible: true,
+        title: 'Put Wall',
+      }));
+    }
+  }
+
   // ── Opening Range ───────────────────────────────────────────────────────────
 
   function clearORLines() {
@@ -829,12 +891,6 @@
         if (visible && lastSessionLevels) _drawSessionLevels(lastSessionLevels);
         break;
 
-      case 'correlationHeatmap': {
-        const panel = document.getElementById('corr-heatmap-section');
-        if (panel) panel.style.display = visible ? '' : 'none';
-        break;
-      }
-
       case 'cvd': {
         const el = document.getElementById('cvd-container');
         if (!el) break;
@@ -853,7 +909,9 @@
 
       case 'optionsLevels':
         clearOptionsLines();
+        clearGammaLines();
         if (visible && lastOptionsLevels) _drawOptionsLevels(lastOptionsLevels);
+        if (visible && lastGammaData)     _drawGammaLevels(lastGammaData);
         break;
     }
   }
@@ -910,6 +968,13 @@
       if (vis.optionsLevels && data) _drawOptionsLevels(data);
     },
 
+    // Set gamma levels (flip, call wall, put wall) — called by alerts.js after gamma fetch.
+    setGammaLevels(data) {
+      lastGammaData = data;
+      clearGammaLines();
+      if (vis.optionsLevels && data) _drawGammaLevels(data);
+    },
+
     // Plot colored alert arrows on the chart for the current symbol + TF.
     // Called by alerts.js after every fetch. Colors: blue=open, teal=won, red=lost, gold=taken.
     setAlertMarkers(alerts, symbol, tf) {
@@ -944,8 +1009,11 @@
     },
   };
 
+  // ── Price precision (XRP trades at 4 decimal places) ──────────────────────
+  function _priceDec(sym) { return sym === 'XRP' ? 4 : 2; }
+
   // ── OHLC display ───────────────────────────────────────────────────────────
-  function fmt(n) { return n == null ? '—' : n.toFixed(2); }
+  function fmt(n) { return n == null ? '—' : n.toFixed(_priceDec(activeSymbol)); }
 
   function setOHLC(d) {
     ohlcO.textContent = fmt(d.open);

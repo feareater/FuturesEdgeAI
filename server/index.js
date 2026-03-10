@@ -20,7 +20,7 @@ const { saveAlertCache, loadAlertCache, saveCommentaryCache, loadCommentaryCache
 const { fetchAll }              = require('./data/seedFetch');
 const { fetchAllCrypto }        = require('./data/coinbaseFetch');
 const coinbaseWS                = require('./data/coinbaseWS');
-const { getForexRate, getOptionsFlow } = require('./data/polygonFetch');
+const { getForexRate, getOptionsFlow, getGammaData } = require('./data/polygonFetch');
 const autotrader                = require('./trading/autotrader');
 const simulator                 = require('./trading/simulator');
 const { computeRelativeStrength } = require('./analysis/relativeStrength');
@@ -265,6 +265,30 @@ app.get('/api/alerts', (req, res) => {
     if (a.suppressed !== b.suppressed) return a.suppressed ? 1 : -1;
     return b.setup.time - a.setup.time;
   });
+
+  // For open alerts, compute priceProgress: how far current price has moved
+  // from entry toward TP (0–1 = in play, >1 = past TP, negative = SL breached).
+  // Client uses this to remove setups that are too far along or have crossed SL.
+  for (const alert of filtered) {
+    if (alert.setup.outcome !== 'open' && alert.setup.outcome != null) continue;
+    const { entry, tp, sl, direction } = alert.setup;
+    if (entry == null || tp == null || sl == null) continue;
+    try {
+      const candles = getCandles(alert.symbol, alert.timeframe);
+      const lastClose = candles[candles.length - 1]?.close;
+      if (lastClose == null) continue;
+      // SL already breached — mark as invalid regardless of progress toward TP
+      const slBreached = direction === 'bullish' ? lastClose <= sl : lastClose >= sl;
+      if (slBreached) { alert.priceProgress = -1; continue; }
+      const totalRange = Math.abs(tp - entry);
+      if (totalRange === 0) continue;
+      const traveled = direction === 'bullish'
+        ? (lastClose - entry) / totalRange
+        : (entry - lastClose) / totalRange;
+      alert.priceProgress = Math.round(traveled * 100) / 100;
+    } catch (_) {}
+  }
+
   res.json({ alerts: filtered.slice(0, limit) });
 });
 
@@ -358,8 +382,8 @@ app.get('/api/trades', (_req, res) => {
 app.post('/api/trades', (req, res) => {
   const { alertKey, symbol, timeframe, setupType,
           actualEntry, actualSL, actualTP, actualExit, notes,
-          direction, manualSetupType, isManual } = req.body;
-  if (actualEntry == null || actualSL == null || actualTP == null) {
+          direction, manualSetupType, isManual, mode } = req.body;
+  if (mode !== 'monitor' && (actualEntry == null || actualSL == null || actualTP == null)) {
     return res.status(400).json({ error: 'actualEntry, actualSL, actualTP required' });
   }
   const key = alertKey || `MANUAL:${symbol || 'UNK'}:${Date.now()}`;
@@ -367,10 +391,11 @@ app.post('/api/trades', (req, res) => {
     id:              Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
     alertKey:        key,
     symbol,          timeframe, setupType,
+    mode:            mode || 'take',
     takenAt:         new Date().toISOString(),
-    actualEntry:     Number(actualEntry),
-    actualSL:        Number(actualSL),
-    actualTP:        Number(actualTP),
+    actualEntry:     actualEntry != null ? Number(actualEntry) : null,
+    actualSL:        actualSL   != null ? Number(actualSL)    : null,
+    actualTP:        actualTP   != null ? Number(actualTP)    : null,
     actualExit:      actualExit != null && actualExit !== '' ? Number(actualExit) : null,
     notes:           notes || '',
   };
@@ -526,6 +551,20 @@ app.get('/api/options/flow', async (req, res) => {
   }
 });
 
+// GET /api/gamma?symbol=MNQ&futuresPrice=21000
+// Returns gamma flip level, call/put walls, max pain, 0DTE flag — scaled to futures price space.
+app.get('/api/gamma', async (req, res) => {
+  try {
+    const { symbol = 'MNQ', futuresPrice } = req.query;
+    const fp = futuresPrice ? parseFloat(futuresPrice) : null;
+    const data = await getGammaData(symbol.toUpperCase(), fp);
+    res.json({ symbol, data });
+  } catch (err) {
+    console.error('[api] /gamma error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/correlation — 4×4 rolling correlation matrix for all symbols
 app.get('/api/correlation', (req, res) => {
   try {
@@ -669,6 +708,14 @@ function _loadPF() {
 function _savePF(data) {
   fs.writeFileSync(PF_PATH, JSON.stringify(data, null, 2));
 }
+// Recompute currentValue = accountSize + sum(daily P&L) - sum(linked payout gross withdrawals)
+// grossAmount = full amount withdrawn from account (firm takes a cut); falls back to amount if not set
+function _recomputeCV(acc, allPayouts) {
+  const pnlSum    = (acc.dailyProgress || []).reduce((s, d) => s + (+d.pnl || 0), 0);
+  const payoutSum = (allPayouts || []).filter(p => p.accountId === acc.id)
+    .reduce((s, p) => s + (+p.grossAmount || +p.amount || 0), 0);
+  acc.currentValue = (+acc.accountSize || 0) + pnlSum - payoutSum;
+}
 
 // GET /api/propfirms — full dataset
 app.get('/api/propfirms', (_req, res) => {
@@ -678,16 +725,62 @@ app.get('/api/propfirms', (_req, res) => {
 // POST /api/propfirms/account — add or update a prop account entry
 app.post('/api/propfirms/account', (req, res) => {
   const data = _loadPF();
-  const { id, firm, date, accountSize, cost, status, blowReason, notes } = req.body;
+  const { id, firm, date, accountSize, cost, status, subStatus, blowReason, notes, maxDrawdown, currentValue, ddType, phase, fundedFailed } = req.body;
   if (id) {
-    // update
     const idx = data.accounts.findIndex(a => a.id === id);
     if (idx === -1) return res.status(404).json({ error: 'Not found' });
-    data.accounts[idx] = { ...data.accounts[idx], firm, date, accountSize, cost, status, blowReason, notes };
+    const existing = data.accounts[idx];
+    const updated = { ...existing, firm, date, accountSize: +accountSize || 0, cost: +cost || 0,
+      status, subStatus, blowReason, notes, maxDrawdown: +maxDrawdown || 0,
+      ddType: ddType || 'static', phase: phase || 'challenge', fundedFailed: !!fundedFailed };
+    // If daily entries exist, auto-compute currentValue (P&L minus linked payouts)
+    if ((existing.dailyProgress || []).length > 0) {
+      _recomputeCV(updated, data.payouts);
+    } else {
+      updated.currentValue = +currentValue || 0;
+    }
+    data.accounts[idx] = updated;
   } else {
     data.accounts.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2,6),
-      firm, date, accountSize: +accountSize || 0, cost: +cost || 0, status, blowReason, notes, createdAt: new Date().toISOString() });
+      firm, date, accountSize: +accountSize || 0, cost: +cost || 0, status, subStatus, blowReason, notes,
+      maxDrawdown: +maxDrawdown || 0, currentValue: +currentValue || 0, ddType: ddType || 'static',
+      phase: phase || 'challenge', fundedFailed: !!fundedFailed,
+      dailyProgress: [], createdAt: new Date().toISOString() });
   }
+  _savePF(data);
+  res.json({ ok: true });
+});
+
+// POST /api/propfirms/account/:id/day — add or update a daily progress entry
+app.post('/api/propfirms/account/:id/day', (req, res) => {
+  const data = _loadPF();
+  const acc = data.accounts.find(a => a.id === req.params.id);
+  if (!acc) return res.status(404).json({ error: 'Not found' });
+  if (!acc.dailyProgress) acc.dailyProgress = [];
+  const { dayId, date, pnl, maxValue, notes } = req.body;
+  if (dayId) {
+    const idx = acc.dailyProgress.findIndex(d => d.id === dayId);
+    if (idx !== -1) acc.dailyProgress[idx] = { ...acc.dailyProgress[idx], date, pnl: +pnl || 0,
+      maxValue: maxValue ? +maxValue : undefined, notes };
+  } else {
+    const entry = { id: Date.now().toString(36) + Math.random().toString(36).slice(2,6),
+      date, pnl: +pnl || 0, notes };
+    if (maxValue) entry.maxValue = +maxValue;
+    acc.dailyProgress.push(entry);
+  }
+  // Auto-recompute currentValue: P&L minus linked payouts
+  _recomputeCV(acc, data.payouts);
+  _savePF(data);
+  res.json({ ok: true });
+});
+
+// DELETE /api/propfirms/account/:id/day/:dayId
+app.delete('/api/propfirms/account/:id/day/:dayId', (req, res) => {
+  const data = _loadPF();
+  const acc = data.accounts.find(a => a.id === req.params.id);
+  if (!acc) return res.status(404).json({ error: 'Not found' });
+  acc.dailyProgress = (acc.dailyProgress || []).filter(d => d.id !== req.params.dayId);
+  _recomputeCV(acc, data.payouts);
   _savePF(data);
   res.json({ ok: true });
 });
@@ -724,17 +817,29 @@ app.delete('/api/propfirms/expense/:id', (req, res) => {
   res.json({ ok: true });
 });
 
-// POST /api/propfirms/payout — add or update a payout
+// POST /api/propfirms/payout — add or update a payout (accountId optional — links to funded account)
 app.post('/api/propfirms/payout', (req, res) => {
   const data = _loadPF();
-  const { id, firm, date, amount, notes } = req.body;
+  const { id, firm, date, amount, grossAmount, notes, accountId } = req.body;
+  let affectedAccountId = accountId;
   if (id) {
     const idx = data.payouts.findIndex(p => p.id === id);
     if (idx === -1) return res.status(404).json({ error: 'Not found' });
-    data.payouts[idx] = { ...data.payouts[idx], firm, date, amount: +amount || 0, notes };
+    affectedAccountId = affectedAccountId || data.payouts[idx].accountId;
+    data.payouts[idx] = { ...data.payouts[idx], firm, date, amount: +amount || 0, notes,
+      ...(grossAmount ? { grossAmount: +grossAmount } : { grossAmount: undefined }),
+      ...(accountId ? { accountId } : {}) };
   } else {
-    data.payouts.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2,6),
-      firm, date, amount: +amount || 0, notes, createdAt: new Date().toISOString() });
+    const entry = { id: Date.now().toString(36) + Math.random().toString(36).slice(2,6),
+      firm, date, amount: +amount || 0, notes, createdAt: new Date().toISOString() };
+    if (grossAmount) entry.grossAmount = +grossAmount;
+    if (accountId) entry.accountId = accountId;
+    data.payouts.push(entry);
+  }
+  // If linked to an account, recompute its currentValue
+  if (affectedAccountId) {
+    const acc = data.accounts.find(a => a.id === affectedAccountId);
+    if (acc) _recomputeCV(acc, data.payouts);
   }
   _savePF(data);
   res.json({ ok: true });
@@ -743,7 +848,14 @@ app.post('/api/propfirms/payout', (req, res) => {
 // DELETE /api/propfirms/payout/:id
 app.delete('/api/propfirms/payout/:id', (req, res) => {
   const data = _loadPF();
+  const payout = data.payouts.find(p => p.id === req.params.id);
+  const linkedAccountId = payout?.accountId;
   data.payouts = data.payouts.filter(p => p.id !== req.params.id);
+  // Recompute linked account's currentValue after payout removal
+  if (linkedAccountId) {
+    const acc = data.accounts.find(a => a.id === linkedAccountId);
+    if (acc) _recomputeCV(acc, data.payouts);
+  }
   _savePF(data);
   res.json({ ok: true });
 });
@@ -756,7 +868,15 @@ const RA_PATH = path.join(__dirname, '..', 'data', 'logs', 'realaccount.json');
 
 function _loadRA() {
   try {
-    if (fs.existsSync(RA_PATH)) return JSON.parse(fs.readFileSync(RA_PATH, 'utf8'));
+    if (fs.existsSync(RA_PATH)) {
+      const data = JSON.parse(fs.readFileSync(RA_PATH, 'utf8'));
+      // Migrate: assign default broker to any record that predates multi-broker support
+      let dirty = false;
+      (data.trades   || []).forEach(t => { if (!t.broker) { t.broker = 'Optimus Futures'; dirty = true; } });
+      (data.deposits || []).forEach(d => { if (!d.broker) { d.broker = 'Optimus Futures'; dirty = true; } });
+      if (dirty) fs.writeFileSync(RA_PATH, JSON.stringify(data, null, 2));
+      return data;
+    }
   } catch (_) {}
   return { trades: [], deposits: [] };
 }
@@ -772,7 +892,7 @@ app.get('/api/realaccount', (_req, res) => {
 // POST /api/realaccount/trade — add or update a trade
 app.post('/api/realaccount/trade', (req, res) => {
   const data = _loadRA();
-  const { id, date, symbol, buy, sell, pnl, fees, coq, cashOut, notes } = req.body;
+  const { id, broker, date, symbol, buy, sell, pnl, fees, coq, cashOut, notes } = req.body;
   const feeObj = {
     commission:  +fees?.commission  || 0,
     clearingFee: +fees?.clearingFee || 0,
@@ -792,13 +912,13 @@ app.post('/api/realaccount/trade', (req, res) => {
   if (id) {
     const idx = data.trades.findIndex(t => t.id === id);
     if (idx === -1) return res.status(404).json({ error: 'Not found' });
-    data.trades[idx] = { ...data.trades[idx], date, symbol,
+    data.trades[idx] = { ...data.trades[idx], broker: broker || 'Optimus Futures', date, symbol,
       buy: +buy || 0, sell: +sell || 0, pnl: +pnl || 0,
       fees: feeObj, coq: coqObj, cashOut: +cashOut || 0, notes };
   } else {
     data.trades.push({
       id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-      date, symbol,
+      broker: broker || 'Optimus Futures', date, symbol,
       buy: +buy || 0, sell: +sell || 0, pnl: +pnl || 0,
       fees: feeObj, coq: coqObj, cashOut: +cashOut || 0, notes,
       createdAt: new Date().toISOString(),
@@ -819,15 +939,15 @@ app.delete('/api/realaccount/trade/:id', (req, res) => {
 // POST /api/realaccount/deposit — add or update a deposit/withdrawal record
 app.post('/api/realaccount/deposit', (req, res) => {
   const data = _loadRA();
-  const { id, date, amount, type, notes } = req.body;
+  const { id, broker, date, amount, type, notes } = req.body;
   if (id) {
     const idx = data.deposits.findIndex(d => d.id === id);
     if (idx === -1) return res.status(404).json({ error: 'Not found' });
-    data.deposits[idx] = { ...data.deposits[idx], date, amount: +amount || 0, type, notes };
+    data.deposits[idx] = { ...data.deposits[idx], broker: broker || 'Optimus Futures', date, amount: +amount || 0, type, notes };
   } else {
     data.deposits.push({
       id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-      date, amount: +amount || 0, type: type || 'deposit', notes,
+      broker: broker || 'Optimus Futures', date, amount: +amount || 0, type: type || 'deposit', notes,
       createdAt: new Date().toISOString(),
     });
   }
@@ -845,6 +965,16 @@ app.delete('/api/realaccount/deposit/:id', (req, res) => {
 
 // ---------------------------------------------------------------------------
 // HTTP + WebSocket server
+// GET /api/realaccount/daily-pnl — today's net P&L from realaccount.json
+app.get('/api/realaccount/daily-pnl', (_req, res) => {
+  const data = _loadRA();
+  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const todayTrades = (data.trades || []).filter(t => t.date === today);
+  const netPnl = todayTrades.reduce((sum, t) => sum + (+t.pnl || 0), 0);
+  const totalFees = todayTrades.reduce((sum, t) => sum + (+t.fees?.total || 0), 0);
+  res.json({ date: today, trades: todayTrades.length, grossPnl: netPnl, fees: totalFees, netPnl: netPnl - totalFees });
+});
+
 // ---------------------------------------------------------------------------
 
 const server = http.createServer(app);
@@ -906,6 +1036,17 @@ function _applyTradeFilter(alerts) {
 }
 
 // ---------------------------------------------------------------------------
+// 0DTE helper — QQQ options expire Mon/Wed/Fri; SPY every trading day.
+// On these days, gamma pinning distorts OR breakouts and zone rejections
+// for equity index futures (MNQ/MES). Apply -10 confidence penalty.
+// ---------------------------------------------------------------------------
+
+function _isZeroDTE() {
+  const dow = new Date().getDay(); // 0=Sun … 6=Sat
+  return [1, 3, 5].includes(dow); // Mon, Wed, Fri — QQQ 0DTE days
+}
+
+// ---------------------------------------------------------------------------
 // Scan engine — detects setups across all symbol / timeframe combinations.
 // In live mode this would be called on every candle close event.
 // In seed mode it runs once at startup and is re-runnable via GET /api/scan.
@@ -913,8 +1054,9 @@ function _applyTradeFilter(alerts) {
 
 const SCAN_SYMBOLS    = ['MNQ', 'MGC', 'MES', 'MCL', 'BTC', 'ETH', 'XRP'];
 // 1m/2m/3m removed: with 15-min delayed data they are stale by the time they display.
-// 5m/15m/30m/1h/2h/4h give actionable signals even accounting for the data lag.
-const SCAN_TIMEFRAMES = ['5m', '15m', '30m', '1h', '2h', '4h'];
+// 5m removed: ~3 candles stale with delayed seed data — not actionable.
+// 15m/30m/1h/2h/4h give actionable signals even accounting for the data lag.
+const SCAN_TIMEFRAMES = ['15m', '30m', '1h', '2h', '4h'];
 
 /**
  * Run a full scan. Returns the count of NEW alerts added to the cache.
@@ -968,6 +1110,15 @@ async function runScan() {
             setup.scoreBreakdown = { ...setup.scoreBreakdown, tfStack: stack.bonus };
             setup.rationale     += ` · ${stack.tfs.join('/')} stack`;
           }
+          // 0DTE gate: Mon/Wed/Fri gamma pinning distorts OR breakouts and zone
+          // rejections for equity index futures — reduce confidence by 10 pts.
+          if (_isZeroDTE() && ['MNQ', 'MES'].includes(symbol) &&
+              (setup.type === 'or_breakout' || setup.type === 'zone_rejection')) {
+            setup.confidence = Math.max(0, setup.confidence - 10);
+            setup.rationale += ' · 0DTE';
+            setup.scoreBreakdown = { ...setup.scoreBreakdown, zeroDTE: -10 };
+          }
+
           candidates.push({ tf, setup, regime });
         }
       } catch (err) {
@@ -991,6 +1142,27 @@ async function runScan() {
 
     // ── Cache and broadcast ───────────────────────────────────────────────────
     for (const { tf, setup, regime } of candidates) {
+      // Dedup: skip if an open alert for the same symbol+tf+type+direction already exists.
+      // This prevents the same ongoing condition (e.g. OR breakout) from generating a new
+      // alert on every scan cycle.
+      const alreadyOpen = alertCache.some(a =>
+        a.symbol === symbol &&
+        a.timeframe === tf &&
+        a.setup.type === setup.type &&
+        a.setup.direction === setup.direction &&
+        (a.setup.outcome === 'open' || a.setup.outcome == null)
+      );
+      if (alreadyOpen) continue;
+
+      // Calculate suggested contracts based on risk limit
+      const POINT_VALUE = { MNQ: 2, MGC: 10, MES: 5, MCL: 100, BTC: 1, ETH: 0.01, XRP: 0.0001 };
+      const slDistance  = Math.abs((setup.entry ?? setup.price) - setup.sl);
+      const pointVal    = POINT_VALUE[symbol] || 1;
+      if (slDistance > 0 && pointVal > 0) {
+        const maxRisk = settings.risk.maxRiskDollars || 200;
+        setup.suggestedContracts = Math.max(1, Math.floor(maxRisk / (slDistance * pointVal)));
+      }
+
       const alert = {
         symbol,
         timeframe: tf,

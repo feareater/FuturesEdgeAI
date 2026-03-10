@@ -13,19 +13,33 @@
   <div id="app">
 
     <header id="topbar">
-      <div id="brand">FuturesEdge AI</div>
-      <nav class="page-nav">
+      <div class="tb-brand-block">
+        <span id="brand">FuturesEdge AI</span>
+      </div>
+      <nav class="tb-nav-links">
         <a href="/">Dashboard</a>
         <a href="/scanner.html">Scanner</a>
+        <a href="/commentary.html">AI</a>
         <a href="/performance.html">Stats</a>
         <a href="/backtest.html">Replay</a>
         <a href="/propfirms.html">Prop Firms</a>
         <a href="/tradingaccount.html" class="active">Real Account</a>
         <a href="/docs.html">Guide</a>
+        <a href="/api/export" download>Export</a>
       </nav>
     </header>
 
     <main id="ra-main">
+
+      <!-- ── Broker selector ───────────────────────────────────────────── -->
+      <div class="ra-broker-bar">
+        <span class="ra-broker-label">Broker</span>
+        <div class="ra-broker-tabs" id="broker-tabs">
+          <button class="ra-broker-tab active" data-broker="ALL">All Brokers</button>
+          <button class="ra-broker-tab" data-broker="Optimus Futures">Optimus Futures</button>
+          <button class="ra-broker-tab" data-broker="Tradovate">Tradovate</button>
+        </div>
+      </div>
 
       <!-- ── Summary cards ─────────────────────────────────────────────── -->
       <div class="ra-summary">
@@ -83,6 +97,9 @@
               <option value="MGC">MGC</option>
               <option value="MES">MES</option>
               <option value="MCL">MCL</option>
+              <option value="BTC">BTC</option>
+              <option value="ETH">ETH</option>
+              <option value="XRP">XRP</option>
             </select>
           </div>
           <div class="ra-filter-group">
@@ -103,6 +120,13 @@
             <input type="hidden" id="tf-id" />
             <div class="ra-form-grid">
               <div class="ra-field">
+                <label>Broker</label>
+                <select id="tf-broker">
+                  <option value="Optimus Futures">Optimus Futures</option>
+                  <option value="Tradovate">Tradovate</option>
+                </select>
+              </div>
+              <div class="ra-field">
                 <label>Date</label>
                 <input id="tf-date" type="date" />
               </div>
@@ -113,6 +137,9 @@
                   <option value="MGC">MGC</option>
                   <option value="MES">MES</option>
                   <option value="MCL">MCL</option>
+                  <option value="BTC">BTC</option>
+                  <option value="ETH">ETH</option>
+                  <option value="XRP">XRP</option>
                 </select>
               </div>
               <div class="ra-field">
@@ -183,6 +210,7 @@
             <thead>
               <tr>
                 <th>Date</th>
+                <th>Broker</th>
                 <th>Symbol</th>
                 <th>Qty</th>
                 <th>P&amp;L</th>
@@ -195,7 +223,7 @@
               </tr>
             </thead>
             <tbody id="trades-tbody">
-              <tr><td colspan="10" class="ra-empty">No trades yet — add your first above.</td></tr>
+              <tr><td colspan="11" class="ra-empty">No trades yet — add your first above.</td></tr>
             </tbody>
           </table>
         </div>
@@ -212,6 +240,13 @@
             <div class="ra-form-title" id="deposit-form-title">Add Deposit / Withdrawal</div>
             <input type="hidden" id="df-id" />
             <div class="ra-form-grid">
+              <div class="ra-field">
+                <label>Broker</label>
+                <select id="df-broker">
+                  <option value="Optimus Futures">Optimus Futures</option>
+                  <option value="Tradovate">Tradovate</option>
+                </select>
+              </div>
               <div class="ra-field">
                 <label>Date</label>
                 <input id="df-date" type="date" />
@@ -244,6 +279,7 @@
             <thead>
               <tr>
                 <th>Date</th>
+                <th>Broker</th>
                 <th>Type</th>
                 <th>Amount</th>
                 <th>Notes</th>
@@ -251,7 +287,7 @@
               </tr>
             </thead>
             <tbody id="deposits-tbody">
-              <tr><td colspan="5" class="ra-empty">No deposits recorded yet.</td></tr>
+              <tr><td colspan="6" class="ra-empty">No deposits recorded yet.</td></tr>
             </tbody>
           </table>
         </div>
@@ -260,54 +296,44 @@
       <!-- ── Fee Breakdown tab ───────────────────────────────────────── -->
       <section class="ra-tab-content" id="tab-fees">
         <div class="ra-analysis-grid">
-
           <div class="ra-analysis-card">
             <div class="ra-analysis-title">Total Fees by Type</div>
             <div id="fees-by-type" class="ra-analysis-body"></div>
           </div>
-
           <div class="ra-analysis-card">
             <div class="ra-analysis-title">Fees by Symbol</div>
             <div id="fees-by-symbol" class="ra-analysis-body"></div>
           </div>
-
           <div class="ra-analysis-card">
             <div class="ra-analysis-title">Per-Contract Avg (All Trades)</div>
             <div id="fees-per-contract" class="ra-analysis-body"></div>
           </div>
-
           <div class="ra-analysis-card">
             <div class="ra-analysis-title">Fee Impact on P&amp;L</div>
             <div id="fees-impact" class="ra-analysis-body"></div>
           </div>
-
         </div>
       </section>
 
       <!-- ── Analysis tab ────────────────────────────────────────────── -->
       <section class="ra-tab-content" id="tab-analysis">
         <div class="ra-analysis-grid">
-
           <div class="ra-analysis-card">
             <div class="ra-analysis-title">P&amp;L by Symbol</div>
             <div id="analysis-by-symbol" class="ra-analysis-body"></div>
           </div>
-
           <div class="ra-analysis-card">
             <div class="ra-analysis-title">Win Rate by Symbol</div>
             <div id="analysis-winrate" class="ra-analysis-body"></div>
           </div>
-
           <div class="ra-analysis-card">
             <div class="ra-analysis-title">Monthly P&amp;L</div>
             <div id="analysis-monthly" class="ra-analysis-body"></div>
           </div>
-
           <div class="ra-analysis-card">
             <div class="ra-analysis-title">Best &amp; Worst Trades</div>
             <div id="analysis-extremes" class="ra-analysis-body"></div>
           </div>
-
         </div>
       </section>
 

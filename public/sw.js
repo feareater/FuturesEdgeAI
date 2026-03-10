@@ -5,7 +5,7 @@
 //   • Activate → delete old caches, claim clients
 //   • Fetch    → cache-first for shell assets; network-only for /api/ and /ws
 
-const CACHE_NAME = 'futuresedge-v12';
+const CACHE_NAME = 'futuresedge-v25';
 
 // All assets required to render the UI — these are cached at install time.
 // API calls are intentionally excluded: trading data must always be fresh.
@@ -66,7 +66,7 @@ self.addEventListener('activate', event => {
   );
 });
 
-// ── Fetch: network-only for API + WS; cache-first for everything else ─────────
+// ── Fetch: network-only for API + WS; network-first for shell assets ──────────
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
 
@@ -75,28 +75,25 @@ self.addEventListener('fetch', event => {
     return; // pass through to network
   }
 
+  // Network-first: try the network, fall back to cache if offline.
+  // This ensures HTML/JS/CSS changes are picked up without a hard refresh.
   event.respondWith(
-    caches.match(event.request).then(cached => {
-      if (cached) return cached;
-
-      // Not in cache — fetch from network and cache the response for next time.
-      return fetch(event.request)
-        .then(response => {
-          // Only cache valid same-origin or CORS-ok responses.
-          if (!response || response.status !== 200 ||
-              (response.type !== 'basic' && response.type !== 'cors')) {
-            return response;
-          }
+    fetch(event.request)
+      .then(response => {
+        // Cache the fresh response for offline fallback.
+        if (response && response.status === 200 &&
+            (response.type === 'basic' || response.type === 'cors')) {
           const toCache = response.clone();
           caches.open(CACHE_NAME).then(cache => cache.put(event.request, toCache));
-          return response;
-        })
-        .catch(() => {
-          // Network failed — for page navigations return the cached shell.
-          if (event.request.mode === 'navigate') {
-            return caches.match('/index.html');
-          }
+        }
+        return response;
+      })
+      .catch(() => {
+        // Network failed — serve from cache (offline support).
+        return caches.match(event.request).then(cached => {
+          if (cached) return cached;
+          if (event.request.mode === 'navigate') return caches.match('/index.html');
         });
-    })
+      })
   );
 });

@@ -32,16 +32,34 @@
 
   // Raw alerts from the last fetch (one per confidence threshold query)
   let currentAlerts = [];
+  // All-symbol alerts for the Predictions panel (no symbol filter)
+  let allAlerts = [];
 
   // ── Trade log (alertKey → trade object) ───────────────────────────────────
   const takenTrades = new Map();
   // Bridge for chart.js (which loads first) to check taken state
   window._isTaken = (key) => takenTrades.has(key);
 
+  // ── Price formatter — XRP uses 4 decimal places ───────────────────────────
+  function _fmtP(symbol, n) {
+    if (n == null) return '—';
+    return symbol === 'XRP' ? n.toFixed(4) : n.toFixed(2);
+  }
+
   // ── Taken+open alerts across all symbols ──────────────────────────────────
   // Persisted to localStorage so the section survives symbol changes and reloads.
   const takenOpenAlertData = new Map(); // alertKey → full alert object
   const _TAKEN_OPEN_LS = 'futuresedge_taken_open';
+
+  // ── Resolved monitored trades (TP/SL hit) — shown in Resolved section ─────
+  const resolvedAlertData = new Map(); // alertKey → full alert object with outcome set
+  const _RESOLVED_LS = 'futuresedge_resolved';
+
+  function _saveResolved() {
+    try {
+      localStorage.setItem(_RESOLVED_LS, JSON.stringify([...resolvedAlertData.values()]));
+    } catch {}
+  }
 
   function _saveTakenOpen() {
     try {
@@ -241,21 +259,43 @@
     }
   }
 
-    async function _fetchOptionsData(symbol) {
+    // Last gamma data — shared between options widget and predictions panel
+  let _lastGammaData = null;
+
+  async function _fetchOptionsData(symbol) {
+    // Get current futures price for strike scaling
+    let futuresPrice = null;
+    try {
+      const cr = await fetch(`/api/candles?symbol=${symbol}&timeframe=15m`);
+      if (cr.ok) {
+        const { candles } = await cr.json();
+        futuresPrice = candles?.[candles.length - 1]?.close ?? null;
+      }
+    } catch (_) {}
+
+    const fp = futuresPrice ? `&futuresPrice=${futuresPrice}` : '';
+
     // Try Polygon.io options flow first (better data), fall back to Yahoo Finance
     let usedPolygon = false;
     try {
-      const candles = null; // we'll get lastPrice from a parallel fetch below
-      const [yahoRes, polyRes] = await Promise.all([
+      const [yahoRes, polyRes, gammaRes] = await Promise.all([
         fetch(`/api/options?symbol=${symbol}`),
-        fetch(`/api/options/flow?symbol=${symbol}`),
+        fetch(`/api/options/flow?symbol=${symbol}${fp}`),
+        fetch(`/api/gamma?symbol=${symbol}${fp}`),
       ]);
+
+      // Gamma levels (flip, call wall, put wall) — send to chart regardless of other data
+      if (gammaRes.ok) {
+        const { data: gd } = await gammaRes.json();
+        _lastGammaData = gd;
+        window.ChartAPI?.setGammaLevels?.(gd);
+        _updateGammaWidget(gd);
+      }
 
       // Polygon options (ETF proxy with scaled strikes)
       if (polyRes.ok) {
         const { data: polyData } = await polyRes.json();
         if (polyData) {
-          // Build options levels from Polygon (prefer scaled futures strikes)
           const walls = (polyData.scaled?.oiWalls ?? polyData.oiWalls ?? [])
             .map(w => w.futuresStrike ?? w.strike)
             .filter(Boolean)
@@ -275,6 +315,47 @@
         _updateOptionsWidget(options);
       }
     } catch (_) {}
+  }
+
+  function _updateGammaWidget(data) {
+    const el = document.getElementById('gamma-widget');
+    if (!el) return;
+    if (!data) { el.style.display = 'none'; return; }
+    el.style.display = '';
+
+    const s = data.scaled || {};
+    const flip = s.flipLevel ?? data.flipLevel;
+
+    // Determine regime relative to current price
+    // (We approximate current price from options widget or leave as context-only)
+    const zdteTag = data.isZeroDTE ? ' <span class="gamma-0dte">0DTE</span>' : '';
+    const flipStr = flip != null ? flip.toLocaleString('en-US', { maximumFractionDigits: 2 }) : '—';
+
+    let regimeHtml = '';
+    if (flip != null) {
+      // We'll update this after we know current price — for now show the level
+      regimeHtml = `<span class="gamma-flip-label">γ Flip: <strong>${flipStr}</strong></span>`;
+    }
+    if (!data.hasGreeks) {
+      regimeHtml += ' <span style="color:var(--text-dim);font-size:9px">(no greeks)</span>';
+    }
+
+    el.innerHTML = regimeHtml + zdteTag;
+  }
+
+  // Called by chart price update or after candles load to show above/below flip regime
+  function _updateGammaRegime(currentPrice) {
+    const el = document.getElementById('gamma-widget');
+    if (!el || !_lastGammaData) return;
+    const s = _lastGammaData.scaled || {};
+    const flip = s.flipLevel ?? _lastGammaData.flipLevel;
+    if (flip == null || currentPrice == null) return;
+    const above = currentPrice >= flip;
+    const zdteTag = _lastGammaData.isZeroDTE ? ' <span class="gamma-0dte">0DTE</span>' : '';
+    const flipStr = flip.toLocaleString('en-US', { maximumFractionDigits: 2 });
+    const cls = above ? 'gamma-above' : 'gamma-below';
+    const label = above ? '▲ Above γ Flip — low vol' : '▼ Below γ Flip — high vol';
+    el.innerHTML = `<span class="${cls}">${label}</span> <span class="gamma-flip-label">(${flipStr})${zdteTag}</span>`;
   }
 
   function _updateOptionsWidget(data) {
@@ -355,67 +436,156 @@
         ${factorsHtml ? `<div class="pred-factors">${factorsHtml}</div>` : ''}
         <div class="pred-candle-time">Candle: ${candleTime}</div>
       `;
+
+      // ── Take This Bias button ───────────────────────────────────────────
+      if (d.direction !== 'neutral' && d.predictedTP != null && d.predictedSL != null) {
+        const biasTime = d.candleTime || Math.floor(Date.now() / 1000);
+        const aiKey    = `${activeSymbol}:${activeTf}:bias:${biasTime}`;
+
+        const takeWrap = document.createElement('div');
+        takeWrap.className = 'bias-take-wrap';
+        takeWrap.innerHTML = `
+          <div class="bias-btn-row">
+            <button class="bias-monitor-btn">Monitor</button>
+            <button class="bias-take-btn">Take</button>
+          </div>
+          <div class="bias-trade-form" style="display:none"></div>`;
+        widget.appendChild(takeWrap);
+
+        const biasMonitorBtn = takeWrap.querySelector('.bias-monitor-btn');
+        const biasTakeBtn    = takeWrap.querySelector('.bias-take-btn');
+        const biasFormEl     = takeWrap.querySelector('.bias-trade-form');
+        const fv = n => n != null ? n.toFixed(2) : '';
+
+        // Monitor: immediate, no form
+        biasMonitorBtn.addEventListener('click', async e => {
+          e.stopPropagation();
+          const factorSummary = (d.factors || []).map(f => f.label).join(', ');
+          const syntheticAlert = {
+            symbol: activeSymbol, timeframe: activeTf,
+            ts: new Date().toISOString(),
+            setup: {
+              type: 'bias', direction: d.direction, time: biasTime,
+              price: d.price, entry: d.price, sl: d.predictedSL, tp: d.predictedTP,
+              riskPoints: Math.abs(d.price - (d.predictedSL || d.price)),
+              confidence: d.confidence,
+              rationale: `${label} bias · ${conf}% · ${factorSummary}`,
+              outcome: 'open',
+            },
+            mode: 'monitor', takenAt: new Date().toISOString(),
+          };
+          try {
+            const res = await fetch('/api/trades', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                alertKey: aiKey, symbol: activeSymbol, timeframe: activeTf, setupType: 'bias', mode: 'monitor',
+                actualEntry: d.price, actualSL: d.predictedSL, actualTP: d.predictedTP,
+              }),
+            });
+            if (!res.ok) throw new Error(res.status);
+            const { trade } = await res.json();
+            takenTrades.set(aiKey, trade);
+            takenOpenAlertData.set(aiKey, syntheticAlert);
+            _saveTakenOpen();
+            _renderFeed();
+            biasMonitorBtn.textContent = '● Monitoring';
+            biasMonitorBtn.disabled    = true;
+            biasTakeBtn.disabled       = true;
+          } catch (err) {
+            console.error('[bias-monitor] Save failed:', err.message);
+          }
+        });
+
+        biasTakeBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          const isOpen = biasFormEl.style.display !== 'none';
+          biasFormEl.style.display = isOpen ? 'none' : 'block';
+          if (!isOpen) {
+            biasFormEl.innerHTML = `
+              <div class="trade-form-inner">
+                <div class="tf-row">
+                  <label>Entry</label>
+                  <input class="tf-entry" type="number" step="0.25" value="${fv(d.price)}">
+                  <label>SL</label>
+                  <input class="tf-sl" type="number" step="0.25" value="${fv(d.predictedSL)}">
+                  <label>TP</label>
+                  <input class="tf-tp" type="number" step="0.25" value="${fv(d.predictedTP)}">
+                </div>
+                <div class="tf-row">
+                  <label>Notes</label>
+                  <input class="tf-notes" type="text" placeholder="Optional" style="flex:1">
+                </div>
+                <div class="tf-btns">
+                  <button class="tf-save">Confirm Take</button>
+                  <button class="tf-cancel">Cancel</button>
+                </div>
+              </div>`;
+            biasFormEl.querySelector('.tf-cancel').addEventListener('click', ev => {
+              ev.stopPropagation();
+              biasFormEl.style.display = 'none';
+            });
+            biasFormEl.querySelector('.tf-save').addEventListener('click', async ev => {
+              ev.stopPropagation();
+              const factorSummary = (d.factors || []).map(f => f.label).join(', ');
+              const riskPts = Math.abs(d.price - d.predictedSL);
+              const syntheticAlert = {
+                symbol:    activeSymbol,
+                timeframe: activeTf,
+                ts:        new Date().toISOString(),
+                setup: {
+                  type:        'bias',
+                  direction:   d.direction,
+                  time:        biasTime,
+                  price:       d.price,
+                  entry:       parseFloat(biasFormEl.querySelector('.tf-entry').value) || d.price,
+                  sl:          parseFloat(biasFormEl.querySelector('.tf-sl').value)    || d.predictedSL,
+                  tp:          parseFloat(biasFormEl.querySelector('.tf-tp').value)    || d.predictedTP,
+                  riskPoints:  riskPts,
+                  confidence:  d.confidence,
+                  rationale:   `${label} bias · ${conf}% · ${factorSummary}`,
+                  outcome:     'open',
+                },
+              };
+              const actualEntry = parseFloat(biasFormEl.querySelector('.tf-entry').value) || d.price;
+              const actualSL    = parseFloat(biasFormEl.querySelector('.tf-sl').value)    || d.predictedSL;
+              const actualTP    = parseFloat(biasFormEl.querySelector('.tf-tp').value)    || d.predictedTP;
+              const body = {
+                alertKey: aiKey, symbol: activeSymbol, timeframe: activeTf,
+                setupType: 'bias', mode: 'take',
+                actualEntry, actualSL, actualTP,
+                notes: biasFormEl.querySelector('.tf-notes').value,
+              };
+              try {
+                const res = await fetch('/api/trades', {
+                  method:  'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body:    JSON.stringify(body),
+                });
+                if (!res.ok) throw new Error(res.status);
+                const { trade } = await res.json();
+                takenTrades.set(aiKey, trade);
+                const takeData = { ...syntheticAlert, mode: 'take', takenAt: new Date().toISOString(), actualEntry, actualSL, actualTP };
+                takenOpenAlertData.set(aiKey, takeData);
+                _saveTakenOpen();
+                _renderFeed();
+                _updateStats();
+                biasFormEl.style.display = 'none';
+                biasTakeBtn.textContent  = 'Taken ✓';
+                biasTakeBtn.disabled     = true;
+                biasMonitorBtn.disabled  = true;
+              } catch (err) {
+                console.error('[bias-take] Save failed:', err.message);
+              }
+            });
+          }
+        });
+      }
     } catch (err) {
       widget.innerHTML = '<div class="pred-loading">Error loading prediction</div>';
       console.warn('[predict] fetch failed:', err.message);
     }
   }
 
-  // ── Correlation heatmap ─────────────────────────────────────────────────────
-
-  const CORR_SYMBOLS = ['MNQ', 'MGC', 'MES', 'MCL'];
-
-  async function _updateCorrelationHeatmap() {
-    const grid = document.getElementById('corr-grid');
-    const upd  = document.getElementById('corr-updated');
-    if (!grid) return;
-    try {
-      const res = await fetch('/api/correlation');
-      if (!res.ok) return;
-      const { matrix, updatedAt } = await res.json();
-      if (!matrix) return;
-      grid.innerHTML = '';
-
-      // Header row
-      const headers = ['', ...CORR_SYMBOLS];
-      for (const h of headers) {
-        const cell = document.createElement('div');
-        cell.className   = 'corr-cell corr-header';
-        cell.textContent = h;
-        grid.appendChild(cell);
-      }
-      // Data rows
-      for (const rowSym of CORR_SYMBOLS) {
-        const rowLabel = document.createElement('div');
-        rowLabel.className   = 'corr-cell corr-header';
-        rowLabel.textContent = rowSym;
-        grid.appendChild(rowLabel);
-
-        for (const colSym of CORR_SYMBOLS) {
-          const val  = matrix[rowSym]?.[colSym] ?? 0;
-          const cell = document.createElement('div');
-          cell.className   = 'corr-cell';
-          cell.textContent = val.toFixed(2);
-          // Color: green (+1) → gray (0) → red (-1)
-          const r = val < 0 ? Math.round(-val * 180) : 0;
-          const g = val > 0 ? Math.round(val  * 150) : 0;
-          const b = 0;
-          cell.style.background = `rgba(${r},${g},${b},0.6)`;
-          cell.style.color = Math.abs(val) > 0.5 ? '#fff' : 'var(--text-dim)';
-          cell.title = `${rowSym}↔${colSym}: ${val.toFixed(3)}`;
-          grid.appendChild(cell);
-        }
-      }
-      if (upd && updatedAt) {
-        const t = new Date(updatedAt).toLocaleTimeString('en-US', {
-          hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/Denver',
-        });
-        upd.textContent = t;
-      }
-    } catch (err) {
-      console.warn('[corr] Update failed:', err.message);
-    }
-  }
 
   // ── Alert key helper ───────────────────────────────────────────────────────
 
@@ -509,6 +679,12 @@
         const { risk, features } = await res.json();
         cfg = { ...cfg, ...risk, features: features || {} };
         window._soundAlertsEnabled = !!features?.soundAlerts;
+        // Request notification permission if push notifications enabled
+        if (features?.pushNotifications && 'Notification' in window) {
+          if (Notification.permission === 'default') {
+            Notification.requestPermission();
+          }
+        }
       }
     } catch (_) {}
 
@@ -530,6 +706,11 @@
       if (tr.ok) {
         const { trades } = await tr.json();
         trades.forEach(t => takenTrades.set(t.alertKey, t));
+        // If trades were cleared (e.g. manual reset), clear the local caches too
+        if (trades.length === 0) {
+          localStorage.removeItem(_TAKEN_OPEN_LS);
+          localStorage.removeItem(_RESOLVED_LS);
+        }
       }
     } catch (_) {}
 
@@ -539,6 +720,12 @@
       saved.forEach(a => {
         if (a?.setup?.outcome === 'open') takenOpenAlertData.set(_alertKey(a), a);
       });
+    } catch (_) {}
+
+    // Restore resolved monitored trades from localStorage
+    try {
+      const saved = JSON.parse(localStorage.getItem(_RESOLVED_LS) || '[]');
+      saved.forEach(a => { if (a?.setup?.outcome) resolvedAlertData.set(_alertKey(a), a); });
     } catch (_) {}
 
     // Restore any locally saved overrides (client-only: contracts, maxRisk, minConf)
@@ -572,8 +759,19 @@
     setInterval(_updateSessionBadge, 60_000);
     setInterval(_tickDataAge, 1000);  // live countdown
 
-    // Initial correlation heatmap + calendar loads
-    if (cfg.features?.correlationHeatmap) _updateCorrelationHeatmap();
+    // ── Live clock (Mountain Time) ──────────────────────────────────────
+    const _clockEl = document.getElementById('live-clock');
+    function _tickClock() {
+      if (!_clockEl) return;
+      _clockEl.textContent = new Date().toLocaleTimeString('en-US', {
+        hour: 'numeric', minute: '2-digit', second: '2-digit',
+        hour12: true, timeZone: 'America/Denver',
+      }) + ' MT';
+    }
+    _tickClock();
+    setInterval(_tickClock, 1000);
+
+    // Initial calendar load
     if (cfg.features?.economicCalendar)   _updateCalendarBadge();
     if (cfg.features?.relativeStrength && (activeSymbol === 'MNQ' || activeSymbol === 'MES')) {
       _updateRSWidget();
@@ -633,12 +831,14 @@
     clearTimeout(_fetchTimer);
     _fetchTimer = setTimeout(async () => {
       try {
-        const res = await fetch(
-          `/api/alerts?limit=100&minConfidence=${minConf}&symbol=${activeSymbol}`
-        );
-        if (!res.ok) throw new Error(`/api/alerts ${res.status}`);
-        const { alerts } = await res.json();
+        const [symRes, allRes] = await Promise.all([
+          fetch(`/api/alerts?limit=100&minConfidence=${minConf}&symbol=${activeSymbol}`),
+          fetch(`/api/alerts?limit=200&minConfidence=${minConf}`),
+        ]);
+        if (!symRes.ok) throw new Error(`/api/alerts ${symRes.status}`);
+        const { alerts } = await symRes.json();
         currentAlerts = alerts;
+        allAlerts = allRes.ok ? (await allRes.json()).alerts : alerts;
         // Update data-age badge from the most-recent alert's candle time
         if (alerts.length > 0) {
           const newestCandle = Math.max(...alerts.map(a => a.setup.time || 0));
@@ -658,6 +858,7 @@
         }
         if (takenOpenChanged) _saveTakenOpen();
         _renderFeed();
+        _renderPredictions();
         _updateStats();
         _syncChartMarkers();
         console.log(`[alerts] ${alerts.length} alerts  sym=${activeSymbol}  minConf=${minConf}`);
@@ -670,67 +871,592 @@
     }, debounceMs);
   }
 
+  // ── Feed section collapse helpers ────────────────────────────────────────
+  const _FEED_COLL_KEY = 'futuresedge_feed_sections';
+  function _isFeedSectionCollapsed(id) {
+    try { return JSON.parse(localStorage.getItem(_FEED_COLL_KEY) || '{}')[id] === true; } catch { return false; }
+  }
+  function _setFeedSectionCollapsed(id, val) {
+    try {
+      const s = JSON.parse(localStorage.getItem(_FEED_COLL_KEY) || '{}');
+      s[id] = val;
+      localStorage.setItem(_FEED_COLL_KEY, JSON.stringify(s));
+    } catch {}
+  }
+  // Builds a collapsible section header + body and appends both to target (defaults to alertFeed).
+  function _appendFeedSection(label, count, sectionId, hdrExtraClass, cards, target) {
+    target = target || alertFeed;
+    const collapsed = _isFeedSectionCollapsed(sectionId);
+    const hdr = document.createElement('div');
+    hdr.className = 'taken-section-header feed-section-hdr' + (hdrExtraClass ? ` ${hdrExtraClass}` : '');
+    hdr.innerHTML = `<span>${label}</span>` +
+      `<span class="feed-section-hdr-right">` +
+      `<span class="taken-count">${count}</span>` +
+      `<span class="feed-chevron">${collapsed ? '▸' : '▾'}</span>` +
+      `</span>`;
+    target.appendChild(hdr);
+
+    const body = document.createElement('div');
+    body.className = 'feed-section-body';
+    if (collapsed) body.style.display = 'none';
+    for (const card of cards) body.appendChild(card);
+    target.appendChild(body);
+
+    hdr.addEventListener('click', () => {
+      const isNowCollapsed = body.style.display === 'none';
+      body.style.display = isNowCollapsed ? '' : 'none';
+      hdr.querySelector('.feed-chevron').textContent = isNowCollapsed ? '▾' : '▸';
+      _setFeedSectionCollapsed(sectionId, !isNowCollapsed);
+    });
+  }
+
   function _renderFeed() {
     alertFeed.innerHTML = '';
 
-    // ── Active Trades — top, all symbols, taken+open ────────────────────────
     const openTaken = [...takenOpenAlertData.values()];
-    if (openTaken.length > 0) {
-      const sep = document.createElement('div');
-      sep.className = 'taken-section-header';
-      sep.innerHTML = `<span>Active Trades</span><span class="taken-count">${openTaken.length}</span>`;
-      alertFeed.appendChild(sep);
-      for (const a of openTaken) {
-        const card = _buildCard(a);
-        card.classList.add('is-active-taken');
-        alertFeed.appendChild(card);
-      }
-    }
 
-    if (!currentAlerts.length) {
-      if (openTaken.length === 0) {
-        const msg = minConf > 0
-          ? `No ${activeSymbol} setups at ≥${minConf}% confidence.`
-          : `No ${activeSymbol} setups detected yet.`;
-        alertFeed.innerHTML = `<p class="placeholder">${msg}</p>`;
-      }
-      _prevAlertKeys = new Set();
+    if (openTaken.length === 0) {
+      alertFeed.innerHTML = '<p class="placeholder">No active trades.<br>Monitor or Take a prediction to start.</p>';
       _renderManualTrades();
       return;
     }
 
-    const active = currentAlerts.filter(a => !takenTrades.has(_alertKey(a)));
-    // Resolved taken alerts (not open, not already shown in top section)
-    const takenResolved = currentAlerts.filter(a =>
-      takenTrades.has(_alertKey(a)) && !takenOpenAlertData.has(_alertKey(a))
-    );
+    const monCards  = openTaken.filter(a => a.mode === 'monitor').map(a => _buildMonitoringCard(a));
+    const tkCards   = openTaken.filter(a => a.mode !== 'monitor').map(a => _buildTakenCard(a));
+    const resCards  = [...resolvedAlertData.values()].map(a => _buildResolvedCard(a));
 
-    // ── Active + suppressed alerts ──────────────────────────────────────────
-    for (const a of active) {
-      const card = _buildCard(a);
-      // Highlight cards that weren't present before the last refresh
-      if (_prevAlertKeys.size > 0 && !_prevAlertKeys.has(_alertKey(a))) {
+    if (monCards.length > 0) {
+      _appendFeedSection('Monitoring', monCards.length, 'monitor-trades', 'feed-hdr-monitor', monCards);
+    }
+    if (tkCards.length > 0) {
+      _appendFeedSection('Taken', tkCards.length, 'active-trades', 'feed-hdr-active', tkCards);
+    }
+    if (resCards.length > 0) {
+      _appendFeedSection('Resolved', resCards.length, 'resolved-trades', 'feed-hdr-resolved', resCards);
+    }
+    _renderManualTrades();
+  }
+
+  // ── Predictions panel (right panel) ────────────────────────────────────────
+
+  // Daily risk gate — fetch today's P&L and warn if approaching daily loss limit
+  async function _checkDailyRisk() {
+    try {
+      const res = await fetch('/api/realaccount/daily-pnl');
+      if (!res.ok) return;
+      const { netPnl, trades } = await res.json();
+      if (trades === 0 || netPnl >= 0) {
+        const riskEl = document.getElementById('daily-risk-banner');
+        if (riskEl) riskEl.style.display = 'none';
+        return;
+      }
+      const dailyLossLimit = (cfg.maxRiskDollars || 200) * 3; // 3× per-trade risk = daily limit
+      const pct = Math.abs(netPnl) / dailyLossLimit;
+      const riskEl = document.getElementById('daily-risk-banner');
+      if (!riskEl) return;
+      if (pct >= 1.0) {
+        riskEl.style.display = '';
+        riskEl.className = 'daily-risk-banner danger';
+        riskEl.textContent = `Daily limit hit: -$${Math.abs(netPnl).toFixed(0)} — no new trades`;
+      } else if (pct >= 0.66) {
+        riskEl.style.display = '';
+        riskEl.className = 'daily-risk-banner warning';
+        riskEl.textContent = `Daily P&L: -$${Math.abs(netPnl).toFixed(0)} — approaching limit`;
+      } else {
+        riskEl.style.display = 'none';
+      }
+    } catch (_) {}
+  }
+
+  function _renderPredictions() {
+    const predFeed   = document.getElementById('predictions-feed');
+    const countBadge = document.getElementById('pred-count-badge');
+    if (!predFeed) return;
+
+    // Open setups = untaken alerts with open or no outcome — across ALL symbols.
+    // Validity window scales with the setup's timeframe: a 15m signal is stale
+    // after ~3h; a 4h signal after ~20h. Based on ~10 candles of the setup's TF.
+    // Once that window passes the setup context has shifted and the trade isn't worth taking.
+    const TF_EXPIRY_SECS = { '15m': 3*3600, '30m': 5*3600, '1h': 8*3600, '2h': 12*3600, '4h': 20*3600 };
+    const newestCandleTime = allAlerts.reduce((max, a) => Math.max(max, a.setup?.time || 0), 0);
+    const openSetups = allAlerts.filter(a => {
+      if (takenTrades.has(_alertKey(a))) return false;
+      if (a.setup?.outcome && a.setup.outcome !== 'open') return false;
+      const expirySecs = TF_EXPIRY_SECS[a.timeframe] ?? 8 * 3600;
+      if ((a.setup?.time ?? 0) < newestCandleTime - expirySecs) return false;
+      // Price proximity: hide if SL already breached (progress < 0) or price has
+      // traveled ≥60% from entry toward TP — entering now means chasing with poor R:R.
+      if (a.priceProgress != null && (a.priceProgress < 0 || a.priceProgress >= 0.6)) return false;
+      return true;
+    });
+
+    if (countBadge) countBadge.textContent = openSetups.length > 0 ? String(openSetups.length) : '';
+
+    _checkDailyRisk();
+
+    if (openSetups.length === 0) {
+      predFeed.innerHTML = '<p class="placeholder">No predictions yet.</p>';
+      return;
+    }
+
+    predFeed.innerHTML = '';
+    for (const alert of openSetups) {
+      const card = _buildPredCard(alert);
+      if (_prevAlertKeys.size > 0 && !_prevAlertKeys.has(_alertKey(alert))) {
         card.classList.add('is-new');
         setTimeout(() => card.classList.remove('is-new'), 10_000);
       }
-      alertFeed.appendChild(card);
+      predFeed.appendChild(card);
     }
 
-    // ── Resolved Taken Trades (current symbol only) ─────────────────────────
-    if (takenResolved.length > 0) {
-      const sep = document.createElement('div');
-      sep.className = 'taken-section-header';
-      sep.innerHTML = `<span>Taken Trades</span><span class="taken-count">${takenResolved.length}</span>`;
-      alertFeed.appendChild(sep);
-      for (const a of takenResolved) {
-        const card = _buildCard(a);
-        card.classList.add('is-taken-card');
-        alertFeed.appendChild(card);
+    _prevAlertKeys = new Set(openSetups.map(_alertKey));
+  }
+
+  // ── Monitoring card (mode='monitor') — auto-watches TP/SL ──────────────────
+
+  function _buildMonitoringCard(alertData) {
+    const { symbol, timeframe, setup } = alertData;
+    const aiKey = _alertKey(alertData);
+    const dir   = setup.direction;
+    const cls   = dir === 'bullish' ? 'bull' : 'bear';
+    const arrow = dir === 'bullish' ? '▲' : '▼';
+    const fmtP  = n => _fmtP(symbol, n);
+    const riskDollars = _calcRisk(alertData);
+    const riskText    = riskDollars != null ? `$${riskDollars}` : '';
+
+    const card = document.createElement('div');
+    card.className = `monitor-card ${cls}`;
+    card.dataset.alertKey = aiKey;
+
+    card.innerHTML = `
+      <div class="mc-header">
+        <span class="mc-sym">${symbol}</span>
+        <span class="mc-tf">${timeframe}</span>
+        <span class="mc-type">${_fmtType(setup.type)}</span>
+        <span class="mc-dir ${cls}">${arrow}</span>
+        <span class="mc-conf">${setup.confidence}%</span>
+        ${riskText ? `<span class="mc-risk">${riskText}</span>` : ''}
+      </div>
+      <div class="mc-rationale">${setup.rationale || '—'}</div>
+      <div class="mc-levels">
+        <span class="mc-label">Entry</span><span class="mc-val">${fmtP(setup.entry ?? setup.price)}</span>
+        <span class="mc-label sl">SL</span><span class="mc-val sl">${fmtP(setup.sl)}</span>
+        <span class="mc-label tp">TP</span><span class="mc-val tp">${fmtP(setup.tp)}</span>
+      </div>
+      <div class="mc-action-row">
+        <span class="mc-watching">● Watching</span>
+        <button class="mc-won-btn">✓ Won</button>
+        <button class="mc-lost-btn">✗ Lost</button>
+        <button class="mc-dismiss-btn" title="Dismiss">✕</button>
+      </div>`;
+
+    card.style.cursor = 'pointer';
+    card.addEventListener('click', () => { window.ChartAPI?.highlightSetup(alertData); });
+
+    async function _resolveMonitor(outcome) {
+      alertData.setup.outcome = outcome;
+      alertData.resolvedAt = new Date().toISOString();
+      takenOpenAlertData.delete(aiKey);
+      resolvedAlertData.set(aiKey, alertData);
+      _saveTakenOpen();
+      _saveResolved();
+      _renderFeed();
+      _updateStats();
+      try {
+        await fetch(`/api/alerts/${encodeURIComponent(aiKey)}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ outcome }),
+        });
+      } catch (_) {}
+      _showFillToast(`${symbol} ${outcome === 'won' ? '✓ WON' : '✗ LOST'} (monitored)`);
+    }
+
+    card.querySelector('.mc-won-btn') .addEventListener('click', e => { e.stopPropagation(); _resolveMonitor('won'); });
+    card.querySelector('.mc-lost-btn').addEventListener('click', e => { e.stopPropagation(); _resolveMonitor('lost'); });
+    card.querySelector('.mc-dismiss-btn').addEventListener('click', e => {
+      e.stopPropagation();
+      takenOpenAlertData.delete(aiKey);
+      _saveTakenOpen();
+      _renderFeed();
+    });
+
+    return card;
+  }
+
+  // ── Taken card (mode='take') — manual outcome + P&L entry ─────────────────
+
+  function _buildTakenCard(alertData) {
+    const { symbol, timeframe, setup } = alertData;
+    const aiKey = _alertKey(alertData);
+    const dir   = setup.direction;
+    const cls   = dir === 'bullish' ? 'bull' : 'bear';
+    const arrow = dir === 'bullish' ? '▲' : '▼';
+    const fmtP  = n => _fmtP(symbol, n);
+    const entry = alertData.actualEntry ?? setup.entry ?? setup.price;
+    const sl    = alertData.actualSL    ?? setup.sl;
+    const tp    = alertData.actualTP    ?? setup.tp;
+    const riskDollars = _calcRisk(alertData);
+    const riskText    = riskDollars != null ? `$${riskDollars} risk` : '';
+
+    const card = document.createElement('div');
+    card.className = `taken-card ${cls}`;
+    card.dataset.alertKey = aiKey;
+
+    card.innerHTML = `
+      <div class="mc-header">
+        <span class="mc-sym">${symbol}</span>
+        <span class="mc-tf">${timeframe}</span>
+        <span class="mc-type">${_fmtType(setup.type)}</span>
+        <span class="mc-dir ${cls}">${arrow}</span>
+        <span class="mc-conf">${setup.confidence}%</span>
+        ${riskText ? `<span class="mc-risk">${riskText}</span>` : ''}
+      </div>
+      <div class="mc-rationale">${setup.rationale || '—'}</div>
+      <div class="mc-levels">
+        <span class="mc-label">Entry</span><span class="mc-val">${fmtP(entry)}</span>
+        <span class="mc-label sl">SL</span><span class="mc-val sl">${fmtP(sl)}</span>
+        <span class="mc-label tp">TP</span><span class="mc-val tp">${fmtP(tp)}</span>
+      </div>
+      <div class="mc-outcome-row">
+        <button class="mc-tp-btn">TP Hit</button>
+        <button class="mc-sl-btn">SL Hit</button>
+        <input class="mc-exit-price" type="number" step="0.01" placeholder="Exit @">
+        <button class="mc-exit-btn">Exit</button>
+        <input class="mc-pnl-input" type="number" step="0.01" placeholder="P&L $">
+      </div>`;
+
+    card.style.cursor = 'pointer';
+    card.addEventListener('click', () => { window.ChartAPI?.highlightSetup(alertData); });
+
+    const pnlInput       = card.querySelector('.mc-pnl-input');
+    const exitPriceInput = card.querySelector('.mc-exit-price');
+
+    async function _resolveOutcome(outcome, exitPrice) {
+      const pnl = parseFloat(pnlInput.value) || null;
+      alertData.setup.outcome = outcome;
+      if (exitPrice != null) alertData.setup.actualExit = exitPrice;
+      if (pnl != null) alertData.setup.pnl = pnl;
+      alertData.resolvedAt = new Date().toISOString();
+      takenOpenAlertData.delete(aiKey);
+      resolvedAlertData.set(aiKey, alertData);  // show in Resolved section
+      _saveTakenOpen();
+      _saveResolved();
+      _renderFeed();
+      _updateStats();
+      try {
+        await fetch(`/api/alerts/${encodeURIComponent(aiKey)}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ outcome }),
+        });
+        if (pnl != null || exitPrice != null) {
+          await fetch('/api/trades', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              alertKey: aiKey, symbol, timeframe, setupType: setup.type, mode: 'take',
+              actualEntry: entry, actualSL: sl, actualTP: tp, actualExit: exitPrice, pnl, outcome,
+            }),
+          });
+        }
+      } catch (_) {}
+      const pnlStr = pnl != null ? ` · ${pnl >= 0 ? '+' : ''}$${pnl}` : '';
+      _showFillToast(`${symbol} ${outcome === 'won' ? '✓ TP HIT' : outcome === 'lost' ? '✗ SL HIT' : '◎ EXITED'}${pnlStr}`);
+    }
+
+    card.querySelector('.mc-tp-btn').addEventListener('click', e => { e.stopPropagation(); _resolveOutcome('won', tp); });
+    card.querySelector('.mc-sl-btn').addEventListener('click', e => { e.stopPropagation(); _resolveOutcome('lost', sl); });
+    card.querySelector('.mc-exit-btn').addEventListener('click', e => {
+      e.stopPropagation();
+      const exitP = parseFloat(exitPriceInput.value);
+      if (!isNaN(exitP)) {
+        const isBull  = dir === 'bullish';
+        const outcome = (isBull ? exitP > entry : exitP < entry) ? 'won' : 'lost';
+        _resolveOutcome(outcome, exitP);
       }
+    });
+
+    // ── Partial exit tracking ─────────────────────────────────────────────────
+    const partialBtn = document.createElement('div');
+    partialBtn.className = 'mc-partial-row';
+    const partials = alertData.partialExits || [];
+    const partialHtml = partials.length
+      ? partials.map(p => `<span class="partial-chip">Partial ${p.qty}ct @ ${_fmtP(symbol, p.price)} = $${p.pnl?.toFixed(0) ?? '?'}</span>`).join('')
+      : '';
+
+    partialBtn.innerHTML = `
+      ${partialHtml ? `<div class="partial-chips">${partialHtml}</div>` : ''}
+      <div class="partial-add-row">
+        <input class="partial-qty" type="number" min="1" step="1" placeholder="Qty" style="width:48px">
+        <input class="partial-price" type="number" step="0.01" placeholder="Price">
+        <input class="partial-pnl" type="number" step="0.01" placeholder="P&L">
+        <button class="partial-save-btn">+ Partial</button>
+      </div>`;
+
+    card.appendChild(partialBtn);
+
+    partialBtn.querySelector('.partial-save-btn').addEventListener('click', e => {
+      e.stopPropagation();
+      const qty   = parseInt(partialBtn.querySelector('.partial-qty').value) || 1;
+      const price = parseFloat(partialBtn.querySelector('.partial-price').value) || null;
+      const pnl   = parseFloat(partialBtn.querySelector('.partial-pnl').value) || null;
+      if (!price) return;
+      if (!alertData.partialExits) alertData.partialExits = [];
+      alertData.partialExits.push({ qty, price, pnl, exitedAt: new Date().toISOString() });
+      // Move SL to breakeven if this is the first partial
+      if (alertData.partialExits.length === 1) {
+        alertData.actualSL = alertData.actualEntry ?? alertData.setup.entry;
+      }
+      takenOpenAlertData.set(aiKey, alertData);
+      _saveTakenOpen();
+      _renderFeed();
+    });
+
+    return card;
+  }
+
+  // ── Resolved card (monitored trades that hit TP or SL) ───────────────────
+
+  function _buildResolvedCard(alertData) {
+    const { symbol, timeframe, setup } = alertData;
+    const aiKey   = _alertKey(alertData);
+    const outcome = setup.outcome;
+    const dir     = setup.direction;
+    const cls     = outcome === 'won' ? 'outcome-won' : 'outcome-lost';
+    const dirCls  = dir === 'bullish' ? 'bull' : 'bear';
+    const arrow   = dir === 'bullish' ? '▲' : '▼';
+    const fmtP    = n => _fmtP(symbol, n);
+
+    const resolvedTime = alertData.resolvedAt
+      ? new Date(alertData.resolvedAt).toLocaleTimeString('en-US', {
+          hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/Denver',
+        }) + ' MT'
+      : '';
+
+    const card = document.createElement('div');
+    card.className = `resolved-card ${dirCls} ${cls}`;
+    card.dataset.alertKey = aiKey;
+
+    card.innerHTML = `
+      <div class="mc-header">
+        <span class="mc-sym">${symbol}</span>
+        <span class="mc-tf">${timeframe}</span>
+        <span class="mc-type">${_fmtType(setup.type)}</span>
+        <span class="mc-dir ${dirCls}">${arrow}</span>
+        <span class="rc-outcome ${outcome === 'won' ? 'rc-won' : 'rc-lost'}">
+          ${outcome === 'won' ? '✓ WON' : '✗ LOST'}
+        </span>
+        <button class="rc-clear-btn" title="Clear">✕</button>
+      </div>
+      <div class="mc-levels">
+        <span class="mc-label">Entry</span><span class="mc-val">${fmtP(setup.entry ?? setup.price)}</span>
+        <span class="mc-label sl">SL</span><span class="mc-val sl">${fmtP(setup.sl)}</span>
+        ${setup.actualExit != null
+          ? `<span class="mc-label" style="color:var(--accent)">Exit</span><span class="mc-val" style="color:var(--accent)">${fmtP(setup.actualExit)}</span>`
+          : `<span class="mc-label tp">TP</span><span class="mc-val tp">${fmtP(setup.tp)}</span>`}
+        ${setup.pnl != null ? `<span class="mc-label">P&L</span><span class="mc-val ${setup.pnl >= 0 ? 'tp' : 'sl'}">${setup.pnl >= 0 ? '+' : ''}$${setup.pnl.toFixed(2)}</span>` : ''}
+      </div>
+      ${resolvedTime ? `<div class="rc-time">${resolvedTime}</div>` : ''}`;
+
+    card.querySelector('.rc-clear-btn').addEventListener('click', e => {
+      e.stopPropagation();
+      resolvedAlertData.delete(aiKey);
+      _saveResolved();
+      _renderFeed();
+    });
+
+    return card;
+  }
+
+  // ── Auto-monitor: check TP/SL crossing on live price updates ──────────────
+
+  function _checkMonitoredTrades(symbol, price) {
+    let changed = false;
+    for (const [key, alertData] of takenOpenAlertData) {
+      if (alertData.symbol !== symbol || alertData.mode !== 'monitor') continue;
+      if (alertData.setup?.outcome !== 'open') continue;
+      const { setup } = alertData;
+      const isBull = setup.direction === 'bullish';
+      let hit = null;
+      if (isBull) {
+        if (price >= setup.tp)   hit = 'won';
+        else if (price <= setup.sl) hit = 'lost';
+      } else {
+        if (price <= setup.tp)   hit = 'won';
+        else if (price >= setup.sl) hit = 'lost';
+      }
+      if (hit) { _autoResolveMonitor(key, alertData, hit); changed = true; }
+    }
+    if (changed) { _renderFeed(); _updateStats(); }
+  }
+
+  async function _autoResolveMonitor(key, alertData, outcome) {
+    alertData.setup.outcome = outcome;
+    alertData.resolvedAt = new Date().toISOString();
+    takenOpenAlertData.delete(key);
+    resolvedAlertData.set(key, alertData);
+    _saveTakenOpen();
+    _saveResolved();
+    try {
+      await fetch(`/api/alerts/${encodeURIComponent(key)}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ outcome }),
+      });
+    } catch (_) {}
+    _showFillToast(`${alertData.symbol} ${outcome === 'won' ? '✓ TP HIT' : '✗ SL HIT'} (auto)`);
+  }
+
+  // ── Compact prediction card for the right panel ─────────────────────────────
+
+  function _buildPredCard(alert) {
+    const { symbol, timeframe, setup } = alert;
+    const dir   = setup.direction;
+    const cls   = dir === 'bullish' ? 'bull' : 'bear';
+    const arrow = dir === 'bullish' ? '▲' : '▼';
+    const aiKey = _alertKey(alert);
+    const fmtP  = n => _fmtP(symbol, n);
+    const riskDollars = _calcRisk(alert);
+    const overBudget  = riskDollars != null && riskDollars > cfg.maxRiskDollars;
+
+    const ageMins = Math.round((Date.now() - setup.time * 1000) / 60000);
+    const ageText = ageMins < 2 ? 'now' : ageMins < 60 ? `${ageMins}m` : `${Math.floor(ageMins / 60)}h`;
+
+    const card = document.createElement('div');
+    card.className = `pred-card ${cls}${overBudget ? ' over-budget' : ''}`;
+    card.dataset.alertKey = aiKey;
+
+    card.innerHTML = `
+      <div class="pred-card-header">
+        <span class="pred-card-sym">${symbol}</span>
+        <span class="pred-card-tf">${timeframe}</span>
+        <span class="pred-card-type">${_fmtType(setup.type)}</span>
+        <span class="pred-card-dir ${cls}">${arrow}</span>
+        <span class="pred-card-conf">${setup.confidence}%</span>
+        <span class="pred-card-age">${ageText}</span>
+      </div>
+      <div class="pred-card-rationale">${setup.rationale || '—'}</div>
+      ${setup.entryGuidance ? `<div class="pred-card-guidance"><em>${setup.entryGuidance}</em></div>` : ''}
+      <div class="pred-card-prices">
+        <span class="pcp-label">Entry</span><span class="pcp-val">${fmtP(setup.entry ?? setup.price)}</span>
+        <span class="pcp-label sl">SL</span><span class="pcp-val sl">${fmtP(setup.sl)}</span>
+        <span class="pcp-label tp">TP</span><span class="pcp-val tp">${fmtP(setup.tp)}</span>
+      </div>
+      ${setup.suggestedContracts != null ? `<div class="pred-card-sizing">${setup.suggestedContracts} contract${setup.suggestedContracts !== 1 ? 's' : ''} · $${riskDollars != null ? riskDollars : '—'} risk</div>` : ''}
+      <div class="pred-card-footer">
+        <span class="pred-card-risk ${overBudget ? 'risk-over' : 'risk-ok'}">${riskDollars != null ? '$' + riskDollars : ''}</span>
+        <button class="pred-monitor-btn" data-key="${aiKey}">Monitor</button>
+        <button class="pred-take-btn" data-key="${aiKey}">Take</button>
+      </div>
+      <div class="trade-form" style="display:none"></div>`;
+
+    // Click → highlight on chart
+    card.style.cursor = 'pointer';
+    card.addEventListener('click', () => {
+      document.querySelectorAll('.pred-card.selected').forEach(el => el.classList.remove('selected'));
+      card.classList.add('selected');
+      window.ChartAPI?.highlightSetup(alert);
+    });
+
+    const tradeFormEl = card.querySelector('.trade-form');
+    const monitorBtn  = card.querySelector('.pred-monitor-btn');
+    const takeBtn     = card.querySelector('.pred-take-btn');
+
+    // Monitor → immediate, no form; system watches TP/SL automatically
+    monitorBtn.addEventListener('click', async e => {
+      e.stopPropagation();
+      const monitorData = { ...alert, mode: 'monitor', takenAt: new Date().toISOString() };
+      if (!monitorData.setup.outcome) monitorData.setup.outcome = 'open';
+      try {
+        const res = await fetch('/api/trades', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            alertKey: aiKey, symbol, timeframe, setupType: setup.type, mode: 'monitor',
+            actualEntry: setup.entry ?? setup.price, actualSL: setup.sl, actualTP: setup.tp,
+          }),
+        });
+        if (!res.ok) throw new Error(res.status);
+        const { trade } = await res.json();
+        takenTrades.set(aiKey, trade);
+        takenOpenAlertData.set(aiKey, monitorData);
+        _saveTakenOpen();
+        _renderFeed();
+        _renderPredictions();
+        _updateStats();
+        monitorBtn.textContent = '● Monitoring';
+        monitorBtn.disabled = true;
+        takeBtn.disabled    = true;
+      } catch (err) {
+        console.error('[pred-monitor] Save failed:', err.message);
+      }
+    });
+
+    // Take → inline form; user fills in actual entry/SL/TP, then marks outcome + P&L
+    function _openPredTradeForm() {
+      const fv = n => n != null ? n.toFixed(2) : '';
+      tradeFormEl.innerHTML = `
+        <div class="trade-form-inner">
+          <div class="tf-row">
+            <label>Entry</label>
+            <input class="tf-entry" type="number" step="0.25" value="${fv(setup.entry ?? setup.price)}">
+            <label>SL</label>
+            <input class="tf-sl" type="number" step="0.25" value="${fv(setup.sl)}">
+            <label>TP</label>
+            <input class="tf-tp" type="number" step="0.25" value="${fv(setup.tp)}">
+          </div>
+          <div class="tf-row">
+            <label>Notes</label>
+            <input class="tf-notes" type="text" placeholder="Optional" style="flex:1">
+          </div>
+          <div class="tf-btns">
+            <button class="tf-save">Confirm Take</button>
+            <button class="tf-cancel">Cancel</button>
+          </div>
+        </div>`;
+      tradeFormEl.style.display = 'block';
+
+      tradeFormEl.querySelector('.tf-cancel').addEventListener('click', e => {
+        e.stopPropagation();
+        tradeFormEl.style.display = 'none';
+      });
+
+      tradeFormEl.querySelector('.tf-save').addEventListener('click', async e => {
+        e.stopPropagation();
+        const actualEntry = parseFloat(tradeFormEl.querySelector('.tf-entry').value);
+        const actualSL    = parseFloat(tradeFormEl.querySelector('.tf-sl').value);
+        const actualTP    = parseFloat(tradeFormEl.querySelector('.tf-tp').value);
+        const body = {
+          alertKey: aiKey, symbol, timeframe, setupType: setup.type, mode: 'take',
+          actualEntry, actualSL, actualTP,
+          notes: tradeFormEl.querySelector('.tf-notes').value,
+        };
+        try {
+          const res = await fetch('/api/trades', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          if (!res.ok) throw new Error(res.status);
+          const { trade } = await res.json();
+          takenTrades.set(aiKey, trade);
+          const takeData = { ...alert, mode: 'take', takenAt: new Date().toISOString(), actualEntry, actualSL, actualTP };
+          if (!takeData.setup.outcome) takeData.setup.outcome = 'open';
+          takenOpenAlertData.set(aiKey, takeData);
+          _saveTakenOpen();
+          _renderFeed();
+          _renderPredictions();
+          _updateStats();
+          if (window._soundAlertsEnabled) _playAlertSound(setup.direction);
+        } catch (err) {
+          console.error('[pred-take] Save failed:', err.message);
+        }
+      });
     }
 
-    _prevAlertKeys = new Set(); // clear after render
-    _renderManualTrades();
+    takeBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      const isOpen = tradeFormEl.style.display !== 'none';
+      tradeFormEl.style.display = isOpen ? 'none' : 'block';
+      if (!isOpen) _openPredTradeForm();
+    });
+
+    return card;
   }
 
   // ── Chart marker sync ──────────────────────────────────────────────────────
@@ -818,7 +1544,7 @@
     const dirClass   = dir === 'bullish' ? 'bull' : 'bear';
     const dirArrow   = dir === 'bullish' ? '▲' : '▼';
 
-    const fmtP = n => (n != null ? n.toFixed(2) : '—');
+    const fmtP = n => _fmtP(symbol, n);
     // Display time + age in Mountain Time (MST/MDT)
     const time = new Date(setup.time * 1000).toLocaleTimeString('en-US', {
       hour: 'numeric', minute: '2-digit', hour12: true,
@@ -1033,6 +1759,19 @@
               takenOpenAlertData.set(aiKey, alert);
               _saveTakenOpen();
             }
+
+            // Auto-resolve outcome if exit price was provided
+            if (body.actualExit) {
+              const exitP  = parseFloat(body.actualExit);
+              const entryP = parseFloat(body.actualEntry);
+              if (!isNaN(exitP) && !isNaN(entryP) && exitP !== entryP) {
+                const isBull  = setup.direction === 'bullish';
+                const outcome = (isBull ? exitP > entryP : exitP < entryP) ? 'won' : 'lost';
+                await _setOutcome(outcome); // removes from Active Trades + re-renders feed
+                return;
+              }
+            }
+
             tradeFormEl.style.display = 'none';
 
             // Swap Take button → TAKEN badge without full re-render
@@ -1114,6 +1853,7 @@
       case 'pdh_breakout':             return 'PDH Brk';
       case 'trendline_break':          return 'TL Break';
       case 'or_breakout':              return 'OR Break';
+      case 'bias':                     return 'Bias';
       default:                         return type;
     }
   }
@@ -1207,10 +1947,8 @@
     if (existing) existing.remove();
     if (!manualTrades.length) return;
 
-    const section = document.createElement('div');
-    section.className = 'manual-trades-section';
-    section.innerHTML = `<div class="taken-section-header"><span>Manual Trades</span><span class="taken-count">${manualTrades.length}</span></div>`;
-
+    // Build cards first, then use the shared collapsible helper
+    const cards = [];
     for (const t of manualTrades) {
       const c = document.createElement('div');
       const dir = t.direction === 'bearish' ? 'bear' : 'bull';
@@ -1251,9 +1989,13 @@
         });
       });
 
-      section.appendChild(c);
+      cards.push(c);
     }
+
+    const section = document.createElement('div');
+    section.className = 'manual-trades-section';
     alertFeed.appendChild(section);
+    _appendFeedSection('Manual Trades', cards.length, 'manual-trades', 'feed-hdr-dim', cards, section);
   }
 
   // ── Input wiring ───────────────────────────────────────────────────────────
@@ -1478,6 +2220,18 @@
           if (window._soundAlertsEnabled && (msg.setup?.confidence ?? 0) >= minConf) {
             _playAlertSound(msg.setup?.direction);
           }
+          // Browser push notification for new high-confidence setups
+          if (cfg.features?.pushNotifications && Notification.permission === 'granted') {
+            const conf  = msg.setup?.confidence ?? 0;
+            const dir   = msg.setup?.direction === 'bullish' ? '▲' : '▼';
+            const type  = msg.setup?.type?.replace(/_/g, ' ') ?? 'setup';
+            new Notification(`${msg.symbol} ${msg.timeframe} ${dir}`, {
+              body: `${type} · ${conf}% confidence · Entry ${msg.setup?.entry?.toFixed(2) ?? ''}`,
+              icon: '/icons/icon-192.png',
+              tag:  `${msg.symbol}-${msg.timeframe}-${msg.setup?.time}`,
+              requireInteraction: false,
+            });
+          }
           fetchAndRender(); // re-fetch to keep trade filter accurate
         }
         if (msg.type === 'order') {
@@ -1506,16 +2260,15 @@
           // Real-time tick from Coinbase WS (BTC/ETH/XRP only)
           window.ChartAPI?.updateLivePrice?.(msg.symbol, msg.price, msg.time);
           _updateDataAgeBadge(msg.symbol, msg.time);
+          _checkMonitoredTrades(msg.symbol, msg.price);
         }
                 if (msg.type === 'data_refresh') {
           // Snapshot prev keys before refetch so new cards can be highlighted
-          _prevAlertKeys = new Set(currentAlerts.map(_alertKey));
+          _prevAlertKeys = new Set(allAlerts.map(_alertKey));
           window.ChartAPI?.reload();   // re-fetch chart candles + indicators
           fetchAndRender();            // re-fetch alert feed (open outcomes may have resolved)
           _setRefreshTimes(msg.ts, msg.nextRefresh);
           if (msg.newAlerts > 0) _showNewAlertBanner(msg.newAlerts);
-          // Refresh correlation heatmap on data refresh
-          if (cfg.features?.correlationHeatmap) _updateCorrelationHeatmap();
         }
         if (msg.type === 'refresh_schedule') {
           // Server rescheduled the interval (e.g. settings change) — sync countdown + select

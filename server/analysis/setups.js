@@ -287,6 +287,7 @@ function _zoneRejection(scanCandles, allCandles, allSwingHighs, allSwingLows, at
           confidence: conf, iofBonus, scoreBreakdown,
           rationale: `Bearish rejection at supply ${sh.value.toFixed(2)} — ${(wickRatio * 100).toFixed(0)}% upper wick` +
             (iofBonus >= 10 ? ' · IOF confluence' : ''),
+          entryGuidance: 'Limit at zone mid or market on next candle if still at zone',
         });
       }
     }
@@ -318,6 +319,7 @@ function _zoneRejection(scanCandles, allCandles, allSwingHighs, allSwingLows, at
           confidence: conf, iofBonus, scoreBreakdown,
           rationale: `Bullish rejection at demand ${sl_node.value.toFixed(2)} — ${(wickRatio * 100).toFixed(0)}% lower wick` +
             (iofBonus >= 10 ? ' · IOF confluence' : ''),
+          entryGuidance: 'Limit at zone mid or market on next candle if still at zone',
         });
       }
     }
@@ -364,6 +366,7 @@ function _bosChoch(scanCandles, allCandles, allSwingHighs, allSwingLows, atrCurr
           confidence: conf, iofBonus, scoreBreakdown,
           rationale: `Bullish ${isCHoCH ? 'CHoCH' : 'BOS'}: close above swing high ${lastHigh.value.toFixed(2)}` +
             (iofBonus >= 10 ? ' · IOF confluence' : ''),
+          entryGuidance: 'Structure signal — no standalone entry',
         });
       }
     }
@@ -390,6 +393,7 @@ function _bosChoch(scanCandles, allCandles, allSwingHighs, allSwingLows, atrCurr
           confidence: conf, iofBonus, scoreBreakdown,
           rationale: `Bearish ${isCHoCH ? 'CHoCH' : 'BOS'}: close below swing low ${lastLow.value.toFixed(2)}` +
             (iofBonus >= 10 ? ' · IOF confluence' : ''),
+          entryGuidance: 'Structure signal — no standalone entry',
         });
       }
     }
@@ -413,14 +417,22 @@ function _tp(entry, sl, direction, rrRatio) {
 
 /**
  * Retrospectively evaluate whether subsequent candles hit TP or SL first.
+ * Capped at MAX_FORWARD_CANDLES: seed data always has a few trailing candles
+ * past every setup, so scanning all candles would immediately resolve everything.
+ * Setups not resolved within the window stay 'open' for Predictions to show.
+ * The priceProgress field (computed in /api/alerts) handles cases where price
+ * drifted past SL or near TP without a fast clean hit.
  */
+const MAX_FORWARD_CANDLES = 4;
+
 function _evaluateOutcome(candles, triggerTime, { direction, sl, tp }) {
   const idx = candles.findIndex(c => c.time === triggerTime);
   if (idx < 0 || idx >= candles.length - 1) {
     return { outcome: 'open', outcomeTime: null };
   }
 
-  for (let i = idx + 1; i < candles.length; i++) {
+  const limit = Math.min(candles.length, idx + 1 + MAX_FORWARD_CANDLES);
+  for (let i = idx + 1; i < limit; i++) {
     const c = candles[i];
     if (direction === 'bullish') {
       const hitSL = c.low  <= sl;
@@ -539,6 +551,7 @@ function _pdhBreakout(scanCandles, allCandles, pdh, pdl, atrCurrent, regime, fvg
           confidence: conf, iofBonus, scoreBreakdown,
           rationale: `Bullish PDH breakout above ${pdh.toFixed(2)} — close accepted above prior high` +
             (iofBonus >= 10 ? ' · IOF confluence' : ''),
+          entryGuidance: 'Market after confirmed close above PDH; no chase > 0.5 ATR',
         });
       }
     }
@@ -565,6 +578,7 @@ function _pdhBreakout(scanCandles, allCandles, pdh, pdl, atrCurrent, regime, fvg
           confidence: conf, iofBonus, scoreBreakdown,
           rationale: `Bearish PDL breakdown below ${pdl.toFixed(2)} — close accepted below prior low` +
             (iofBonus >= 10 ? ' · IOF confluence' : ''),
+          entryGuidance: 'Market after confirmed close below PDL; no chase > 0.5 ATR',
         });
       }
     }
@@ -663,6 +677,7 @@ function _trendlineBreak(scanCandles, allCandles, trendlines, atrCurrent, regime
               confidence: conf, iofBonus, scoreBreakdown,
               rationale: `Bullish trendline break above resistance — ${resistance.touches} touches` +
                 (iofBonus >= 10 ? ' · IOF confluence' : ''),
+              entryGuidance: 'Market on next open or limit on trendline retest',
             });
           }
         }
@@ -701,6 +716,7 @@ function _trendlineBreak(scanCandles, allCandles, trendlines, atrCurrent, regime
               confidence: conf, iofBonus, scoreBreakdown,
               rationale: `Bearish trendline break below support — ${support.touches} touches` +
                 (iofBonus >= 10 ? ' · IOF confluence' : ''),
+              entryGuidance: 'Market on next open or limit on trendline retest',
             });
           }
         }
@@ -771,6 +787,7 @@ function _orBreakout(scanCandles, allCandles, openingRange, atrCurrent, regime, 
         confidence: conf, iofBonus, scoreBreakdown,
         rationale: `Bullish OR breakout above ${orHigh.toFixed(2)} — close ${c.close.toFixed(2)}` +
                    (iofBonus >= 10 ? ' · IOF confluence' : ''),
+        entryGuidance: 'Market on confirmed close outside OR range; RTH only',
       });
     }
 
@@ -794,6 +811,7 @@ function _orBreakout(scanCandles, allCandles, openingRange, atrCurrent, regime, 
         confidence: conf, iofBonus, scoreBreakdown,
         rationale: `Bearish OR breakdown below ${orLow.toFixed(2)} — close ${c.close.toFixed(2)}` +
                    (iofBonus >= 10 ? ' · IOF confluence' : ''),
+        entryGuidance: 'Market on confirmed close outside OR range; RTH only',
       });
     }
   }

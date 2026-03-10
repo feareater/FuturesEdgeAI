@@ -504,3 +504,53 @@
   .ra-analysis-grid { grid-template-columns: 1fr; }
 
 }
+
+/* ── Broker selector bar ─────────────────────────────────────────────── */
+.ra-broker-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--surface2, #13162a);
+  border-bottom: 1px solid var(--border, #1e2240);
+}
+.ra-broker-label {
+  font-size: 11px;
+  color: var(--text-dim, #6b7280);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+.ra-broker-tabs {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.ra-broker-tab {
+  padding: 4px 14px;
+  border-radius: 4px;
+  border: 1px solid var(--border, #1e2240);
+  background: transparent;
+  color: var(--text-dim, #6b7280);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.ra-broker-tab:hover { color: var(--text, #e2e8f0); border-color: var(--accent, #6366f1); }
+.ra-broker-tab.active {
+  background: var(--accent, #6366f1);
+  border-color: var(--accent, #6366f1);
+  color: #fff;
+}
+
+/* ── Broker badge in tables ──────────────────────────────────────────── */
+.ra-broker-badge {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 3px;
+  font-size: 10px;
+  background: var(--surface3, #1a1f35);
+  color: var(--text-dim, #6b7280);
+  border: 1px solid var(--border, #1e2240);
+  white-space: nowrap;
+}
