@@ -13,14 +13,20 @@
   <div id="app">
 
     <header id="topbar">
-      <div id="brand">FuturesEdge AI</div>
-      <nav class="page-nav">
+      <div class="tb-brand-block">
+        <span id="brand">FuturesEdge AI</span>
+      </div>
+      <nav class="tb-nav-links">
         <a href="/">Dashboard</a>
         <a href="/scanner.html">Scanner</a>
+        <a href="/commentary.html">AI</a>
         <a href="/performance.html">Stats</a>
         <a href="/backtest.html">Replay</a>
+        <a href="/tradelog.html">Trade Log</a>
         <a href="/propfirms.html" class="active">Prop Firms</a>
+        <a href="/tradingaccount.html">Real Account</a>
         <a href="/docs.html">Guide</a>
+        <a href="/api/export" download>Export</a>
       </nav>
     </header>
 
@@ -78,9 +84,11 @@
             <label class="pf-filter-label">Status</label>
             <select id="filter-status" class="pf-select">
               <option value="ALL">All</option>
-              <option value="active">Active</option>
-              <option value="passed">Passed</option>
-              <option value="failed">Failed</option>
+              <option value="active">Active (Challenge)</option>
+              <option value="passed">Passed (Challenge)</option>
+              <option value="failed">Failed (Challenge)</option>
+              <option value="funded">Funded (Active)</option>
+              <option value="funded_failed">Funded (Failed)</option>
             </select>
           </div>
           <div class="pf-filter-group">
@@ -136,12 +144,54 @@
                 <input id="af-cost" type="number" step="0.01" placeholder="0.00" />
               </div>
               <div class="pf-field">
+                <label>Phase</label>
+                <select id="af-phase">
+                  <option value="challenge">Challenge</option>
+                  <option value="funded">Funded</option>
+                </select>
+              </div>
+              <div class="pf-field" id="af-status-wrap">
                 <label>Status</label>
                 <select id="af-status">
                   <option value="active">Active</option>
                   <option value="passed">Passed</option>
                   <option value="failed">Failed</option>
                 </select>
+              </div>
+              <div class="pf-field" id="af-funded-failed-wrap" style="display:none">
+                <label>&nbsp;</label>
+                <label class="pf-checkbox-label">
+                  <input type="checkbox" id="af-funded-failed" />
+                  Funded account was blown / lost
+                </label>
+              </div>
+              <div class="pf-field">
+                <label>Sub-Status</label>
+                <input id="af-substatus" type="text" list="substatus-list" placeholder="Phase 1, Funded…" />
+                <datalist id="substatus-list">
+                  <option value="Phase 1">
+                  <option value="Phase 2">
+                  <option value="Funded">
+                  <option value="Pending Payout">
+                  <option value="Withdrawal Requested">
+                  <option value="On Hold">
+                </datalist>
+              </div>
+              <div class="pf-field">
+                <label>Max Drawdown ($)</label>
+                <input id="af-maxdd" type="number" step="0.01" placeholder="2500" />
+              </div>
+              <div class="pf-field">
+                <label>Drawdown Type</label>
+                <select id="af-ddtype">
+                  <option value="static">Static (fixed floor from start)</option>
+                  <option value="eod_trail">EOD Trailing (trails highest day-end balance)</option>
+                  <option value="intraday_trail">Intraday / EOT Trailing (uses peak balance per day)</option>
+                </select>
+              </div>
+              <div class="pf-field">
+                <label>Current Value ($) <span class="pf-field-hint">auto-updated from log</span></label>
+                <input id="af-curval" type="number" step="0.01" placeholder="50000" />
               </div>
               <div class="pf-field pf-field-wide" id="af-blow-wrap">
                 <label>Reason Blown / Notes on Failure</label>
@@ -168,12 +218,13 @@
                 <th>Size</th>
                 <th>Cost</th>
                 <th>Status</th>
+                <th>Live</th>
                 <th>Reason / Notes</th>
                 <th></th>
               </tr>
             </thead>
             <tbody id="accounts-tbody">
-              <tr><td colspan="7" class="pf-empty">No accounts yet — add your first above.</td></tr>
+              <tr><td colspan="8" class="pf-empty">No accounts yet — add your first above.</td></tr>
             </tbody>
           </table>
         </div>

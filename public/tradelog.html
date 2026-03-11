@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FuturesEdge — Trade Log</title>
+  <link rel="stylesheet" href="/css/dashboard.css" />
+  <link rel="stylesheet" href="/css/tradelog.css" />
+</head>
+<body>
+  <div id="app">
+
+    <header id="topbar">
+      <div class="tb-brand-block">
+        <span id="brand">FuturesEdge AI</span>
+      </div>
+      <nav class="tb-nav-links">
+        <a href="/">Dashboard</a>
+        <a href="/scanner.html">Scanner</a>
+        <a href="/commentary.html">AI</a>
+        <a href="/performance.html">Stats</a>
+        <a href="/backtest.html">Replay</a>
+        <a href="/tradelog.html" class="active">Trade Log</a>
+        <a href="/propfirms.html">Prop Firms</a>
+        <a href="/tradingaccount.html">Real Account</a>
+        <a href="/docs.html">Guide</a>
+        <a href="/api/export" download>Export</a>
+      </nav>
+    </header>
+
+    <main id="tl-main">
+
+      <!-- Summary bar -->
+      <div id="tl-summary">
+        <div class="tl-stat" id="stat-total">— trades</div>
+        <div class="tl-stat bull" id="stat-won">— won</div>
+        <div class="tl-stat bear" id="stat-lost">— lost</div>
+        <div class="tl-stat" id="stat-open">— open</div>
+        <div class="tl-stat" id="stat-wr">—% WR</div>
+        <div class="tl-stat" id="stat-pnl">$— net P&L</div>
+      </div>
+
+      <!-- Filters + Add Manual button -->
+      <div id="tl-toolbar">
+        <div class="tl-filters">
+          <select id="filter-symbol">
+            <option value="">All Symbols</option>
+            <option>MNQ</option><option>MGC</option>
+            <option>MES</option><option>MCL</option>
+            <option>BTC</option><option>ETH</option><option>XRP</option>
+          </select>
+          <select id="filter-outcome">
+            <option value="">All Outcomes</option>
+            <option value="won">Won</option>
+            <option value="lost">Lost</option>
+            <option value="open">Open</option>
+          </select>
+          <select id="filter-account">
+            <option value="">All Accounts</option>
+          </select>
+          <select id="filter-sentiment">
+            <option value="">All Sentiment</option>
+            <option value="bullish">Bullish</option>
+            <option value="bearish">Bearish</option>
+            <option value="neutral">Neutral</option>
+          </select>
+          <input type="date" id="filter-date-from" title="From date">
+          <input type="date" id="filter-date-to" title="To date">
+          <button id="filter-clear" class="tl-btn-ghost">Clear</button>
+        </div>
+        <button id="btn-add-trade" class="tl-btn-primary">+ Manual Trade</button>
+      </div>
+
+      <!-- Manual trade entry form (hidden by default) -->
+      <div id="manual-trade-form" style="display:none">
+        <div class="mtf-inner">
+          <div class="mtf-title">Log Manual Trade</div>
+          <div class="mtf-grid">
+            <label>Symbol
+              <select id="mt-symbol">
+                <option>MNQ</option><option>MGC</option>
+                <option>MES</option><option>MCL</option>
+                <option>BTC</option><option>ETH</option><option>XRP</option>
+              </select>
+            </label>
+            <label>Timeframe
+              <select id="mt-tf">
+                <option>5m</option><option>15m</option><option>30m</option>
+                <option>1h</option><option>2h</option><option>4h</option>
+              </select>
+            </label>
+            <label>Setup Type
+              <select id="mt-setup">
+                <option value="zone_rejection">Zone Rejection</option>
+                <option value="pdh_breakout">PDH/PDL Breakout</option>
+                <option value="trendline_break">Trendline Break</option>
+                <option value="or_breakout">OR Breakout</option>
+                <option value="manual">Manual</option>
+              </select>
+            </label>
+            <label>Direction
+              <select id="mt-direction">
+                <option value="bullish">Bullish</option>
+                <option value="bearish">Bearish</option>
+              </select>
+            </label>
+            <label>Entry
+              <input type="number" id="mt-entry" step="0.01" placeholder="Entry price">
+            </label>
+            <label>TP
+              <input type="number" id="mt-tp" step="0.01" placeholder="Target">
+            </label>
+            <label>SL
+              <input type="number" id="mt-sl" step="0.01" placeholder="Stop Loss">
+            </label>
+            <label>Actual Exit
+              <input type="number" id="mt-exit" step="0.01" placeholder="Leave blank if open">
+            </label>
+            <label>Contracts
+              <input type="number" id="mt-contracts" min="1" step="1" value="1">
+            </label>
+            <label>P&amp;L ($)
+              <input type="number" id="mt-pnl" step="0.01" placeholder="Optional">
+            </label>
+            <label>Sentiment
+              <select id="mt-sentiment">
+                <option value="bullish">Bullish</option>
+                <option value="bearish">Bearish</option>
+                <option value="neutral">Neutral</option>
+              </select>
+            </label>
+            <label>Account
+              <select id="mt-account" style="min-width:140px">
+                <option value="">— None —</option>
+              </select>
+            </label>
+            <label class="mt-dca-label">
+              <input type="checkbox" id="mt-dca"> DCA trade
+            </label>
+          </div>
+          <label class="mtf-notes-label">Notes
+            <textarea id="mt-notes" placeholder="Trade rationale, observations…" rows="2"></textarea>
+          </label>
+          <div class="mtf-btns">
+            <button id="mt-save" class="tl-btn-primary">Save Trade</button>
+            <button id="mt-cancel" class="tl-btn-ghost">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Edit modal -->
+      <div id="edit-modal" style="display:none">
+        <div class="em-backdrop"></div>
+        <div class="em-dialog">
+          <div class="em-title">Edit Trade</div>
+          <div class="em-grid">
+            <label>Entry<input type="number" id="em-entry" step="0.01"></label>
+            <label>TP<input type="number" id="em-tp" step="0.01"></label>
+            <label>SL<input type="number" id="em-sl" step="0.01"></label>
+            <label>Actual Exit<input type="number" id="em-exit" step="0.01"></label>
+            <label>Contracts<input type="number" id="em-contracts" min="1" step="1"></label>
+            <label>P&amp;L ($)<input type="number" id="em-pnl" step="0.01"></label>
+            <label>Outcome
+              <select id="em-outcome">
+                <option value="">Open</option>
+                <option value="won">Won</option>
+                <option value="lost">Lost</option>
+              </select>
+            </label>
+            <label>Sentiment
+              <select id="em-sentiment">
+                <option value="bullish">Bullish</option>
+                <option value="bearish">Bearish</option>
+                <option value="neutral">Neutral</option>
+              </select>
+            </label>
+            <label class="em-dca-label"><input type="checkbox" id="em-dca"> DCA</label>
+            <label style="grid-column:1/-1">Account
+              <select id="em-account" style="width:100%">
+                <option value="">— None —</option>
+              </select>
+            </label>
+          </div>
+          <label class="em-notes-label">Notes<textarea id="em-notes" rows="2"></textarea></label>
+          <div class="em-btns">
+            <button id="em-save" class="tl-btn-primary">Save</button>
+            <button id="em-cancel" class="tl-btn-ghost">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Fill Ladder modal -->
+      <div id="ladder-modal" style="display:none">
+        <div class="lm-backdrop"></div>
+        <div class="lm-dialog">
+          <div class="lm-header">
+            <span class="lm-title" id="lm-title">Fill Ladder</span>
+            <div class="lm-footer-stats" id="lm-stats"></div>
+            <button class="lm-close" id="lm-close">✕</button>
+          </div>
+
+          <div class="lm-body">
+            <!-- LEFT: Entry Ladder -->
+            <div class="lm-panel">
+              <div class="lm-panel-hdr entry-hdr">
+                <span>⬇ ENTRIES</span>
+                <span class="lm-avg-badge" id="lm-avg-badge">avg —</span>
+              </div>
+              <div class="lm-ladder" id="lm-entry-ladder"></div>
+              <div class="lm-add-row">
+                <input type="number" id="lm-e-qty" step="1" min="1" placeholder="Qty" class="lm-mini-input">
+                <span class="lm-at">@</span>
+                <input type="number" id="lm-e-price" step="0.01" placeholder="Price" class="lm-price-input">
+                <button id="lm-add-entry" class="lm-add-btn entry-btn">+ DCA</button>
+              </div>
+            </div>
+
+            <!-- Divider with price viz -->
+            <div class="lm-viz" id="lm-viz"></div>
+
+            <!-- RIGHT: Exit Tiers -->
+            <div class="lm-panel">
+              <div class="lm-panel-hdr exit-hdr">
+                <span>⬆ EXITS</span>
+                <span class="lm-remain-badge" id="lm-remain-badge">— cts remaining</span>
+              </div>
+              <div class="lm-ladder" id="lm-exit-ladder"></div>
+              <div class="lm-add-row">
+                <input type="number" id="lm-x-qty" step="1" min="1" placeholder="Qty" class="lm-mini-input">
+                <span class="lm-at">@</span>
+                <input type="number" id="lm-x-price" step="0.01" placeholder="Price" class="lm-price-input">
+                <span class="lm-pnl-preview" id="lm-pnl-preview"></span>
+                <button id="lm-add-exit" class="lm-add-btn exit-btn">+ Exit</button>
+              </div>
+              <div class="lm-pnl-total" id="lm-pnl-total"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Trade table -->
+      <div id="tl-table-wrap">
+        <table id="tl-table">
+          <thead>
+            <tr>
+              <th data-sort="takenAt">Date</th>
+              <th data-sort="symbol">Symbol</th>
+              <th data-sort="timeframe">TF</th>
+              <th>Setup</th>
+              <th data-sort="direction">Dir</th>
+              <th data-sort="actualEntry">Avg Entry</th>
+              <th>TP</th>
+              <th>SL</th>
+              <th data-sort="actualExit">Exit</th>
+              <th data-sort="contracts">Cts</th>
+              <th data-sort="pnl">P&amp;L</th>
+              <th data-sort="outcome">Result</th>
+              <th data-sort="sentiment">Sentiment</th>
+              <th>DCA</th>
+              <th data-sort="accountLabel">Account</th>
+              <th>Notes</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="tl-tbody">
+            <tr><td colspan="16" class="tl-empty">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+    </main>
+  </div>
+  <script src="/js/tradelog.js"></script>
+</body>
+</html>

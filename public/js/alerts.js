@@ -1148,15 +1148,21 @@
           method: 'PATCH', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ outcome }),
         });
-        if (pnl != null || exitPrice != null) {
-          await fetch('/api/trades', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              alertKey: aiKey, symbol, timeframe, setupType: setup.type, mode: 'take',
-              actualEntry: entry, actualSL: sl, actualTP: tp, actualExit: exitPrice, pnl, outcome,
-            }),
-          });
-        }
+        await fetch('/api/trades', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            alertKey: aiKey, symbol, timeframe, setupType: setup.type, mode: 'take',
+            direction: alertData.setup?.direction,
+            confidence: alertData.setup?.confidence,
+            rationale: alertData.setup?.rationale,
+            actualEntry: entry, actualSL: sl, actualTP: tp,
+            actualExit: exitPrice, pnl, outcome,
+            contracts: alertData.contracts ?? null,
+            dca:       alertData.dca       ?? false,
+            sentiment: alertData.sentiment ?? 'neutral',
+            notes:     alertData.notes     ?? '',
+          }),
+        });
       } catch (_) {}
       const pnlStr = pnl != null ? ` · ${pnl >= 0 ? '+' : ''}$${pnl}` : '';
       _showFillToast(`${symbol} ${outcome === 'won' ? '✓ TP HIT' : outcome === 'lost' ? '✗ SL HIT' : '◎ EXITED'}${pnlStr}`);
@@ -1402,6 +1408,17 @@
             <input class="tf-tp" type="number" step="0.25" value="${fv(setup.tp)}">
           </div>
           <div class="tf-row">
+            <label>Contracts</label>
+            <input class="tf-contracts" type="number" min="1" step="1" value="${setup.suggestedContracts ?? 1}" style="width:56px">
+            <label>Sentiment</label>
+            <select class="tf-sentiment">
+              <option value="bullish" ${setup.direction === 'bullish' ? 'selected' : ''}>Bullish</option>
+              <option value="bearish" ${setup.direction === 'bearish' ? 'selected' : ''}>Bearish</option>
+              <option value="neutral">Neutral</option>
+            </select>
+            <label class="tf-dca-label"><input class="tf-dca" type="checkbox"> DCA</label>
+          </div>
+          <div class="tf-row">
             <label>Notes</label>
             <input class="tf-notes" type="text" placeholder="Optional" style="flex:1">
           </div>
@@ -1424,8 +1441,14 @@
         const actualTP    = parseFloat(tradeFormEl.querySelector('.tf-tp').value);
         const body = {
           alertKey: aiKey, symbol, timeframe, setupType: setup.type, mode: 'take',
+          direction: setup.direction,
+          confidence: setup.confidence,
+          rationale: setup.rationale,
           actualEntry, actualSL, actualTP,
-          notes: tradeFormEl.querySelector('.tf-notes').value,
+          contracts:  parseInt(tradeFormEl.querySelector('.tf-contracts').value) || 1,
+          sentiment:  tradeFormEl.querySelector('.tf-sentiment').value,
+          dca:        tradeFormEl.querySelector('.tf-dca').checked,
+          notes:      tradeFormEl.querySelector('.tf-notes').value,
         };
         try {
           const res = await fetch('/api/trades', {

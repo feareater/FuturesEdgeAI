@@ -27,24 +27,32 @@
 
     /* ── Top bar ─────────────────────────────────────────────────────── */
     #topbar {
-      position: fixed; top: 0; left: 0; right: 0; height: 48px; z-index: 100;
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
       background: var(--bg-panel); border-bottom: 1px solid var(--border);
-      display: flex; align-items: center; padding: 0 24px; gap: 24px;
+      display: flex; flex-direction: column; align-items: center;
+      padding: 5px 0 3px;
     }
-    #topbar .brand { font-size: 14px; font-weight: 700; color: var(--accent); }
-    #topbar .sep   { color: var(--border); }
-    #topbar .title { color: var(--text); font-size: 13px; }
-    #topbar a      { margin-left: auto; color: var(--accent); text-decoration: none;
-                     font-size: 12px; padding: 4px 12px; border: 1px solid rgba(33,150,243,0.3);
-                     border-radius: 3px; background: rgba(33,150,243,0.08); }
-    #topbar a:hover { background: rgba(33,150,243,0.18); }
+    #brand { font-size: 13px; font-weight: 700; color: var(--accent); letter-spacing: 0.4px; }
+    .tb-nav-links {
+      display: flex; align-items: center; justify-content: center; flex-wrap: wrap;
+      gap: 4px; padding: 3px 16px; overflow-x: auto; scrollbar-width: none;
+      white-space: nowrap; width: 100%;
+    }
+    .tb-nav-links a {
+      color: var(--accent); text-decoration: none; font-size: 0.72rem; font-weight: 600;
+      padding: 3px 10px; border: 1px solid rgba(33,150,243,0.3);
+      border-radius: 4px; background: rgba(33,150,243,0.12);
+      transition: background 0.15s; white-space: nowrap;
+    }
+    .tb-nav-links a:hover  { background: rgba(33,150,243,0.22); }
+    .tb-nav-links a.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 
     /* ── Layout ──────────────────────────────────────────────────────── */
-    #layout { display: flex; padding-top: 48px; min-height: 100vh; }
+    #layout { display: flex; padding-top: 72px; min-height: 100vh; }
 
     /* ── Sidebar ─────────────────────────────────────────────────────── */
     #sidebar {
-      width: 220px; flex-shrink: 0; position: fixed; top: 48px; bottom: 0;
+      width: 220px; flex-shrink: 0; position: fixed; top: 72px; bottom: 0;
       background: var(--bg-panel); border-right: 1px solid var(--border);
       overflow-y: auto; padding: 20px 0;
     }
@@ -179,10 +187,19 @@
 
 <!-- ── Top bar ───────────────────────────────────────────────────────────── -->
 <div id="topbar">
-  <span class="brand">FuturesEdge AI</span>
-  <span class="sep">›</span>
-  <span class="title">Setup Guide</span>
-  <a href="/">← Dashboard</a>
+  <span id="brand">FuturesEdge AI</span>
+  <nav class="tb-nav-links">
+    <a href="/">Dashboard</a>
+    <a href="/scanner.html">Scanner</a>
+    <a href="/commentary.html">AI</a>
+    <a href="/performance.html">Stats</a>
+    <a href="/backtest.html">Replay</a>
+    <a href="/tradelog.html">Trade Log</a>
+    <a href="/propfirms.html">Prop Firms</a>
+    <a href="/tradingaccount.html">Real Account</a>
+    <a href="/docs.html" class="active">Guide</a>
+    <a href="/api/export" download>Export</a>
+  </nav>
 </div>
 
 <!-- ── Layout ────────────────────────────────────────────────────────────── -->

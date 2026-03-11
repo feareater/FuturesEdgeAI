@@ -382,26 +382,39 @@ app.get('/api/trades', (_req, res) => {
 app.post('/api/trades', (req, res) => {
   const { alertKey, symbol, timeframe, setupType,
           actualEntry, actualSL, actualTP, actualExit, notes,
-          direction, manualSetupType, isManual, mode } = req.body;
+          direction, manualSetupType, isManual, mode,
+          contracts, dca, sentiment, outcome, pnl, confidence, rationale,
+          accountId, accountLabel, accountType } = req.body;
   if (mode !== 'monitor' && (actualEntry == null || actualSL == null || actualTP == null)) {
     return res.status(400).json({ error: 'actualEntry, actualSL, actualTP required' });
   }
   const key = alertKey || `MANUAL:${symbol || 'UNK'}:${Date.now()}`;
+  const existing = tradeLog.find(t => t.alertKey === key);
   const trade = {
-    id:              Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-    alertKey:        key,
-    symbol,          timeframe, setupType,
-    mode:            mode || 'take',
-    takenAt:         new Date().toISOString(),
-    actualEntry:     actualEntry != null ? Number(actualEntry) : null,
-    actualSL:        actualSL   != null ? Number(actualSL)    : null,
-    actualTP:        actualTP   != null ? Number(actualTP)    : null,
-    actualExit:      actualExit != null && actualExit !== '' ? Number(actualExit) : null,
-    notes:           notes || '',
+    id:          existing?.id || (Date.now().toString(36) + Math.random().toString(36).slice(2, 6)),
+    alertKey:    key,
+    symbol,      timeframe, setupType,
+    direction:   direction || existing?.direction || 'bullish',
+    mode:        mode || 'take',
+    takenAt:     existing?.takenAt || new Date().toISOString(),
+    actualEntry: actualEntry != null ? Number(actualEntry) : null,
+    actualSL:    actualSL   != null ? Number(actualSL)    : null,
+    actualTP:    actualTP   != null ? Number(actualTP)    : null,
+    actualExit:  actualExit != null && actualExit !== '' ? Number(actualExit) : null,
+    contracts:   contracts  != null ? Number(contracts)   : (existing?.contracts ?? null),
+    dca:         dca        != null ? Boolean(dca)        : (existing?.dca ?? false),
+    sentiment:   sentiment  || existing?.sentiment || 'neutral',
+    outcome:     outcome    || existing?.outcome   || null,
+    pnl:         pnl        != null ? Number(pnl)         : (existing?.pnl ?? null),
+    confidence:  confidence != null ? Number(confidence)  : (existing?.confidence ?? null),
+    rationale:    rationale    || existing?.rationale    || '',
+    notes:        notes        != null ? notes             : (existing?.notes ?? ''),
+    accountId:    accountId    || existing?.accountId    || null,
+    accountLabel: accountLabel || existing?.accountLabel || null,
+    accountType:  accountType  || existing?.accountType  || null,
   };
   if (isManual || !alertKey) {
-    trade.isManual       = true;
-    trade.direction      = direction || 'bullish';
+    trade.isManual        = true;
     trade.manualSetupType = manualSetupType || setupType || '';
   }
   const idx = tradeLog.findIndex(t => t.alertKey === key);
@@ -410,6 +423,129 @@ app.post('/api/trades', (req, res) => {
   saveTradeLog(tradeLog);
   console.log(`[trade] ${idx >= 0 ? 'Updated' : 'Saved'} trade for ${key}`);
   res.json({ trade });
+});
+
+// PATCH /api/trades/:id — update specific fields on an existing trade
+app.patch('/api/trades/:id', (req, res) => {
+  const idx = tradeLog.findIndex(t => t.id === req.params.id || t.alertKey === req.params.id);
+  if (idx < 0) return res.status(404).json({ error: 'Trade not found' });
+  const allowed = ['actualEntry','actualSL','actualTP','actualExit','contracts','dca','sentiment','outcome','pnl','notes','rationale','accountId','accountLabel','accountType'];
+  const updates = {};
+  for (const k of allowed) {
+    if (req.body[k] !== undefined) updates[k] = req.body[k];
+  }
+  tradeLog[idx] = { ...tradeLog[idx], ...updates };
+  saveTradeLog(tradeLog);
+  res.json({ trade: tradeLog[idx] });
+});
+
+// DELETE /api/trades/:id — remove a trade entry
+app.delete('/api/trades/:id', (req, res) => {
+  const idx = tradeLog.findIndex(t => t.id === req.params.id || t.alertKey === req.params.id);
+  if (idx < 0) return res.status(404).json({ error: 'Trade not found' });
+  const [removed] = tradeLog.splice(idx, 1);
+  saveTradeLog(tradeLog);
+  res.json({ removed: removed.id });
+});
+
+// GET /api/accounts — combined list of prop firm accounts + real account brokers for trade linking
+app.get('/api/accounts', (_req, res) => {
+  const pf = JSON.parse(fs.readFileSync(PF_PATH, 'utf8') || '{}');
+  const ra = _loadRA();
+  const pfAccounts = (pf.accounts || []).map(a => ({
+    id:    `pf:${a.id}`,
+    rawId: a.id,
+    label: `${a.firm}${a.notes ? ' — ' + a.notes : ''}`,
+    firm:  a.firm,
+    type:  'propfirm',
+    phase: a.phase || 'challenge',
+    status: a.status,
+  }));
+  const raBrokers = [...new Set((ra.trades || []).map(t => t.broker || 'Optimus Futures'))]
+    .map(b => ({ id: `ra:${b}`, label: `Real Account — ${b}`, firm: b, type: 'realaccount' }));
+  res.json({ accounts: [...pfAccounts, ...raBrokers] });
+});
+
+// Point values for P&L auto-calc
+const FILL_POINT_VALUE = { MNQ: 2, MGC: 10, MES: 5, MCL: 100, BTC: 1, ETH: 0.01, XRP: 0.0001 };
+
+function _recomputeTrade(t) {
+  const entries = t.entries || [];
+  const exits   = t.exits   || [];
+  if (entries.length > 0) {
+    const totalQty  = entries.reduce((s, e) => s + e.qty, 0);
+    const weighted  = entries.reduce((s, e) => s + e.qty * e.price, 0);
+    t.actualEntry = totalQty > 0 ? +(weighted / totalQty).toFixed(4) : t.actualEntry;
+    t.contracts   = totalQty;
+  }
+  if (exits.length > 0) {
+    const totalExited = exits.reduce((s, e) => s + e.qty, 0);
+    const totalEntries = (t.entries || []).reduce((s, e) => s + e.qty, 0);
+    t.remainingContracts = Math.max(0, totalEntries - totalExited);
+    t.pnl = +exits.reduce((s, e) => s + (e.pnl || 0), 0).toFixed(2);
+    if (t.remainingContracts === 0) {
+      t.outcome = t.pnl >= 0 ? 'won' : 'lost';
+    }
+  }
+  return t;
+}
+
+// POST /api/trades/:id/entry — append a DCA entry fill
+app.post('/api/trades/:id/entry', (req, res) => {
+  const idx = tradeLog.findIndex(t => t.id === req.params.id);
+  if (idx < 0) return res.status(404).json({ error: 'Trade not found' });
+  const { qty, price } = req.body;
+  if (!qty || !price) return res.status(400).json({ error: 'qty and price required' });
+  if (!tradeLog[idx].entries) tradeLog[idx].entries = [];
+  tradeLog[idx].entries.push({ qty: Number(qty), price: Number(price), at: new Date().toISOString() });
+  tradeLog[idx].dca = tradeLog[idx].entries.length > 1;
+  _recomputeTrade(tradeLog[idx]);
+  saveTradeLog(tradeLog);
+  res.json({ trade: tradeLog[idx] });
+});
+
+// DELETE /api/trades/:id/entry/:idx — remove a DCA entry by index
+app.delete('/api/trades/:id/entry/:eidx', (req, res) => {
+  const idx = tradeLog.findIndex(t => t.id === req.params.id);
+  if (idx < 0) return res.status(404).json({ error: 'Trade not found' });
+  const eidx = parseInt(req.params.eidx);
+  if (!tradeLog[idx].entries || !tradeLog[idx].entries[eidx]) return res.status(404).json({ error: 'Entry not found' });
+  tradeLog[idx].entries.splice(eidx, 1);
+  tradeLog[idx].dca = (tradeLog[idx].entries.length > 1);
+  _recomputeTrade(tradeLog[idx]);
+  saveTradeLog(tradeLog);
+  res.json({ trade: tradeLog[idx] });
+});
+
+// POST /api/trades/:id/exit — append a tiered exit
+app.post('/api/trades/:id/exit', (req, res) => {
+  const idx = tradeLog.findIndex(t => t.id === req.params.id);
+  if (idx < 0) return res.status(404).json({ error: 'Trade not found' });
+  const { qty, price, pnl } = req.body;
+  if (!qty || !price) return res.status(400).json({ error: 'qty and price required' });
+  const t      = tradeLog[idx];
+  const pv     = FILL_POINT_VALUE[t.symbol] || 1;
+  const avgE   = t.actualEntry || 0;
+  const dir    = t.direction || 'bullish';
+  const autoPnl = pnl != null ? Number(pnl)
+    : +(((dir === 'bullish' ? Number(price) - avgE : avgE - Number(price)) * Number(qty) * pv).toFixed(2));
+  if (!t.exits) t.exits = [];
+  t.exits.push({ qty: Number(qty), price: Number(price), pnl: autoPnl, at: new Date().toISOString() });
+  _recomputeTrade(t);
+  saveTradeLog(tradeLog);
+  res.json({ trade: t });
+});
+
+// DELETE /api/trades/:id/exit/:xidx — remove an exit by index
+app.delete('/api/trades/:id/exit/:xidx', (req, res) => {
+  const idx = tradeLog.findIndex(t => t.id === req.params.id);
+  if (idx < 0) return res.status(404).json({ error: 'Trade not found' });
+  const xidx = parseInt(req.params.xidx);
+  if (!tradeLog[idx].exits || !tradeLog[idx].exits[xidx]) return res.status(404).json({ error: 'Exit not found' });
+  tradeLog[idx].exits.splice(xidx, 1);
+  _recomputeTrade(tradeLog[idx]);
+  saveTradeLog(tradeLog);
+  res.json({ trade: tradeLog[idx] });
 });
 
 // PATCH /api/alerts/:key — manually set outcome (won/lost/open) for a taken alert

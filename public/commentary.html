@@ -11,23 +11,25 @@
   <div id="app">
 
     <header id="topbar">
-      <div id="brand">
-        <a href="/" class="brand-link">FuturesEdge AI</a>
-        <span class="brand-sep">/</span>
-        <span class="brand-page">AI Analysis</span>
-      </div>
-
-      <div id="controls">
-        <div class="control-group">
+      <div class="tb-brand-block">
+        <span id="brand">FuturesEdge AI</span>
+        <div style="display:flex;align-items:center;gap:8px;">
           <span id="commentary-status" class="commentary-status">—</span>
+          <button id="refresh-btn" class="action-btn">✦ Refresh AI</button>
         </div>
       </div>
-
-      <div id="topbar-actions">
-        <button id="refresh-btn" class="action-btn">✦ AI Analysis</button>
-        <a href="/scanner.html" class="action-btn">Scanner</a>
-        <a href="/" class="action-btn">← Dashboard</a>
-      </div>
+      <nav class="tb-nav-links">
+        <a href="/">Dashboard</a>
+        <a href="/scanner.html">Scanner</a>
+        <a href="/commentary.html" class="active">AI</a>
+        <a href="/performance.html">Stats</a>
+        <a href="/backtest.html">Replay</a>
+        <a href="/tradelog.html">Trade Log</a>
+        <a href="/propfirms.html">Prop Firms</a>
+        <a href="/tradingaccount.html">Real Account</a>
+        <a href="/docs.html">Guide</a>
+        <a href="/api/export" download>Export</a>
+      </nav>
     </header>
 
     <main id="commentary-main">

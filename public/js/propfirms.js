@@ -35,8 +35,9 @@ function renderSummary() {
   const payouts    = _data.payouts.reduce((s, p) => s + (+p.amount || 0), 0);
   const net        = firmSpend + expSpend - payouts;
   const attempts   = _data.accounts.length;
-  const passed     = _data.accounts.filter(a => a.status === 'passed').length;
-  const active     = _data.accounts.filter(a => a.status === 'active').length;
+  const passed     = _data.accounts.filter(a => a.status === 'passed' || a.phase === 'funded').length;
+  const active     = _data.accounts.filter(a => (!a.phase || a.phase === 'challenge') && a.status === 'active').length
+                   + _data.accounts.filter(a => a.phase === 'funded' && !a.fundedFailed).length;
   const passRate   = attempts > 0 ? Math.round(passed / attempts * 100) : null;
   const avgCost    = attempts > 0 ? firmSpend / attempts : null;
 
@@ -50,9 +51,241 @@ function renderSummary() {
   $('stat-avgcost').textContent    = avgCost != null ? fmt(avgCost) : '—';
 }
 
-function _statusBadge(s) {
+function _statusBadge(a) {
+  if (a.phase === 'funded') {
+    if (a.fundedFailed) return `<span class="pf-badge pf-badge-funded-failed">Funded ✗</span>`;
+    return `<span class="pf-badge pf-badge-funded">Funded</span>`;
+  }
+  const s   = a.status || 'active';
   const cls = s === 'passed' ? 'pf-badge-passed' : s === 'active' ? 'pf-badge-active' : 'pf-badge-failed';
   return `<span class="pf-badge ${cls}">${s}</span>`;
+}
+
+// ── Drawdown engine ──────────────────────────────────────────────────────────
+// Returns { avail, floor, peak, type } or null if maxDrawdown not set.
+// Three types:
+//   static        — floor = accountSize - maxDD (never moves)
+//   eod_trail     — floor trails highest EOD cumulative balance
+//   intraday_trail— floor trails highest peak from log (uses entry.maxValue if present,
+//                   otherwise falls back to that day's EOD balance)
+
+function _computeDD(a) {
+  const size  = +a.accountSize || 0;
+  const maxDD = +a.maxDrawdown || 0;
+  if (!maxDD) return null;
+
+  const cv      = +a.currentValue || size;
+  const entries = (a.dailyProgress || []).slice()
+    .sort((x, y) => (x.date || '').localeCompare(y.date || ''));
+
+  // ── Funded account: trail until lock threshold, then lock static at accountSize ──
+  // Lock threshold = accountSize + maxDD + 100 (e.g. 50K + 2K + 100 = 52,100)
+  // Once peak ever hits that threshold, floor permanently = accountSize.
+  if (a.phase === 'funded') {
+    const lockThreshold = size + maxDD + 100;
+    let cumPnl = 0, peakBalance = size;
+    for (const d of entries) {
+      cumPnl += +d.pnl || 0;
+      const eod      = size + cumPnl;
+      const dayPeak  = (a.ddType === 'intraday_trail' && d.maxValue) ? +d.maxValue : eod;
+      if (dayPeak > peakBalance) peakBalance = dayPeak;
+    }
+    const locked = peakBalance >= lockThreshold;
+    if (locked) {
+      return { avail: cv - size, floor: size, peak: peakBalance, type: 'funded_locked', locked: true };
+    } else {
+      const floor = peakBalance - maxDD;
+      return { avail: cv - floor, floor, peak: peakBalance, lockThreshold, type: 'funded_trail', locked: false };
+    }
+  }
+
+  // ── Challenge accounts ────────────────────────────────────────────────────────
+  if (!a.ddType || a.ddType === 'static') {
+    const floor = size - maxDD;
+    return { avail: cv - floor, floor, peak: null, type: 'static' };
+  }
+
+  if (a.ddType === 'eod_trail') {
+    let cumPnl = 0, peakEOD = size;
+    for (const d of entries) {
+      cumPnl += +d.pnl || 0;
+      const eod = size + cumPnl;
+      if (eod > peakEOD) peakEOD = eod;
+    }
+    const floor = peakEOD - maxDD;
+    return { avail: cv - floor, floor, peak: peakEOD, type: 'eod_trail' };
+  }
+
+  if (a.ddType === 'intraday_trail') {
+    let cumPnl = 0, peakAll = size;
+    for (const d of entries) {
+      cumPnl += +d.pnl || 0;
+      const eod      = size + cumPnl;
+      const dayPeak  = +d.maxValue || eod;   // use logged peak if available
+      if (dayPeak > peakAll) peakAll = dayPeak;
+    }
+    const floor = peakAll - maxDD;
+    return { avail: cv - floor, floor, peak: peakAll, type: 'intraday_trail' };
+  }
+
+  return null;
+}
+
+function _liveStats(a) {
+  const size = +a.accountSize || 0;
+  const cv   = +a.currentValue || 0;
+  if (!cv) return '<span class="pf-dim">—</span>';
+
+  const pnl    = cv - size;
+  const pnlCls = pnl > 0 ? 'pf-pos' : pnl < 0 ? 'pf-neg' : '';
+  const pnlStr = (pnl >= 0 ? '+' : '') + fmt(pnl);
+
+  const dd      = _computeDD(a);
+  const maxDD   = +a.maxDrawdown || 0;
+  const ddAvail = dd ? dd.avail : null;
+  const ddPct   = dd && maxDD > 0
+    ? Math.min(100, Math.max(0, ((maxDD - dd.avail) / maxDD * 100))).toFixed(1)
+    : 0;
+  const ddCls   = ddAvail !== null && ddAvail < maxDD * 0.25 ? 'pf-neg'
+                : ddAvail !== null && ddAvail < maxDD * 0.5  ? 'pf-warn'
+                : 'pf-dim';
+
+  const ddLabel = !dd ? ''
+    : dd.type === 'funded_locked'  ? `LOCKED · floor = ${fmt(dd.floor)}`
+    : dd.type === 'funded_trail'   ? `Trailing · need ${fmt(dd.lockThreshold)} to lock`
+    : dd.type === 'eod_trail'      ? `EOD · peak ${fmt(dd.peak)}`
+    : dd.type === 'intraday_trail' ? `Intraday · peak ${fmt(dd.peak)}`
+    : 'Static';
+
+  return `
+    <div class="pf-live-val">${fmt(cv)}</div>
+    <div class="pf-live-pnl ${pnlCls}">${pnlStr}</div>
+    ${ddAvail !== null ? `
+      <div class="pf-live-dd ${ddCls}">DD avail: ${fmt(ddAvail)}</div>
+      ${dd.peak ? `<div class="pf-live-dd-label">${ddLabel}</div>` : ''}
+      <div class="pf-dd-bar-wrap"><div class="pf-dd-bar" style="width:${ddPct}%"></div></div>
+    ` : ''}
+  `;
+}
+
+function _progressPanel(a) {
+  const entries   = (a.dailyProgress || []).slice().sort((x, y) => (y.date || '').localeCompare(x.date || ''));
+  const total     = entries.reduce((s, d) => s + (+d.pnl || 0), 0);
+  const totCls    = total > 0 ? 'pf-pos' : total < 0 ? 'pf-neg' : '';
+  const showPeak  = a.ddType === 'intraday_trail';
+  const dd        = _computeDD(a);
+  const isFunded  = a.phase === 'funded';
+  // Payouts linked to this account
+  const acctPayouts = (_data.payouts || []).filter(p => p.accountId === a.id)
+    .sort((x, y) => (y.date || '').localeCompare(x.date || ''));
+  const totalReceived = acctPayouts.reduce((s, p) => s + (+p.amount || 0), 0);
+  const totalGross    = acctPayouts.reduce((s, p) => s + (+p.grossAmount || +p.amount || 0), 0);
+  const totalPayouts  = totalReceived; // used for header display
+
+  const ddDetail = !dd ? '' : dd.type === 'funded_locked'
+    ? `<span class="pf-dd-detail pf-dd-locked-label">
+        DD LOCKED · Floor: ${fmt(dd.floor)} · Avail: <span class="${dd.avail < 0 ? 'pf-neg' : 'pf-pos'}">${fmt(dd.avail)}</span>
+      </span>`
+    : dd.type === 'funded_trail'
+    ? `<span class="pf-dd-detail pf-dim">
+        Trailing · Peak: ${fmt(dd.peak)} · Floor: ${fmt(dd.floor)} · Avail: <span class="${dd.avail < 0 ? 'pf-neg' : 'pf-pos'}">${fmt(dd.avail)}</span>
+        <span class="pf-dd-lock-hint">· locks at ${fmt(dd.lockThreshold)}</span>
+      </span>`
+    : `<span class="pf-dd-detail pf-dim">
+        Floor: ${fmt(dd.floor)}
+        ${dd.peak ? `· Peak: ${fmt(dd.peak)}` : ''}
+        · Avail: <span class="${dd.avail < 0 ? 'pf-neg' : 'pf-pos'}">${fmt(dd.avail)}</span>
+      </span>`;
+
+  return `
+    <div class="pf-progress-panel">
+      <div class="pf-progress-header">
+        <span class="pf-progress-title">Daily Log — ${_esc(a.firm)}${isFunded ? ' <span class="pf-badge pf-badge-funded pf-badge-sm">Funded</span>' : ''}</span>
+        ${entries.length ? `<span class="pf-progress-total ${totCls}">${total >= 0 ? '+' : ''}${fmt(total)}</span>` : ''}
+        ${ddDetail}
+        <button class="pf-add-day-btn" onclick="showAddDay('${a.id}')">+ Add Day</button>
+      </div>
+      <div id="add-day-${a.id}" class="pf-add-day-form" style="display:none">
+        <input type="hidden" id="day-id-${a.id}" />
+        <input type="date"   id="day-date-${a.id}" />
+        <input type="number" step="0.01" id="day-pnl-${a.id}" placeholder="Daily P&L ($)" />
+        ${showPeak ? `<input type="number" step="0.01" id="day-maxval-${a.id}" placeholder="Peak Balance ($)" />` : ''}
+        <input type="text" id="day-notes-${a.id}" placeholder="Notes…" />
+        <button class="pf-save-btn"   onclick="saveDayEntry('${a.id}')">Save</button>
+        <button class="pf-cancel-btn" onclick="cancelDayEdit('${a.id}')">Cancel</button>
+      </div>
+      ${entries.length ? `
+        <table class="pf-day-table">
+          <thead><tr><th>Date</th><th>Daily P&L</th><th>Balance</th>${showPeak ? '<th>Peak Bal</th>' : ''}<th>Notes</th><th></th></tr></thead>
+          <tbody>
+            ${(function() {
+              let cum = +a.accountSize || 0;
+              // build in chronological order for running balance, then reverse for display
+              const chron = (a.dailyProgress || []).slice().sort((x, y) => (x.date || '').localeCompare(y.date || ''));
+              const balMap = {};
+              for (const d of chron) { cum += +d.pnl || 0; balMap[d.id] = cum; }
+              return entries.map(d => `
+              <tr>
+                <td>${fmtDate(d.date)}</td>
+                <td style="font-family:monospace" class="${+d.pnl >= 0 ? 'pf-pos' : 'pf-neg'}">${+d.pnl >= 0 ? '+' : ''}${fmt(d.pnl)}</td>
+                <td style="font-family:monospace" class="pf-dim">${fmt(balMap[d.id])}</td>
+                ${showPeak ? `<td style="font-family:monospace" class="pf-dim">${d.maxValue ? fmt(d.maxValue) : '—'}</td>` : ''}
+                <td class="pf-notes-text">${_esc(d.notes || '')}</td>
+                <td>
+                  <div class="pf-row-actions">
+                    <button class="pf-edit-btn" onclick="editDayEntry('${a.id}','${d.id}')">Edit</button>
+                    <button class="pf-del-btn"  onclick="deleteDayEntry('${a.id}','${d.id}')">Del</button>
+                  </div>
+                </td>
+              </tr>
+            `).join('');
+            })()}
+          </tbody>
+        </table>
+      ` : '<div class="pf-empty" style="padding:10px 0">No entries yet — click "+ Add Day" to start logging.</div>'}
+
+      ${isFunded ? `
+        <div class="pf-payout-section">
+          <div class="pf-payout-header">
+            <span class="pf-payout-title">Payouts</span>
+            ${totalReceived > 0 ? `<span class="pf-pos pf-payout-total">${fmt(totalReceived)} received</span>` : ''}
+            ${totalGross > totalReceived ? `<span class="pf-dim" style="font-size:11px">(${fmt(totalGross)} withdrawn)</span>` : ''}
+            <button class="pf-add-day-btn" onclick="showAddAccountPayout('${a.id}')">+ Add Payout</button>
+          </div>
+          <div id="add-payout-${a.id}" class="pf-add-day-form" style="display:none">
+            <input type="hidden" id="ap-id-${a.id}" />
+            <input type="date"   id="ap-date-${a.id}" />
+            <input type="number" step="0.01" id="ap-amount-${a.id}" placeholder="Received ($)" />
+            <input type="number" step="0.01" id="ap-gross-${a.id}" placeholder="Gross withdrawal ($) if split" />
+            <input type="text"   id="ap-notes-${a.id}" placeholder="Notes…" />
+            <button class="pf-save-btn"   onclick="saveAccountPayout('${a.id}')">Save</button>
+            <button class="pf-cancel-btn" onclick="cancelAccountPayout('${a.id}')">Cancel</button>
+          </div>
+          ${acctPayouts.length ? `
+            <table class="pf-day-table">
+              <thead><tr><th>Date</th><th>Received</th><th>Gross</th><th>Notes</th><th></th></tr></thead>
+              <tbody>
+                ${acctPayouts.map(p => `
+                  <tr>
+                    <td>${fmtDate(p.date)}</td>
+                    <td style="font-family:monospace" class="pf-pos">${fmt(p.amount)}</td>
+                    <td style="font-family:monospace" class="pf-dim">${p.grossAmount ? fmt(p.grossAmount) : '—'}</td>
+                    <td class="pf-notes-text">${_esc(p.notes || '')}</td>
+                    <td>
+                      <div class="pf-row-actions">
+                        <button class="pf-edit-btn" onclick="editAccountPayout('${a.id}','${p.id}')">Edit</button>
+                        <button class="pf-del-btn"  onclick="deleteAccountPayout('${p.id}')">Del</button>
+                      </div>
+                    </td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          ` : '<div class="pf-empty" style="padding:6px 0;font-size:11px">No payouts yet.</div>'}
+        </div>
+      ` : ''}
+    </div>
+  `;
 }
 
 function renderAccounts() {
@@ -60,13 +293,18 @@ function renderAccounts() {
   const firmFilter   = $('filter-firm')?.value   || 'ALL';
 
   const rows = _data.accounts
-    .filter(a => (statusFilter === 'ALL' || a.status === statusFilter)
-              && (firmFilter   === 'ALL' || a.firm === firmFilter))
+    .filter(a => {
+      if (firmFilter !== 'ALL' && a.firm !== firmFilter) return false;
+      if (statusFilter === 'ALL')           return true;
+      if (statusFilter === 'funded')        return a.phase === 'funded' && !a.fundedFailed;
+      if (statusFilter === 'funded_failed') return a.phase === 'funded' && a.fundedFailed;
+      return (!a.phase || a.phase === 'challenge') && a.status === statusFilter;
+    })
     .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 
   const tbody = $('accounts-tbody');
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="7" class="pf-empty">No accounts match the filter.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="pf-empty">No accounts match the filter.</td></tr>';
     return;
   }
 
@@ -76,17 +314,26 @@ function renderAccounts() {
       <td data-label="Date">${fmtDate(a.date)}</td>
       <td data-label="Size">${fmtSize(a.accountSize)}</td>
       <td data-label="Cost" style="font-family:monospace">${fmt(a.cost)}</td>
-      <td data-label="Status">${_statusBadge(a.status)}</td>
+      <td data-label="Status">
+        ${_statusBadge(a)}
+        ${a.subStatus ? `<div class="pf-sub-status">${_esc(a.subStatus)}</div>` : ''}
+      </td>
+      <td data-label="Live" class="pf-live-cell">${_liveStats(a)}</td>
       <td data-label="Notes" class="pf-notes-cell">
         ${a.blowReason ? `<div class="pf-notes-reason">&#9888; ${_esc(a.blowReason)}</div>` : ''}
         ${a.notes      ? `<div class="pf-notes-text">${_esc(a.notes)}</div>` : ''}
       </td>
       <td data-label="" class="pf-actions-cell">
         <div class="pf-row-actions">
-          <button class="pf-edit-btn" onclick="editAccount('${a.id}')">Edit</button>
-          <button class="pf-del-btn"  onclick="deleteAccount('${a.id}')">Del</button>
+          <button class="pf-log-btn"    onclick="toggleProgress('${a.id}')">Log</button>
+          <button class="pf-trades-btn" onclick="location.href='/tradelog.html?accountId=pf:${a.id}'" title="View trades for this account">Trades</button>
+          <button class="pf-edit-btn"   onclick="editAccount('${a.id}')">Edit</button>
+          <button class="pf-del-btn"    onclick="deleteAccount('${a.id}')">Del</button>
         </div>
       </td>
+    </tr>
+    <tr class="pf-progress-row" id="prog-${a.id}" style="display:none">
+      <td colspan="8" class="pf-progress-td">${_progressPanel(a)}</td>
     </tr>
   `).join('');
 }
@@ -169,7 +416,7 @@ function _renderPassRates() {
   if (!firms.length) { el.innerHTML = '<div class="pf-notes-text">No data yet.</div>'; return; }
   el.innerHTML = firms.map(firm => {
     const all    = _data.accounts.filter(a => a.firm === firm);
-    const passed = all.filter(a => a.status === 'passed').length;
+    const passed = all.filter(a => a.status === 'passed' || a.phase === 'funded').length;
     const pct    = Math.round(passed / all.length * 100);
     return `
       <div class="an-row">
@@ -263,23 +510,33 @@ function _showAccountForm(title) {
 
 function _hideAccountForm() {
   $('account-form-wrap').style.display = 'none';
-  ['af-id','af-firm','af-date','af-cost','af-blow','af-notes'].forEach(id => { $(id).value = ''; });
+  ['af-id','af-firm','af-date','af-cost','af-blow','af-notes','af-substatus','af-maxdd','af-curval'].forEach(id => { $(id).value = ''; });
+  $('af-ddtype').value = 'static';
   $('af-size').value = '50000';
   $('af-status').value = 'active';
+  $('af-phase').value = 'challenge';
+  $('af-funded-failed').checked = false;
   $('af-size-custom-wrap').style.display = 'none';
   $('af-size-custom').value = '';
+  _togglePhaseFields();
 }
 
 window.editAccount = function(id) {
   const a = _data.accounts.find(x => x.id === id);
   if (!a) return;
-  $('af-id').value     = a.id;
-  $('af-firm').value   = a.firm || '';
-  $('af-date').value   = a.date || '';
-  $('af-cost').value   = a.cost || '';
-  $('af-blow').value   = a.blowReason || '';
-  $('af-notes').value  = a.notes || '';
-  $('af-status').value = a.status || 'active';
+  $('af-id').value           = a.id;
+  $('af-firm').value         = a.firm || '';
+  $('af-date').value         = a.date || '';
+  $('af-cost').value         = a.cost || '';
+  $('af-blow').value         = a.blowReason || '';
+  $('af-notes').value        = a.notes || '';
+  $('af-status').value       = a.status || 'active';
+  $('af-substatus').value    = a.subStatus || '';
+  $('af-maxdd').value        = a.maxDrawdown || '';
+  $('af-curval').value       = a.currentValue || '';
+  $('af-ddtype').value       = a.ddType || 'static';
+  $('af-phase').value        = a.phase || 'challenge';
+  $('af-funded-failed').checked = !!a.fundedFailed;
   const sizeEl = $('af-size');
   const knownSizes = ['25000','50000','100000','150000','200000'];
   if (knownSizes.includes(String(a.accountSize))) {
@@ -291,6 +548,7 @@ window.editAccount = function(id) {
     $('af-size-custom').value = a.accountSize || '';
   }
   _toggleBlowReason();
+  _togglePhaseFields();
   _showAccountForm('Edit Prop Account');
 };
 
@@ -300,23 +558,165 @@ window.deleteAccount = async function(id) {
   await load();
 };
 
+window.toggleProgress = function(id) {
+  const row = document.getElementById('prog-' + id);
+  if (!row) return;
+  row.style.display = row.style.display === 'none' ? '' : 'none';
+};
+
+window.showAddDay = function(id) {
+  const wrap = document.getElementById('add-day-' + id);
+  if (!wrap) return;
+  // Clear form for a new entry
+  const idEl = document.getElementById('day-id-' + id);
+  if (idEl) idEl.value = '';
+  const pnlEl = document.getElementById('day-pnl-' + id);
+  if (pnlEl) pnlEl.value = '';
+  const mvEl = document.getElementById('day-maxval-' + id);
+  if (mvEl) mvEl.value = '';
+  const notesEl = document.getElementById('day-notes-' + id);
+  if (notesEl) notesEl.value = '';
+  const dateEl = document.getElementById('day-date-' + id);
+  if (dateEl) dateEl.value = new Date().toISOString().slice(0, 10);
+  wrap.style.display = '';
+};
+
+window.cancelDayEdit = function(id) {
+  const wrap = document.getElementById('add-day-' + id);
+  if (wrap) wrap.style.display = 'none';
+  const idEl = document.getElementById('day-id-' + id);
+  if (idEl) idEl.value = '';
+};
+
+window.editDayEntry = function(accountId, dayId) {
+  const a = _data.accounts.find(x => x.id === accountId);
+  if (!a) return;
+  const d = (a.dailyProgress || []).find(x => x.id === dayId);
+  if (!d) return;
+  const wrap = document.getElementById('add-day-' + accountId);
+  if (wrap) wrap.style.display = '';
+  const idEl = document.getElementById('day-id-' + accountId);
+  if (idEl) idEl.value = dayId;
+  const dateEl = document.getElementById('day-date-' + accountId);
+  if (dateEl) dateEl.value = d.date || '';
+  const pnlEl = document.getElementById('day-pnl-' + accountId);
+  if (pnlEl) pnlEl.value = d.pnl !== undefined ? d.pnl : '';
+  const mvEl = document.getElementById('day-maxval-' + accountId);
+  if (mvEl) mvEl.value = d.maxValue || '';
+  const notesEl = document.getElementById('day-notes-' + accountId);
+  if (notesEl) notesEl.value = d.notes || '';
+};
+
+window.saveDayEntry = async function(accountId) {
+  const dayId    = document.getElementById('day-id-'     + accountId)?.value || '';
+  const date     = document.getElementById('day-date-'   + accountId)?.value;
+  const pnl      = document.getElementById('day-pnl-'    + accountId)?.value;
+  const maxValue = document.getElementById('day-maxval-' + accountId)?.value || '';
+  const notes    = document.getElementById('day-notes-'  + accountId)?.value || '';
+  if (!date) { alert('Please enter a date.'); return; }
+  if (!pnl)  { alert('Please enter a P&L value.'); return; }
+  await _api('POST', `/api/propfirms/account/${accountId}/day`, { dayId: dayId || undefined, date, pnl, maxValue, notes });
+  await load();
+};
+
+window.deleteDayEntry = async function(accountId, dayId) {
+  if (!confirm('Delete this daily entry?')) return;
+  await _api('DELETE', `/api/propfirms/account/${accountId}/day/${dayId}`);
+  await load();
+};
+
+window.showAddAccountPayout = function(accountId) {
+  const wrap = document.getElementById('add-payout-' + accountId);
+  if (!wrap) return;
+  const idEl = document.getElementById('ap-id-' + accountId);
+  if (idEl) idEl.value = '';
+  const dateEl = document.getElementById('ap-date-' + accountId);
+  if (dateEl) dateEl.value = new Date().toISOString().slice(0, 10);
+  ['ap-amount-','ap-gross-','ap-notes-'].forEach(pfx => {
+    const el = document.getElementById(pfx + accountId);
+    if (el) el.value = '';
+  });
+  wrap.style.display = '';
+};
+
+window.editAccountPayout = function(accountId, payoutId) {
+  const p = (_data.payouts || []).find(x => x.id === payoutId);
+  if (!p) return;
+  const wrap = document.getElementById('add-payout-' + accountId);
+  if (wrap) wrap.style.display = '';
+  const idEl = document.getElementById('ap-id-' + accountId);
+  if (idEl) idEl.value = payoutId;
+  const dateEl = document.getElementById('ap-date-' + accountId);
+  if (dateEl) dateEl.value = p.date || '';
+  const amtEl = document.getElementById('ap-amount-' + accountId);
+  if (amtEl) amtEl.value = p.amount || '';
+  const grossEl = document.getElementById('ap-gross-' + accountId);
+  if (grossEl) grossEl.value = p.grossAmount || '';
+  const notesEl = document.getElementById('ap-notes-' + accountId);
+  if (notesEl) notesEl.value = p.notes || '';
+};
+
+window.cancelAccountPayout = function(accountId) {
+  const wrap = document.getElementById('add-payout-' + accountId);
+  if (wrap) wrap.style.display = 'none';
+  const idEl = document.getElementById('ap-id-' + accountId);
+  if (idEl) idEl.value = '';
+};
+
+window.saveAccountPayout = async function(accountId) {
+  const payoutId  = document.getElementById('ap-id-'     + accountId)?.value || '';
+  const date      = document.getElementById('ap-date-'   + accountId)?.value;
+  const amount    = document.getElementById('ap-amount-' + accountId)?.value;
+  const grossAmount = document.getElementById('ap-gross-'  + accountId)?.value || '';
+  const notes     = document.getElementById('ap-notes-'  + accountId)?.value || '';
+  if (!date || !amount) { alert('Date and received amount required.'); return; }
+  const a = _data.accounts.find(x => x.id === accountId);
+  await _api('POST', '/api/propfirms/payout', {
+    id: payoutId || undefined,
+    accountId, firm: a?.firm || '', date, amount, grossAmount: grossAmount || undefined, notes
+  });
+  await load();
+};
+
+window.deleteAccountPayout = async function(payoutId) {
+  if (!confirm('Delete this payout record?')) return;
+  await _api('DELETE', `/api/propfirms/payout/${payoutId}`);
+  await load();
+};
+
 function _toggleBlowReason() {
-  const status = $('af-status').value;
-  $('af-blow-wrap').style.display = status === 'failed' ? '' : 'none';
+  const status      = $('af-status').value;
+  const phase       = $('af-phase').value;
+  const fundedFailed = $('af-funded-failed').checked;
+  $('af-blow-wrap').style.display = (status === 'failed' || (phase === 'funded' && fundedFailed)) ? '' : 'none';
+}
+
+function _togglePhaseFields() {
+  const isFunded = $('af-phase').value === 'funded';
+  $('af-status-wrap').style.display       = isFunded ? 'none' : '';
+  $('af-funded-failed-wrap').style.display = isFunded ? '' : 'none';
+  _toggleBlowReason();
 }
 
 async function _saveAccount() {
   const sizeEl = $('af-size');
   const size   = sizeEl.value === 'custom' ? +($('af-size-custom').value) : +sizeEl.value;
+  const phase  = $('af-phase').value;
   await _api('POST', '/api/propfirms/account', {
-    id:          $('af-id').value || undefined,
-    firm:        $('af-firm').value.trim(),
-    date:        $('af-date').value,
-    accountSize: size,
-    cost:        $('af-cost').value,
-    status:      $('af-status').value,
-    blowReason:  $('af-blow').value.trim(),
-    notes:       $('af-notes').value.trim(),
+    id:           $('af-id').value || undefined,
+    firm:         $('af-firm').value.trim(),
+    date:         $('af-date').value,
+    accountSize:  size,
+    cost:         $('af-cost').value,
+    status:       phase === 'funded' ? 'passed' : $('af-status').value,
+    subStatus:    $('af-substatus').value.trim(),
+    blowReason:   $('af-blow').value.trim(),
+    notes:        $('af-notes').value.trim(),
+    maxDrawdown:  $('af-maxdd').value,
+    currentValue: $('af-curval').value,
+    ddType:       $('af-ddtype').value,
+    phase,
+    fundedFailed: phase === 'funded' ? $('af-funded-failed').checked : false,
   });
   _hideAccountForm();
   await load();
@@ -423,6 +823,8 @@ function init() {
   $('af-cancel').addEventListener('click', _hideAccountForm);
   $('af-save').addEventListener('click', _saveAccount);
   $('af-status').addEventListener('change', _toggleBlowReason);
+  $('af-phase').addEventListener('change', _togglePhaseFields);
+  $('af-funded-failed').addEventListener('change', _toggleBlowReason);
   $('af-size').addEventListener('change', () => {
     $('af-size-custom-wrap').style.display = $('af-size').value === 'custom' ? '' : 'none';
   });

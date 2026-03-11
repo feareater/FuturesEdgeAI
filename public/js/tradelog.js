@@ -1,0 +1,707 @@
+/* FuturesEdge AI — Trade Log page */
+(function () {
+  'use strict';
+
+  let _trades   = [];
+  let _filtered = [];
+  let _accounts = [];
+  let _sortKey  = 'takenAt';
+  let _sortAsc  = false;
+  let _editId   = null;
+  let _ladderId = null;   // trade ID currently open in Fill Ladder
+
+  const $ = id => document.getElementById(id);
+
+  // ── Accounts ──────────────────────────────────────────────────────────────
+
+  async function _loadAccounts() {
+    try {
+      const r = await fetch('/api/accounts');
+      const { accounts } = await r.json();
+      _accounts = accounts || [];
+      _populateAccountDropdowns();
+      // Apply URL param after accounts are loaded
+      const urlAcct = new URLSearchParams(location.search).get('accountId');
+      if (urlAcct) {
+        $('filter-account').value = urlAcct;
+        // Show account name in heading
+        const acct = _accounts.find(a => a.id === urlAcct);
+        if (acct) {
+          const badge = document.createElement('span');
+          badge.className = 'tl-acct-heading';
+          badge.textContent = `Showing: ${acct.label}`;
+          $('tl-toolbar').prepend(badge);
+        }
+      }
+    } catch (_) {}
+  }
+
+  function _populateAccountDropdowns() {
+    const pfAccts = _accounts.filter(a => a.type === 'propfirm');
+    const raAccts = _accounts.filter(a => a.type === 'realaccount');
+
+    function _buildOptions(sel) {
+      sel.innerHTML = '<option value="">— None —</option>';
+      if (pfAccts.length) {
+        const grp = document.createElement('optgroup');
+        grp.label = 'Prop Firm Accounts';
+        pfAccts.forEach(a => {
+          const o = document.createElement('option');
+          o.value = a.id; o.textContent = a.label;
+          grp.appendChild(o);
+        });
+        sel.appendChild(grp);
+      }
+      if (raAccts.length) {
+        const grp = document.createElement('optgroup');
+        grp.label = 'Real Accounts';
+        raAccts.forEach(a => {
+          const o = document.createElement('option');
+          o.value = a.id; o.textContent = a.label;
+          grp.appendChild(o);
+        });
+        sel.appendChild(grp);
+      }
+    }
+
+    // Filter dropdown — has extra "All Accounts" option
+    const filterSel = $('filter-account');
+    const prev = filterSel.value;
+    filterSel.innerHTML = '<option value="">All Accounts</option>';
+    if (pfAccts.length) {
+      const grp = document.createElement('optgroup');
+      grp.label = 'Prop Firm Accounts';
+      pfAccts.forEach(a => {
+        const o = document.createElement('option');
+        o.value = a.id; o.textContent = a.label;
+        grp.appendChild(o);
+      });
+      filterSel.appendChild(grp);
+    }
+    if (raAccts.length) {
+      const grp = document.createElement('optgroup');
+      grp.label = 'Real Accounts';
+      raAccts.forEach(a => {
+        const o = document.createElement('option');
+        o.value = a.id; o.textContent = a.label;
+        grp.appendChild(o);
+      });
+      filterSel.appendChild(grp);
+    }
+    if (prev) filterSel.value = prev;
+
+    ['mt-account','em-account'].forEach(id => {
+      const sel = $(id);
+      if (sel) _buildOptions(sel);
+    });
+  }
+
+  const POINT_VALUE = { MNQ: 2, MGC: 10, MES: 5, MCL: 100, BTC: 1, ETH: 0.01, XRP: 0.0001 };
+
+  // ── Fetch ─────────────────────────────────────────────────────────────────
+
+  async function _load() {
+    try {
+      const r = await fetch('/api/trades');
+      const { trades } = await r.json();
+      _trades = (trades || []).sort((a, b) => new Date(b.takenAt) - new Date(a.takenAt));
+      _applyFilters();
+      // Refresh ladder if open
+      if (_ladderId) {
+        const t = _trades.find(x => x.id === _ladderId);
+        if (t) _renderLadder(t);
+      }
+    } catch (e) {
+      $('tl-tbody').innerHTML = `<tr><td colspan="16" class="tl-empty">Failed to load trades</td></tr>`;
+    }
+  }
+
+  // ── Filters ───────────────────────────────────────────────────────────────
+
+  function _applyFilters() {
+    const sym   = $('filter-symbol').value;
+    const out   = $('filter-outcome').value;
+    const sent  = $('filter-sentiment').value;
+    const acct  = $('filter-account').value;
+    const from  = $('filter-date-from').value;
+    const to    = $('filter-date-to').value;
+
+    _filtered = _trades.filter(t => {
+      if (sym  && t.symbol    !== sym)  return false;
+      if (sent && t.sentiment !== sent) return false;
+      if (acct && t.accountId !== acct) return false;
+      if (out) {
+        const o = t.outcome || 'open';
+        if (out === 'open' && o !== 'open' && o !== null && o !== '') return false;
+        if (out === 'won'  && o !== 'won')  return false;
+        if (out === 'lost' && o !== 'lost') return false;
+      }
+      if (from && t.takenAt < from) return false;
+      if (to   && t.takenAt.slice(0,10) > to) return false;
+      return true;
+    });
+
+    _sort();
+    _renderSummary();
+    _renderTable();
+  }
+
+  // ── Sort ──────────────────────────────────────────────────────────────────
+
+  function _sort() {
+    _filtered.sort((a, b) => {
+      let va = a[_sortKey], vb = b[_sortKey];
+      if (va == null) va = '';
+      if (vb == null) vb = '';
+      if (typeof va === 'string') return _sortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+      return _sortAsc ? va - vb : vb - va;
+    });
+  }
+
+  // ── Summary bar ───────────────────────────────────────────────────────────
+
+  function _renderSummary() {
+    const total  = _filtered.length;
+    const won    = _filtered.filter(t => t.outcome === 'won').length;
+    const lost   = _filtered.filter(t => t.outcome === 'lost').length;
+    const open   = _filtered.filter(t => !t.outcome || t.outcome === 'open').length;
+    const wr     = (won + lost) > 0 ? Math.round(won / (won + lost) * 100) : null;
+    const netPnl = _filtered.reduce((s, t) => s + (t.pnl || 0), 0);
+
+    $('stat-total').textContent = `${total} trade${total !== 1 ? 's' : ''}`;
+    $('stat-won').textContent   = `${won} won`;
+    $('stat-lost').textContent  = `${lost} lost`;
+    $('stat-open').textContent  = `${open} open`;
+    $('stat-wr').textContent    = wr != null ? `${wr}% WR` : '—% WR';
+    $('stat-pnl').textContent   = `${netPnl >= 0 ? '+' : ''}$${netPnl.toFixed(0)} net P&L`;
+    $('stat-pnl').className     = `tl-stat ${netPnl >= 0 ? 'bull' : 'bear'}`;
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
+  function _fmtDate(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) +
+           ' ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+  }
+
+  function _fmtP(sym, n) {
+    if (n == null || isNaN(n)) return '—';
+    const dp = ['BTC','ETH'].includes(sym) ? 2 : 2;
+    return Number(n).toFixed(dp);
+  }
+
+  function _setupLabel(t) {
+    const map = { zone_rejection:'Zone Rej', pdh_breakout:'PDH/PDL', trendline_break:'TL Break', or_breakout:'OR Break', bias:'Bias', manual:'Manual' };
+    return map[t.setupType || t.manualSetupType] || (t.setupType || '—');
+  }
+
+  function _outcomeHtml(t) {
+    const o = t.outcome || 'open';
+    if (o === 'won')  return `<span class="tl-badge won">Won</span>`;
+    if (o === 'lost') return `<span class="tl-badge lost">Lost</span>`;
+    return `<span class="tl-badge open">Open</span>`;
+  }
+
+  function _dirHtml(t) {
+    const d = t.direction || '';
+    if (d === 'bullish') return `<span class="tl-dir bull">▲</span>`;
+    if (d === 'bearish') return `<span class="tl-dir bear">▼</span>`;
+    return '—';
+  }
+
+  function _sentimentHtml(t) {
+    const s = t.sentiment || 'neutral';
+    return `<span class="tl-sent ${s}">${s.charAt(0).toUpperCase() + s.slice(1)}</span>`;
+  }
+
+  function _accountPayload(selectedId) {
+    if (!selectedId) return { accountId: null, accountLabel: null, accountType: null };
+    const acct = _accounts.find(a => a.id === selectedId);
+    return {
+      accountId:    selectedId,
+      accountLabel: acct?.label || selectedId,
+      accountType:  acct?.type  || 'propfirm',
+    };
+  }
+
+  function _accountHtml(t) {
+    if (!t.accountId && !t.accountLabel) return '<span class="td-acct-none">—</span>';
+    const label = t.accountLabel || t.accountId || '—';
+    const type  = t.accountType || 'propfirm';
+    const cls   = type === 'realaccount' ? 'acct-real' : 'acct-pf';
+    const short = label.length > 22 ? label.slice(0, 20) + '…' : label;
+    return `<span class="tl-acct-badge ${cls}" title="${label.replace(/"/g,'&quot;')}">${short}</span>`;
+  }
+
+  function _pnlHtml(t) {
+    if (t.pnl == null) return '—';
+    const cls = t.pnl >= 0 ? 'bull' : 'bear';
+    return `<span class="${cls}">${t.pnl >= 0 ? '+' : ''}$${Number(t.pnl).toFixed(0)}</span>`;
+  }
+
+  function _calcBlended(entries) {
+    if (!entries || entries.length === 0) return null;
+    const totalQty = entries.reduce((s, e) => s + e.qty, 0);
+    if (totalQty === 0) return null;
+    return entries.reduce((s, e) => s + e.qty * e.price, 0) / totalQty;
+  }
+
+  // ── Table render ──────────────────────────────────────────────────────────
+
+  function _renderTable() {
+    const tbody = $('tl-tbody');
+    if (_filtered.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="17" class="tl-empty">No trades match the current filters.</td></tr>`;
+      return;
+    }
+
+    tbody.innerHTML = _filtered.map(t => {
+      const hasFills  = (t.entries && t.entries.length > 0) || (t.exits && t.exits.length > 0);
+      const dcaCount  = t.entries ? t.entries.length : 0;
+      const dcaBadge  = t.dca
+        ? `<span class="tl-badge dca">${dcaCount > 1 ? `DCA×${dcaCount}` : 'DCA'}</span>`
+        : '—';
+      const ladderBadge = hasFills
+        ? `<span class="tl-badge ladder">🪜 ${dcaCount}E/${(t.exits||[]).length}X</span>`
+        : '';
+      return `
+      <tr class="tl-row ${t.outcome === 'won' ? 'row-won' : t.outcome === 'lost' ? 'row-lost' : ''}"
+          data-id="${t.id}">
+        <td class="td-date">${_fmtDate(t.takenAt)}</td>
+        <td class="td-sym"><strong>${t.symbol || '—'}</strong></td>
+        <td>${t.timeframe || '—'}</td>
+        <td>${_setupLabel(t)}</td>
+        <td>${_dirHtml(t)}</td>
+        <td>${_fmtP(t.symbol, t.actualEntry)}</td>
+        <td class="bull">${_fmtP(t.symbol, t.actualTP)}</td>
+        <td class="bear">${_fmtP(t.symbol, t.actualSL)}</td>
+        <td>${_fmtP(t.symbol, t.actualExit)}</td>
+        <td>${t.contracts ?? '—'}${t.remainingContracts != null && t.remainingContracts !== t.contracts ? `<span class="td-remain"> (${t.remainingContracts} rem)</span>` : ''}</td>
+        <td>${_pnlHtml(t)}</td>
+        <td>${_outcomeHtml(t)}</td>
+        <td>${_sentimentHtml(t)}</td>
+        <td class="td-dca">${dcaBadge}</td>
+        <td class="td-account">${_accountHtml(t)}</td>
+        <td class="td-notes" title="${(t.notes || '').replace(/"/g, '&quot;')}">${t.notes || '—'}</td>
+        <td class="td-actions">
+          <button class="tl-ladder-btn" data-id="${t.id}" title="Fill Ladder — log DCA entries &amp; exits">🪜</button>
+          <button class="tl-edit-btn"   data-id="${t.id}" title="Edit">✎</button>
+          <button class="tl-del-btn"    data-id="${t.id}" title="Delete">✕</button>
+        </td>
+      </tr>
+      ${hasFills ? `<tr class="tl-fills-row" data-id="${t.id}"><td colspan="16" class="td-fills-bar">${ladderBadge} ${_fillsSummaryHtml(t)}</td></tr>` : ''}
+    `}).join('');
+
+    tbody.querySelectorAll('.tl-ladder-btn').forEach(btn =>
+      btn.addEventListener('click', e => { e.stopPropagation(); _openLadder(btn.dataset.id); }));
+    tbody.querySelectorAll('.tl-edit-btn').forEach(btn =>
+      btn.addEventListener('click', e => { e.stopPropagation(); _openEdit(btn.dataset.id); }));
+    tbody.querySelectorAll('.tl-del-btn').forEach(btn =>
+      btn.addEventListener('click', e => { e.stopPropagation(); _deleteTrade(btn.dataset.id); }));
+  }
+
+  function _fillsSummaryHtml(t) {
+    const entries = t.entries || [];
+    const exits   = t.exits   || [];
+    const parts = [];
+    if (entries.length > 0) {
+      const CHIP_NUMS = ['①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩'];
+      parts.push(entries.map((e, i) => `<span class="fill-chip entry-chip">${CHIP_NUMS[i] || (i+1)} ${e.qty}ct @ ${e.price}</span>`).join(''));
+    }
+    if (exits.length > 0) {
+      parts.push(exits.map(x => {
+        const cls = (x.pnl || 0) >= 0 ? 'exit-chip-win' : 'exit-chip-loss';
+        return `<span class="fill-chip ${cls}">${x.qty}ct @ ${x.price} ${x.pnl != null ? (x.pnl >= 0 ? `+$${x.pnl.toFixed(0)}` : `-$${Math.abs(x.pnl).toFixed(0)}`) : ''}</span>`;
+      }).join(''));
+    }
+    return parts.join('<span class="fill-sep">→</span>');
+  }
+
+  // ── Fill Ladder modal ─────────────────────────────────────────────────────
+
+  function _openLadder(id) {
+    const t = _trades.find(x => x.id === id);
+    if (!t) return;
+    _ladderId = id;
+    _renderLadder(t);
+    $('ladder-modal').style.display = 'flex';
+  }
+
+  function _closeLadder() {
+    $('ladder-modal').style.display = 'none';
+    _ladderId = null;
+  }
+
+  function _renderLadder(t) {
+    const entries = t.entries || [];
+    const exits   = t.exits   || [];
+    const dir     = t.direction || 'bullish';
+    const pv      = POINT_VALUE[t.symbol] || 1;
+    const avg     = _calcBlended(entries) ?? t.actualEntry;
+    const totalCts   = entries.reduce((s, e) => s + e.qty, 0) || t.contracts || 0;
+    const exitedCts  = exits.reduce((s, e) => s + e.qty, 0);
+    const remainCts  = Math.max(0, totalCts - exitedCts);
+    const totalPnl   = exits.reduce((s, e) => s + (e.pnl || 0), 0);
+    const NUMS = ['①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩'];
+
+    // Header
+    const dirArrow = dir === 'bullish' ? '▲' : '▼';
+    const dirCls   = dir === 'bullish' ? 'bull' : 'bear';
+    $('lm-title').innerHTML = `🪜 <strong>${t.symbol}</strong> · <span class="${dirCls}">${dirArrow} ${dir.charAt(0).toUpperCase() + dir.slice(1)}</span> DCA Trade`;
+
+    // Avg badge
+    $('lm-avg-badge').textContent = avg != null ? `avg ${avg.toFixed(2)}` : 'avg —';
+    $('lm-avg-badge').className = `lm-avg-badge ${dirCls}`;
+
+    // Remain badge
+    $('lm-remain-badge').textContent = `${remainCts} / ${totalCts} cts remaining`;
+    $('lm-remain-badge').className   = `lm-remain-badge ${remainCts === 0 ? 'dim' : ''}`;
+
+    // Stats footer
+    $('lm-stats').innerHTML = [
+      avg != null ? `<span>Avg Entry: <strong>${avg.toFixed(2)}</strong></span>` : '',
+      `<span>Total: <strong>${totalCts} cts</strong></span>`,
+      `<span>Remaining: <strong>${remainCts} cts</strong></span>`,
+      exits.length > 0 ? `<span class="${totalPnl >= 0 ? 'bull' : 'bear'}">Realized: <strong>${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)}</strong></span>` : '',
+    ].filter(Boolean).join('<span class="lm-sep">·</span>');
+
+    // P&L total panel
+    if (exits.length > 0) {
+      $('lm-pnl-total').innerHTML = `<span class="${totalPnl >= 0 ? 'bull' : 'bear'}">Realized P&L: ${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)}</span>`;
+    } else {
+      $('lm-pnl-total').textContent = 'No exits yet';
+    }
+
+    // ── Entry ladder ─────────────────────────────────────────────────────────
+    const entryEl = $('lm-entry-ladder');
+    if (entries.length === 0) {
+      entryEl.innerHTML = `<div class="lm-empty-fills">No entries yet — add your first fill below</div>`;
+    } else {
+      // Sort by price descending so highest is at top
+      const sorted = [...entries].map((e, i) => ({ ...e, _orig: i })).sort((a, b) => b.price - a.price);
+      const maxQty = Math.max(...entries.map(e => e.qty));
+      entryEl.innerHTML = sorted.map(e => {
+        const barPct = Math.round((e.qty / maxQty) * 100);
+        const isAvg  = avg != null && Math.abs(e.price - avg) < 0.01;
+        return `
+          <div class="lm-fill-row entry-row ${isAvg ? 'is-avg' : ''}" data-orig="${e._orig}">
+            <span class="lm-num">${NUMS[e._orig] || (e._orig + 1)}</span>
+            <div class="lm-bar-wrap">
+              <div class="lm-bar entry-bar" style="width:${barPct}%"></div>
+            </div>
+            <span class="lm-fill-qty">${e.qty} ct</span>
+            <span class="lm-fill-price">@ ${e.price.toFixed(2)}</span>
+            <span class="lm-fill-time">${_fmtTime(e.at)}</span>
+            <button class="lm-rm-btn" data-type="entry" data-idx="${e._orig}" title="Remove">✕</button>
+          </div>`;
+      }).join('');
+
+      // Avg line
+      if (avg != null) {
+        entryEl.insertAdjacentHTML('beforeend', `
+          <div class="lm-avg-line">
+            <span class="lm-avg-label ${dirCls}">══ avg ${avg.toFixed(2)} ══</span>
+          </div>`);
+      }
+    }
+
+    // ── Exit ladder ──────────────────────────────────────────────────────────
+    const exitEl = $('lm-exit-ladder');
+    if (exits.length === 0) {
+      exitEl.innerHTML = `<div class="lm-empty-fills">No exits yet — log your first exit below</div>`;
+    } else {
+      const sorted = [...exits].map((e, i) => ({ ...e, _orig: i })).sort((a, b) => b.price - a.price);
+      exitEl.innerHTML = sorted.map(x => {
+        const pnlCls = (x.pnl || 0) >= 0 ? 'bull' : 'bear';
+        const pnlStr = x.pnl != null ? `${x.pnl >= 0 ? '+' : ''}$${x.pnl.toFixed(2)}` : '—';
+        return `
+          <div class="lm-fill-row exit-row" data-orig="${x._orig}">
+            <span class="lm-xnum">${x._orig + 1}</span>
+            <div class="lm-bar-wrap">
+              <div class="lm-bar exit-bar ${pnlCls}-bar"></div>
+            </div>
+            <span class="lm-fill-qty">${x.qty} ct</span>
+            <span class="lm-fill-price">@ ${x.price.toFixed(2)}</span>
+            <span class="lm-fill-pnl ${pnlCls}">${pnlStr}</span>
+            <span class="lm-fill-time">${_fmtTime(x.at)}</span>
+            <button class="lm-rm-btn" data-type="exit" data-idx="${x._orig}" title="Remove">✕</button>
+          </div>`;
+      }).join('');
+    }
+
+    // Remove buttons
+    document.querySelectorAll('.lm-rm-btn').forEach(btn => {
+      btn.addEventListener('click', async e => {
+        e.stopPropagation();
+        const type = btn.dataset.type;
+        const idx  = btn.dataset.idx;
+        await fetch(`/api/trades/${_ladderId}/${type}/${idx}`, { method: 'DELETE' });
+        await _load();
+      });
+    });
+
+    // ── Price visualization ───────────────────────────────────────────────────
+    _renderViz(t, entries, exits, avg);
+
+    // ── Wire add-entry inputs ─────────────────────────────────────────────────
+    // Live P&L preview for exit
+    const xPrice = $('lm-x-price');
+    const xQty   = $('lm-x-qty');
+    function _updatePnlPreview() {
+      const p = parseFloat(xPrice.value);
+      const q = parseInt(xQty.value) || 1;
+      if (avg != null && !isNaN(p)) {
+        const pnl = (dir === 'bullish' ? p - avg : avg - p) * q * pv;
+        const el  = $('lm-pnl-preview');
+        el.textContent = `≈ ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(0)}`;
+        el.className   = `lm-pnl-preview ${pnl >= 0 ? 'bull' : 'bear'}`;
+      }
+    }
+    xPrice.removeEventListener('input', _updatePnlPreview);
+    xQty.removeEventListener('input', _updatePnlPreview);
+    xPrice.addEventListener('input', _updatePnlPreview);
+    xQty.addEventListener('input', _updatePnlPreview);
+  }
+
+  function _fmtTime(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+  }
+
+  function _renderViz(t, entries, exits, avg) {
+    const viz = $('lm-viz');
+    const allPrices = [
+      ...entries.map(e => e.price),
+      ...exits.map(x => x.price),
+      ...(avg != null ? [avg] : []),
+      ...(t.actualTP ? [t.actualTP] : []),
+      ...(t.actualSL ? [t.actualSL] : []),
+    ];
+    if (allPrices.length < 2) { viz.innerHTML = ''; return; }
+
+    const minP = Math.min(...allPrices);
+    const maxP = Math.max(...allPrices);
+    const range = maxP - minP || 1;
+    const toY = p => 100 - ((p - minP) / range * 86) - 7; // 7% padding top/bottom
+
+    let svgLines = '';
+    // TP / SL dotted lines
+    if (t.actualTP) svgLines += `<line x1="0" y1="${toY(t.actualTP)}%" x2="100%" y2="${toY(t.actualTP)}%" stroke="rgba(38,166,154,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+      <text x="3" y="${toY(t.actualTP)}%" dy="-3" fill="rgba(38,166,154,0.7)" font-size="8">TP</text>`;
+    if (t.actualSL) svgLines += `<line x1="0" y1="${toY(t.actualSL)}%" x2="100%" y2="${toY(t.actualSL)}%" stroke="rgba(239,83,80,0.4)" stroke-width="1" stroke-dasharray="4,3"/>
+      <text x="3" y="${toY(t.actualSL)}%" dy="-3" fill="rgba(239,83,80,0.7)" font-size="8">SL</text>`;
+    // Avg line
+    if (avg != null) svgLines += `<line x1="0" y1="${toY(avg)}%" x2="100%" y2="${toY(avg)}%" stroke="rgba(255,193,7,0.85)" stroke-width="1.5" stroke-dasharray="6,3"/>`;
+
+    // Entry dots
+    entries.forEach((e, i) => {
+      const alpha = 0.4 + (0.6 / Math.max(entries.length, 1)) * (i + 1);
+      svgLines += `<circle cx="30%" cy="${toY(e.price)}%" r="5" fill="rgba(33,150,243,${alpha})" stroke="rgba(33,150,243,0.9)" stroke-width="1"/>
+        <text x="38%" y="${toY(e.price)}%" dy="4" fill="rgba(33,150,243,0.9)" font-size="8">${e.qty}ct</text>`;
+    });
+
+    // Exit dots
+    exits.forEach(x => {
+      const isWin = (x.pnl || 0) >= 0;
+      const col   = isWin ? 'rgba(38,166,154,0.9)' : 'rgba(239,83,80,0.9)';
+      svgLines += `<polygon points="70%,${toY(x.price)}% ${parseFloat('70')+4}%,${toY(x.price) - 3}% ${parseFloat('70')+4}%,${toY(x.price) + 3}%" fill="${col}"/>
+        <text x="77%" y="${toY(x.price)}%" dy="4" fill="${col}" font-size="8">${x.qty}ct</text>`;
+    });
+
+    viz.innerHTML = `<svg viewBox="0 0 100 100" preserveAspectRatio="none" style="width:100%;height:100%">${svgLines}</svg>`;
+  }
+
+  // ── Add entry/exit handlers ────────────────────────────────────────────────
+
+  $('lm-add-entry').addEventListener('click', async () => {
+    const qty   = parseInt($('lm-e-qty').value);
+    const price = parseFloat($('lm-e-price').value);
+    if (!qty || isNaN(price)) return;
+    await fetch(`/api/trades/${_ladderId}/entry`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ qty, price }),
+    });
+    $('lm-e-qty').value = '';
+    $('lm-e-price').value = '';
+    await _load();
+  });
+
+  $('lm-add-exit').addEventListener('click', async () => {
+    const qty   = parseInt($('lm-x-qty').value);
+    const price = parseFloat($('lm-x-price').value);
+    if (!qty || isNaN(price)) return;
+    await fetch(`/api/trades/${_ladderId}/exit`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ qty, price }),
+    });
+    $('lm-x-qty').value   = '';
+    $('lm-x-price').value = '';
+    $('lm-pnl-preview').textContent = '';
+    await _load();
+  });
+
+  // Enter key in ladder inputs
+  $('lm-e-price').addEventListener('keydown', e => { if (e.key === 'Enter') $('lm-add-entry').click(); });
+  $('lm-x-price').addEventListener('keydown', e => { if (e.key === 'Enter') $('lm-add-exit').click(); });
+
+  $('lm-close').addEventListener('click', _closeLadder);
+  $('ladder-modal').querySelector('.lm-backdrop').addEventListener('click', _closeLadder);
+
+  // ── Edit modal ────────────────────────────────────────────────────────────
+
+  function _openEdit(id) {
+    const t = _trades.find(x => x.id === id);
+    if (!t) return;
+    _editId = id;
+    $('em-entry').value     = t.actualEntry ?? '';
+    $('em-tp').value        = t.actualTP    ?? '';
+    $('em-sl').value        = t.actualSL    ?? '';
+    $('em-exit').value      = t.actualExit  ?? '';
+    $('em-contracts').value = t.contracts   ?? 1;
+    $('em-pnl').value       = t.pnl         ?? '';
+    $('em-outcome').value   = t.outcome     || '';
+    $('em-sentiment').value = t.sentiment   || 'neutral';
+    $('em-dca').checked     = !!t.dca;
+    $('em-notes').value     = t.notes       || '';
+    $('em-account').value   = t.accountId   || '';
+    $('edit-modal').style.display = 'flex';
+  }
+
+  function _closeEdit() {
+    $('edit-modal').style.display = 'none';
+    _editId = null;
+  }
+
+  async function _saveEdit() {
+    if (!_editId) return;
+    const body = {
+      actualEntry: parseFloat($('em-entry').value)   || null,
+      actualTP:    parseFloat($('em-tp').value)      || null,
+      actualSL:    parseFloat($('em-sl').value)      || null,
+      actualExit:  $('em-exit').value !== '' ? parseFloat($('em-exit').value) : null,
+      contracts:   parseInt($('em-contracts').value) || null,
+      pnl:         $('em-pnl').value  !== '' ? parseFloat($('em-pnl').value)  : null,
+      outcome:     $('em-outcome').value || null,
+      sentiment:   $('em-sentiment').value,
+      dca:         $('em-dca').checked,
+      notes:       $('em-notes').value,
+      ..._accountPayload($('em-account').value),
+    };
+    try {
+      const r = await fetch(`/api/trades/${encodeURIComponent(_editId)}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) throw new Error(r.status);
+      _closeEdit();
+      await _load();
+    } catch (e) { alert('Failed to save: ' + e.message); }
+  }
+
+  // ── Delete ────────────────────────────────────────────────────────────────
+
+  async function _deleteTrade(id) {
+    const t = _trades.find(x => x.id === id);
+    if (!t) return;
+    if (!confirm(`Delete ${t.symbol} trade from ${_fmtDate(t.takenAt)}?`)) return;
+    try {
+      await fetch(`/api/trades/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      await _load();
+    } catch (e) { alert('Delete failed: ' + e.message); }
+  }
+
+  // ── Manual trade form ─────────────────────────────────────────────────────
+
+  function _showManualForm(show) {
+    $('manual-trade-form').style.display = show ? 'block' : 'none';
+    if (show) {
+      ['mt-entry','mt-tp','mt-sl','mt-exit','mt-pnl'].forEach(id => { $(id).value = ''; });
+      $('mt-contracts').value = 1;
+      $('mt-symbol').value    = 'MNQ';
+      $('mt-tf').value        = '15m';
+      $('mt-setup').value     = 'manual';
+      $('mt-direction').value = 'bullish';
+      $('mt-sentiment').value = 'bullish';
+      $('mt-dca').checked     = false;
+      $('mt-notes').value     = '';
+    }
+  }
+
+  async function _saveManual() {
+    const entry = parseFloat($('mt-entry').value);
+    const sl    = parseFloat($('mt-sl').value);
+    const tp    = parseFloat($('mt-tp').value);
+    if (isNaN(entry) || isNaN(sl) || isNaN(tp)) { alert('Entry, TP, and SL are required.'); return; }
+    const exitVal = $('mt-exit').value !== '' ? parseFloat($('mt-exit').value) : null;
+    const pnlVal  = $('mt-pnl').value  !== '' ? parseFloat($('mt-pnl').value)  : null;
+    const body = {
+      symbol: $('mt-symbol').value, timeframe: $('mt-tf').value,
+      setupType: $('mt-setup').value, direction: $('mt-direction').value,
+      actualEntry: entry, actualSL: sl, actualTP: tp,
+      actualExit: exitVal, contracts: parseInt($('mt-contracts').value) || 1,
+      pnl: pnlVal, sentiment: $('mt-sentiment').value,
+      dca: $('mt-dca').checked, notes: $('mt-notes').value, isManual: true,
+      ..._accountPayload($('mt-account').value),
+    };
+    if (exitVal != null) {
+      body.outcome = (body.direction === 'bullish' ? exitVal > entry : exitVal < entry) ? 'won' : 'lost';
+    }
+    try {
+      const r = await fetch('/api/trades', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) throw new Error(r.status);
+      const { trade } = await r.json();
+      _showManualForm(false);
+      await _load();
+      // Auto-open ladder if DCA checked
+      if ($('mt-dca').checked) _openLadder(trade.id);
+    } catch (e) { alert('Failed to save: ' + e.message); }
+  }
+
+  // ── Sort header clicks ────────────────────────────────────────────────────
+
+  document.querySelectorAll('#tl-table th[data-sort]').forEach(th => {
+    th.style.cursor = 'pointer';
+    th.addEventListener('click', () => {
+      const key = th.dataset.sort;
+      if (_sortKey === key) _sortAsc = !_sortAsc;
+      else { _sortKey = key; _sortAsc = false; }
+      document.querySelectorAll('#tl-table th').forEach(h => h.classList.remove('sort-asc','sort-desc'));
+      th.classList.add(_sortAsc ? 'sort-asc' : 'sort-desc');
+      _sort();
+      _renderTable();
+    });
+  });
+
+  // ── Wire controls ─────────────────────────────────────────────────────────
+
+  ['filter-symbol','filter-outcome','filter-sentiment','filter-account','filter-date-from','filter-date-to']
+    .forEach(id => $(id)?.addEventListener('change', _applyFilters));
+
+  $('filter-clear').addEventListener('click', () => {
+    ['filter-symbol','filter-outcome','filter-sentiment','filter-account'].forEach(id => { $(id).value = ''; });
+    ['filter-date-from','filter-date-to'].forEach(id => { $(id).value = ''; });
+    // Clear URL param too
+    history.replaceState({}, '', location.pathname);
+    document.querySelector('.tl-acct-heading')?.remove();
+    _applyFilters();
+  });
+
+  $('btn-add-trade').addEventListener('click', () => _showManualForm(true));
+  $('mt-save').addEventListener('click', _saveManual);
+  $('mt-cancel').addEventListener('click', () => _showManualForm(false));
+  $('em-save').addEventListener('click', _saveEdit);
+  $('em-cancel').addEventListener('click', _closeEdit);
+  $('edit-modal').querySelector('.em-backdrop').addEventListener('click', _closeEdit);
+
+  // ── Boot ──────────────────────────────────────────────────────────────────
+
+  _loadAccounts().then(_applyFilters);
+  _load();
+
+})();

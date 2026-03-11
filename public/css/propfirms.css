@@ -299,9 +299,12 @@
   letter-spacing: 0.5px;
 }
 
-.pf-badge-active  { background: rgba(255,193,7,0.18);  color: #ffc107;  border: 1px solid rgba(255,193,7,0.4); }
-.pf-badge-passed  { background: rgba(38,166,154,0.18); color: var(--bull); border: 1px solid rgba(38,166,154,0.4); }
-.pf-badge-failed  { background: rgba(239,83,80,0.18);  color: var(--bear); border: 1px solid rgba(239,83,80,0.4); }
+.pf-badge-active       { background: rgba(255,193,7,0.18);  color: #ffc107;  border: 1px solid rgba(255,193,7,0.4); }
+.pf-badge-passed       { background: rgba(38,166,154,0.18); color: var(--bull); border: 1px solid rgba(38,166,154,0.4); }
+.pf-badge-failed       { background: rgba(239,83,80,0.18);  color: var(--bear); border: 1px solid rgba(239,83,80,0.4); }
+.pf-badge-funded       { background: rgba(100,181,246,0.18); color: #64b5f6; border: 1px solid rgba(100,181,246,0.4); }
+.pf-badge-funded-failed{ background: rgba(239,83,80,0.22);  color: #ff7043; border: 1px solid rgba(239,83,80,0.5); text-decoration: line-through; }
+.pf-badge-sm           { font-size: 9px; padding: 1px 5px; vertical-align: middle; }
 
 /* ── Row action buttons ──────────────────────────────────────────────────── */
 
@@ -324,6 +327,273 @@
 }
 .pf-edit-btn:hover { color: var(--accent); border-color: var(--accent); }
 .pf-del-btn:hover  { color: var(--bear);   border-color: var(--bear); }
+
+/* ── Utility colors ─────────────────────────────────────────────────────── */
+
+.pf-pos  { color: var(--bull); }
+.pf-neg  { color: var(--bear); }
+.pf-warn { color: #ffc107; }
+.pf-dim  { color: var(--text-dim); }
+
+/* ── Sub-status label ────────────────────────────────────────────────────── */
+
+.pf-sub-status {
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-top: 3px;
+  font-style: italic;
+}
+
+/* ── Live stats cell ─────────────────────────────────────────────────────── */
+
+.pf-live-cell {
+  min-width: 110px;
+  white-space: nowrap;
+}
+
+.pf-live-val {
+  font-size: 12px;
+  font-family: monospace;
+  color: var(--text);
+}
+
+.pf-live-pnl {
+  font-size: 11px;
+  font-family: monospace;
+}
+
+.pf-live-dd {
+  font-size: 10px;
+  margin-top: 2px;
+}
+
+.pf-dd-bar-wrap {
+  margin-top: 3px;
+  height: 3px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+  width: 80px;
+}
+
+.pf-dd-bar {
+  height: 100%;
+  background: var(--bear);
+  border-radius: 2px;
+  transition: width 0.3s;
+}
+
+/* ── Log button ──────────────────────────────────────────────────────────── */
+
+.pf-log-btn {
+  background: transparent;
+  border: 1px solid rgba(33,150,243,0.3);
+  border-radius: var(--radius);
+  color: var(--accent);
+  font-size: 10px;
+  padding: 2px 7px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: color 0.12s, border-color 0.12s;
+}
+.pf-log-btn:hover { border-color: var(--accent); background: rgba(33,150,243,0.1); }
+
+.pf-trades-btn {
+  background: transparent;
+  border: 1px solid rgba(255,193,7,0.35);
+  border-radius: var(--radius);
+  color: #ffc107;
+  font-size: 10px;
+  padding: 2px 7px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: color 0.12s, border-color 0.12s;
+}
+.pf-trades-btn:hover { border-color: #ffc107; background: rgba(255,193,7,0.1); }
+
+/* ── Progress panel (inline expanded row) ────────────────────────────────── */
+
+.pf-progress-td {
+  padding: 0 !important;
+  border-bottom: 2px solid rgba(33,150,243,0.2) !important;
+}
+
+.pf-progress-panel {
+  padding: 12px 16px;
+  background: rgba(33,150,243,0.04);
+  border-top: 1px solid rgba(33,150,243,0.15);
+}
+
+.pf-progress-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.pf-progress-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.pf-progress-total {
+  font-size: 12px;
+  font-family: monospace;
+  font-weight: 700;
+}
+
+.pf-dd-detail {
+  font-size: 11px;
+  font-family: monospace;
+  padding: 2px 6px;
+  background: rgba(255,255,255,0.04);
+  border-radius: var(--radius);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.pf-dd-locked-label {
+  font-size: 11px;
+  font-family: monospace;
+  padding: 2px 8px;
+  background: rgba(100,181,246,0.12);
+  border: 1px solid rgba(100,181,246,0.3);
+  border-radius: var(--radius);
+  color: #64b5f6;
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-weight: 700;
+}
+
+.pf-dd-lock-hint {
+  color: var(--text-dim);
+  font-weight: 400;
+}
+
+.pf-payout-section {
+  margin-top: 16px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.pf-payout-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.pf-payout-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: #64b5f6;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.pf-payout-total {
+  font-size: 13px;
+  font-family: monospace;
+  font-weight: 700;
+}
+
+.pf-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.pf-live-dd-label {
+  font-size: 9px;
+  color: var(--text-dim);
+  margin-top: 1px;
+  font-style: italic;
+}
+
+.pf-field-hint {
+  font-size: 9px;
+  color: var(--text-dim);
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  margin-left: 4px;
+  font-style: italic;
+}
+
+.pf-add-day-btn {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid rgba(33,150,243,0.35);
+  border-radius: var(--radius);
+  color: var(--accent);
+  font-size: 11px;
+  padding: 3px 10px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.pf-add-day-btn:hover { background: rgba(33,150,243,0.1); }
+
+/* ── Add-day inline form ─────────────────────────────────────────────────── */
+
+.pf-add-day-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 0 10px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 10px;
+}
+
+.pf-add-day-form input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 12px;
+  padding: 4px 8px;
+  font-family: inherit;
+}
+.pf-add-day-form input:focus { outline: none; border-color: var(--accent); }
+.pf-add-day-form input[type="number"] { width: 110px; }
+.pf-add-day-form input[type="text"]   { flex: 1; min-width: 120px; }
+
+/* ── Daily log table ─────────────────────────────────────────────────────── */
+
+.pf-day-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.pf-day-table th {
+  text-align: left;
+  padding: 4px 8px;
+  color: var(--text-dim);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pf-day-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  color: var(--text);
+  vertical-align: middle;
+}
+
+.pf-day-table tbody tr:last-child td { border-bottom: none; }
+.pf-day-table tbody tr:hover { background: rgba(255,255,255,0.02); }
 
 /* ── Notes / blow reason cell ────────────────────────────────────────────── */
 
@@ -508,5 +778,15 @@
   /* Toolbar: wrap */
   .pf-toolbar { flex-wrap: wrap; }
   .pf-add-btn { min-height: 36px; }
+
+  /* Progress panel: full-width, stacked */
+  .pf-progress-header { flex-wrap: wrap; }
+  .pf-add-day-btn { margin-left: 0; }
+  .pf-add-day-form { gap: 6px; }
+  .pf-add-day-form input[type="number"] { width: 90px; }
+
+  /* Live cell: horizontal layout on card */
+  .pf-live-cell { display: flex; flex-direction: row; align-items: center; flex-wrap: wrap; gap: 6px; }
+  .pf-dd-bar-wrap { width: 60px; }
 
 }
