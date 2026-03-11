@@ -452,7 +452,7 @@ app.delete('/api/trades/:id', (req, res) => {
 app.get('/api/accounts', (_req, res) => {
   const pf = JSON.parse(fs.readFileSync(PF_PATH, 'utf8') || '{}');
   const ra = _loadRA();
-  const pfAccounts = (pf.accounts || []).map(a => ({
+  const pfAccounts = (pf.accounts || []).filter(a => a.status === 'active' && (a.phase === 'funded' || a.phase === 'challenge' || !a.phase)).map(a => ({
     id:    `pf:${a.id}`,
     rawId: a.id,
     label: `${a.firm}${a.notes ? ' — ' + a.notes : ''}`,
