@@ -68,6 +68,7 @@
           <input type="date" id="filter-date-to" title="To date">
           <button id="filter-clear" class="tl-btn-ghost">Clear</button>
         </div>
+        <button id="btn-import-csv" class="tl-btn-import">⬆ Import CSV</button>
         <button id="btn-add-trade" class="tl-btn-primary">+ Manual Trade</button>
       </div>
 
@@ -233,6 +234,38 @@
                 <button id="lm-add-exit" class="lm-add-btn exit-btn">+ Exit</button>
               </div>
               <div class="lm-pnl-total" id="lm-pnl-total"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- CSV Import modal -->
+      <div id="import-modal" style="display:none">
+        <div class="im-backdrop"></div>
+        <div class="im-dialog">
+          <div class="im-header">
+            <span class="im-title">Import Orders (TPT / Tradovate CSV)</span>
+            <button class="im-close" id="im-close">✕</button>
+          </div>
+          <div class="im-body">
+            <div class="im-step">
+              <label class="im-file-label" id="im-file-label">
+                <span id="im-file-text">📂 Choose CSV file…</span>
+                <input type="file" id="im-file" accept=".csv" style="display:none">
+              </label>
+              <label class="im-acct-label">Link to Account
+                <select id="im-account" style="min-width:180px">
+                  <option value="">— None —</option>
+                </select>
+              </label>
+            </div>
+            <div id="im-preview"></div>
+          </div>
+          <div class="im-footer">
+            <span id="im-status"></span>
+            <div class="im-footer-btns">
+              <button id="im-confirm" class="tl-btn-primary" disabled>Import</button>
+              <button id="im-cancel" class="tl-btn-ghost">Cancel</button>
             </div>
           </div>
         </div>

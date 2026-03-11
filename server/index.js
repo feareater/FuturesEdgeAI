@@ -548,6 +548,174 @@ app.delete('/api/trades/:id/exit/:xidx', (req, res) => {
   res.json({ trade: tradeLog[idx] });
 });
 
+// ─── CSV Import helpers ───────────────────────────────────────────────────────
+
+function _parseCsvLine(line) {
+  const fields = [];
+  let current = '', inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') { inQuotes = !inQuotes; }
+    else if (ch === ',' && !inQuotes) { fields.push(current); current = ''; }
+    else { current += ch; }
+  }
+  fields.push(current);
+  return fields;
+}
+
+function _parseTptCsv(csvText) {
+  const lines = csvText.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim().split('\n');
+  const headers = _parseCsvLine(lines[0]).map(h => h.trim());
+  return lines.slice(1)
+    .filter(l => l.trim())
+    .map(line => {
+      const fields = _parseCsvLine(line);
+      const obj = {};
+      headers.forEach((h, i) => { obj[h] = (fields[i] || '').trim(); });
+      return obj;
+    })
+    .filter(r => r['Status'] && r['Status'].trim() === 'Filled');
+}
+
+function _finalizeCsvTrade(trade) {
+  const pv  = FILL_POINT_VALUE[trade.symbol] || 1;
+  const dir = trade.direction === 'bullish' ? 1 : -1;
+  const totalQty     = trade.entries.reduce((s, e) => s + e.qty, 0);
+  const blendedEntry = trade.entries.reduce((s, e) => s + e.qty * e.price, 0) / totalQty;
+  let totalPnl = 0;
+  const exits = trade.exits.map(x => {
+    const pnl = +(dir * (x.price - blendedEntry) * x.qty * pv).toFixed(2);
+    totalPnl += pnl;
+    return { ...x, pnl };
+  });
+  const totalExited       = exits.reduce((s, x) => s + x.qty, 0);
+  const remainingContracts = Math.max(0, totalQty - totalExited);
+  const isOpen            = trade.openPosition || remainingContracts > 0;
+  const outcome           = isOpen ? '' : (totalPnl >= 0 ? 'won' : 'lost');
+  return { ...trade, exits, actualEntry: +blendedEntry.toFixed(4), contracts: totalQty, remainingContracts, pnl: +totalPnl.toFixed(2), outcome, dca: trade.entries.length > 1 };
+}
+
+function _pairOrders(rows) {
+  const KNOWN = new Set(['MNQ', 'MGC', 'MES', 'MCL', 'BTC', 'ETH', 'XRP']);
+  rows.sort((a, b) => new Date(a['Fill Time']) - new Date(b['Fill Time']));
+  const bySymbol = {};
+  for (const row of rows) {
+    const sym = row['Product'];
+    if (!sym || !KNOWN.has(sym)) continue;
+    if (!bySymbol[sym]) bySymbol[sym] = [];
+    bySymbol[sym].push(row);
+  }
+  const trades = [];
+  for (const [symbol, orders] of Object.entries(bySymbol)) {
+    let position = 0, currentTrade = null;
+    for (const order of orders) {
+      const side  = order['B/S'];
+      const qty   = parseFloat(order['filledQty']);
+      const price = parseFloat(order['avgPrice']);
+      const fillTime = new Date(order['Fill Time']);
+      if (!qty || !price || isNaN(qty) || isNaN(price)) continue;
+      const sign = side === 'Buy' ? 1 : -1;
+      const prevPosition = position;
+
+      if (prevPosition === 0) {
+        currentTrade = { symbol, direction: sign > 0 ? 'bullish' : 'bearish',
+          entries: [{ qty, price, time: fillTime.toISOString() }], exits: [],
+          openTime: fillTime, importedOrderIds: [order['orderId']] };
+        position = sign * qty;
+      } else if (Math.sign(sign) === Math.sign(prevPosition)) {
+        currentTrade.entries.push({ qty, price, time: fillTime.toISOString() });
+        currentTrade.importedOrderIds.push(order['orderId']);
+        position += sign * qty;
+      } else {
+        const closeQty = Math.min(qty, Math.abs(prevPosition));
+        currentTrade.exits.push({ qty: closeQty, price, time: fillTime.toISOString() });
+        currentTrade.importedOrderIds.push(order['orderId']);
+        position += sign * qty;
+        // Handle position flip — excess opens a new trade
+        const excess = qty - closeQty;
+        if (Math.abs(position) > 0.001 && Math.sign(position) !== Math.sign(prevPosition)) {
+          trades.push(_finalizeCsvTrade(currentTrade));
+          currentTrade = { symbol, direction: sign > 0 ? 'bullish' : 'bearish',
+            entries: [{ qty: excess, price, time: fillTime.toISOString() }], exits: [],
+            openTime: fillTime, importedOrderIds: [order['orderId']] };
+        }
+      }
+      if (Math.abs(position) < 0.001) {
+        if (currentTrade) { trades.push(_finalizeCsvTrade(currentTrade)); currentTrade = null; }
+        position = 0;
+      }
+    }
+    if (currentTrade && Math.abs(position) > 0.001) {
+      currentTrade.openPosition = true;
+      trades.push(_finalizeCsvTrade(currentTrade));
+    }
+  }
+  return trades;
+}
+
+// POST /api/trades/import-csv — parse and import a TPT/Tradovate orders CSV
+app.post('/api/trades/import-csv', (req, res) => {
+  try {
+    const { csv, accountId, accountLabel, accountType, dryRun } = req.body;
+    if (!csv) return res.status(400).json({ error: 'csv required' });
+    const rows = _parseTptCsv(csv);
+    if (rows.length === 0) return res.status(400).json({ error: 'No filled orders found in CSV' });
+    const pairedTrades = _pairOrders(rows);
+
+    const existingOrderIds = new Set();
+    for (const t of tradeLog) {
+      for (const id of (t.importedOrderIds || [])) existingOrderIds.add(id);
+    }
+    const newTrades = [], dupeIds = new Set();
+    for (const t of pairedTrades) {
+      if (t.importedOrderIds.some(id => existingOrderIds.has(id))) { dupeIds.add(t.importedOrderIds[0]); }
+      else { newTrades.push(t); }
+    }
+
+    if (dryRun) {
+      return res.json({ total: pairedTrades.length, new: newTrades.length, duplicates: dupeIds.size, trades: newTrades });
+    }
+
+    const now = Date.now();
+    for (let i = 0; i < newTrades.length; i++) {
+      const t = newTrades[i];
+      const record = {
+        id:          (now + i).toString(36) + Math.random().toString(36).slice(2, 6),
+        alertKey:    `IMPORT:${t.symbol}:${now + i}`,
+        symbol:      t.symbol,
+        timeframe:   '5m',
+        setupType:   'imported',
+        direction:   t.direction,
+        mode:        'take',
+        takenAt:     t.openTime.toISOString(),
+        actualEntry: t.actualEntry,
+        actualSL:    null, actualTP: null,
+        actualExit:  t.exits.length > 0 ? t.exits[t.exits.length - 1].price : null,
+        contracts:   t.contracts,
+        dca:         t.dca,
+        sentiment:   t.direction,
+        outcome:     t.outcome,
+        pnl:         t.pnl,
+        entries:     t.entries,
+        exits:       t.exits,
+        remainingContracts: t.remainingContracts,
+        importedOrderIds:   t.importedOrderIds,
+        source:      'csv_import',
+        notes:       '',
+        accountId:   accountId   || null,
+        accountLabel: accountLabel || null,
+        accountType: accountType || null,
+      };
+      tradeLog.push(record);
+    }
+    if (newTrades.length > 0) saveTradeLog(tradeLog);
+    res.json({ created: newTrades.length, duplicates: dupeIds.size, total: pairedTrades.length });
+  } catch (err) {
+    console.error('[import-csv]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // PATCH /api/alerts/:key — manually set outcome (won/lost/open) for a taken alert
 app.patch('/api/alerts/:key', (req, res) => {
   const { key }    = req.params;

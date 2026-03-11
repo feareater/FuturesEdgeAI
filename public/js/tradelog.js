@@ -699,6 +699,137 @@
   $('em-cancel').addEventListener('click', _closeEdit);
   $('edit-modal').querySelector('.em-backdrop').addEventListener('click', _closeEdit);
 
+  // ── CSV Import ────────────────────────────────────────────────────────────
+
+  let _importCsvText = null;
+  let _importPreviewTrades = [];
+
+  function _openImport() {
+    $('import-modal').style.display = '';
+    $('im-file').value = '';
+    $('im-file-text').textContent = '📂 Choose CSV file…';
+    $('im-preview').innerHTML = '';
+    $('im-status').textContent = '';
+    $('im-confirm').disabled = true;
+    _importCsvText = null;
+    _importPreviewTrades = [];
+    // populate account dropdown
+    const sel = $('im-account');
+    sel.innerHTML = '<option value="">— None —</option>';
+    for (const grp of $('filter-account').querySelectorAll('optgroup')) {
+      const og = document.createElement('optgroup');
+      og.label = grp.label;
+      for (const opt of grp.querySelectorAll('option')) {
+        const o = document.createElement('option');
+        o.value = opt.value; o.textContent = opt.textContent;
+        og.appendChild(o);
+      }
+      sel.appendChild(og);
+    }
+  }
+
+  function _closeImport() { $('import-modal').style.display = 'none'; }
+
+  function _fmtImportDir(d) { return d === 'bullish' ? '▲ Long' : '▼ Short'; }
+  function _fmtPnl(v) {
+    if (v == null) return '—';
+    return (v >= 0 ? '+$' : '-$') + Math.abs(v).toFixed(2);
+  }
+
+  async function _runDryRun(csvText) {
+    $('im-status').textContent = 'Analyzing…';
+    $('im-confirm').disabled = true;
+    $('im-preview').innerHTML = '';
+    try {
+      const r = await fetch('/api/trades/import-csv', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ csv: csvText, dryRun: true }),
+      });
+      const data = await r.json();
+      if (!r.ok) { $('im-status').textContent = '⚠ ' + (data.error || 'Parse error'); return; }
+      _importPreviewTrades = data.trades || [];
+      const dupMsg = data.duplicates > 0 ? ` (${data.duplicates} already imported)` : '';
+      $('im-status').textContent = `${data.new} trade${data.new !== 1 ? 's' : ''} detected${dupMsg}`;
+      if (data.new === 0) { $('im-preview').innerHTML = '<p class="im-empty">No new trades to import.</p>'; return; }
+
+      const rows = _importPreviewTrades.map(t => {
+        const entryDesc = t.entries.length === 1
+          ? `${t.entries[0].qty} ct @ ${t.entries[0].price}`
+          : `${t.entries.length} fills · avg ${t.actualEntry}`;
+        const exitDesc = t.exits.length === 0 ? '<em>Open</em>'
+          : t.exits.length === 1 ? `${t.exits[0].qty} ct @ ${t.exits[0].price}`
+          : `${t.exits.length} exits`;
+        const pnlCls  = t.pnl > 0 ? 'im-win' : t.pnl < 0 ? 'im-loss' : '';
+        const datePart = t.openTime ? new Date(t.openTime).toLocaleDateString() : '—';
+        return `<tr>
+          <td>${datePart}</td>
+          <td><strong>${t.symbol}</strong></td>
+          <td class="${t.direction === 'bullish' ? 'bull' : 'bear'}">${_fmtImportDir(t.direction)}</td>
+          <td>${entryDesc}</td>
+          <td>${exitDesc}</td>
+          <td class="${pnlCls}">${_fmtPnl(t.pnl)}</td>
+          <td>${t.outcome || 'open'}</td>
+        </tr>`;
+      }).join('');
+
+      $('im-preview').innerHTML = `
+        <table class="im-table">
+          <thead><tr><th>Date</th><th>Symbol</th><th>Dir</th><th>Entry</th><th>Exit</th><th>P&amp;L</th><th>Result</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>`;
+      $('im-confirm').disabled = false;
+      $('im-confirm').textContent = `Import ${data.new} Trade${data.new !== 1 ? 's' : ''}`;
+    } catch (e) {
+      $('im-status').textContent = '⚠ ' + e.message;
+    }
+  }
+
+  $('im-file-label').addEventListener('click', () => $('im-file').click());
+  $('im-file').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    $('im-file-text').textContent = '📄 ' + file.name;
+    _importCsvText = await file.text();
+    await _runDryRun(_importCsvText);
+  });
+
+  $('im-confirm').addEventListener('click', async () => {
+    if (!_importCsvText) return;
+    $('im-confirm').disabled = true;
+    $('im-status').textContent = 'Importing…';
+    const acctSel = $('im-account');
+    const selectedId = acctSel.value;
+    let accountId = null, accountLabel = null, accountType = null;
+    if (selectedId) {
+      accountId = selectedId;
+      accountLabel = acctSel.options[acctSel.selectedIndex].textContent.trim();
+      accountType  = selectedId.startsWith('pf:') ? 'propfirm' : 'realaccount';
+    }
+    try {
+      const r = await fetch('/api/trades/import-csv', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ csv: _importCsvText, accountId, accountLabel, accountType }),
+      });
+      const data = await r.json();
+      if (!r.ok) { $('im-status').textContent = '⚠ ' + (data.error || 'Import failed'); $('im-confirm').disabled = false; return; }
+      const dupNote = data.duplicates > 0 ? `, ${data.duplicates} skipped (duplicate)` : '';
+      $('im-status').textContent = `✓ Imported ${data.created} trade${data.created !== 1 ? 's' : ''}${dupNote}`;
+      $('im-preview').innerHTML = '';
+      setTimeout(_closeImport, 1200);
+      _load();
+    } catch (e) {
+      $('im-status').textContent = '⚠ ' + e.message;
+      $('im-confirm').disabled = false;
+    }
+  });
+
+  $('btn-import-csv').addEventListener('click', _openImport);
+  $('im-close').addEventListener('click', _closeImport);
+  $('im-cancel').addEventListener('click', _closeImport);
+  $('import-modal').querySelector('.im-backdrop').addEventListener('click', _closeImport);
+
   // ── Boot ──────────────────────────────────────────────────────────────────
 
   _loadAccounts().then(_applyFilters);
