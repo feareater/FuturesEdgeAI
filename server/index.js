@@ -63,6 +63,13 @@ let commentaryCache = { generated: null, items: [] };
 // ── Trade log ─────────────────────────────────────────────────────────────────
 let tradeLog = []; // persisted to data/logs/trades.json
 
+// ── Fee log ───────────────────────────────────────────────────────────────────
+const FEES_PATH = path.join(__dirname, '..', 'data', 'logs', 'fees.json');
+function _loadFees() {
+  try { return JSON.parse(fs.readFileSync(FEES_PATH, 'utf8')); } catch (_) { return []; }
+}
+function _saveFees(data) { fs.writeFileSync(FEES_PATH, JSON.stringify(data, null, 2)); }
+
 const COMMENTARY_TOP_N = 5; // number of setups sent to Claude per run
 
 // ── Persistence helpers ───────────────────────────────────────────────────────
@@ -448,11 +455,111 @@ app.delete('/api/trades/:id', (req, res) => {
   res.json({ removed: removed.id });
 });
 
+// GET /api/trade-chart/:tradeId — candle slice + buy/sell markers for a trade
+app.get('/api/trade-chart/:tradeId', (req, res) => {
+  try {
+    const trade = tradeLog.find(t => t.id === req.params.tradeId);
+    if (!trade) return res.status(404).json({ error: 'Trade not found' });
+
+    // Resolve timestamp from entry/exit — CSV imports use 'time', manual fills use 'at'
+    const ts = e => e.time || e.at || trade.takenAt || null;
+
+    // Normalise entries/exits — fall back to top-level fields
+    const entries = (trade.entries && trade.entries.length)
+      ? trade.entries
+      : trade.actualEntry ? [{ qty: trade.contracts || 1, price: trade.actualEntry, time: trade.takenAt }] : [];
+    const exits = (trade.exits && trade.exits.length)
+      ? trade.exits
+      : trade.actualExit ? [{ qty: trade.contracts || 1, price: trade.actualExit, time: trade.takenAt, pnl: trade.pnl }] : [];
+
+    if (!entries.length) return res.status(400).json({ error: 'No entry data on this trade' });
+
+    const firstTs = ts(entries[0]);
+    const lastTs  = exits.length ? ts(exits[exits.length - 1]) : null;
+    if (!firstTs) return res.status(400).json({ error: 'Trade has no timestamp' });
+
+    const firstMs    = new Date(firstTs).getTime();
+    const lastMs     = lastTs ? new Date(lastTs).getTime() : firstMs + 5 * 60 * 1000;
+    const durationMs = Math.max(0, lastMs - firstMs);
+
+    // Use requested TF (default 1m); validate against allowed set
+    const ALLOWED_TFS = new Set(['1m','5m','15m','30m','1h']);
+    let chartTf = ALLOWED_TFS.has(req.query.tf) ? req.query.tf : '1m';
+
+    let candles;
+    try {
+      candles = getCandles(trade.symbol, chartTf);
+    } catch (_e1) {
+      try { candles = getCandles(trade.symbol, '5m'); chartTf = '5m'; }
+      catch (_e2) { return res.status(400).json({ error: `No candle data for ${trade.symbol}` }); }
+    }
+
+    const TF_SEC = { '1m': 60, '2m': 120, '3m': 180, '5m': 300, '15m': 900, '30m': 1800, '1h': 3600, '2h': 7200, '4h': 14400 };
+    const candleSec = TF_SEC[chartTf] || 300;
+    const windowSec = 15 * 60; // 15 minutes before/after
+
+    const startSec = Math.floor(firstMs / 1000) - windowSec;
+    const endSec   = Math.ceil(lastMs  / 1000)  + windowSec;
+    const slice    = candles.filter(c => c.time >= startSec && c.time <= endSec);
+
+    if (!slice.length) {
+      const tradeDate = new Date(firstMs).toISOString().slice(0, 10);
+      const seedStart = new Date(candles[0].time * 1000).toISOString().slice(0, 10);
+      const seedEnd   = new Date(candles[candles.length - 1].time * 1000).toISOString().slice(0, 10);
+      return res.status(400).json({
+        error: `No ${chartTf} candles for ${trade.symbol} on ${tradeDate}. Seed covers ${seedStart} → ${seedEnd}. Run seedFetch.js to refresh.`,
+      });
+    }
+
+    const isBull = (trade.direction || 'bullish') === 'bullish';
+    const markers = [];
+
+    for (const e of entries) {
+      const t = ts(e);
+      if (!t) continue;
+      const snapped = Math.floor(new Date(t).getTime() / 1000 / candleSec) * candleSec;
+      markers.push({
+        time:     snapped,
+        position: isBull ? 'belowBar' : 'aboveBar',
+        shape:    isBull ? 'arrowUp'  : 'arrowDown',
+        color:    '#4caf50',
+        text:     `B ${e.qty}@${Number(e.price).toFixed(2)}`,
+      });
+    }
+    for (const x of exits) {
+      const t = ts(x);
+      if (!t) continue;
+      const snapped = Math.floor(new Date(t).getTime() / 1000 / candleSec) * candleSec;
+      markers.push({
+        time:     snapped,
+        position: isBull ? 'aboveBar' : 'belowBar',
+        shape:    isBull ? 'arrowDown' : 'arrowUp',
+        color:    (x.pnl ?? 0) >= 0 ? '#4caf50' : '#ef4444',
+        text:     `S ${x.qty}@${Number(x.price).toFixed(2)}`,
+      });
+    }
+
+    // LW Charts requires markers sorted by time with no duplicate (time, position) pairs
+    markers.sort((a, b) => a.time - b.time);
+
+    console.log(`[trade-chart] ${trade.symbol} ${chartTf} id=${trade.id} candles=${slice.length} markers=${markers.length}`);
+    res.json({ tradeId: trade.id, symbol: trade.symbol, timeframe: chartTf,
+               direction: trade.direction, outcome: trade.outcome, pnl: trade.pnl,
+               candles: slice, markers });
+  } catch (err) {
+    console.error('[trade-chart] Unexpected error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/accounts — combined list of prop firm accounts + real account brokers for trade linking
 app.get('/api/accounts', (_req, res) => {
   const pf = JSON.parse(fs.readFileSync(PF_PATH, 'utf8') || '{}');
   const ra = _loadRA();
-  const pfAccounts = (pf.accounts || []).filter(a => a.status === 'active' && (a.phase === 'funded' || a.phase === 'challenge' || !a.phase)).map(a => ({
+  const pfAccounts = (pf.accounts || []).filter(a => {
+    if (a.phase === 'funded') return !a.fundedFailed; // funded accounts: show if not failed
+    return a.status === 'active';                      // challenge accounts: show if active
+  }).map(a => ({
     id:    `pf:${a.id}`,
     rawId: a.id,
     label: `${a.firm}${a.notes ? ' — ' + a.notes : ''}`,
@@ -547,6 +654,119 @@ app.delete('/api/trades/:id/exit/:xidx', (req, res) => {
   saveTradeLog(tradeLog);
   res.json({ trade: tradeLog[idx] });
 });
+
+// ─── Fee routes ───────────────────────────────────────────────────────────────
+
+// GET /api/fees — return fee records with optional filters
+app.get('/api/fees', (req, res) => {
+  let fees = _loadFees();
+  const { accountId, symbol, dateFrom, dateTo } = req.query;
+  if (accountId) fees = fees.filter(f => f.accountId === accountId);
+  if (symbol)    fees = fees.filter(f => f.symbol === symbol);
+  if (dateFrom)  fees = fees.filter(f => f.date >= dateFrom);
+  if (dateTo)    fees = fees.filter(f => f.date <= dateTo);
+  res.json({ fees });
+});
+
+// POST /api/fees/import-csv — parse TradeDay fees CSV and store
+app.post('/api/fees/import-csv', (req, res) => {
+  try {
+    const { csv, accountId, accountLabel, accountType } = req.body;
+    if (!csv) return res.status(400).json({ error: 'csv required' });
+
+    const rows = _parseTdFeesCsv(csv);
+    const existing = _loadFees();
+    const existingTxIds = new Set(existing.flatMap(f => f.txIds || []));
+
+    let created = 0, duplicates = 0;
+    const grouped = _groupFeeRows(rows);
+
+    for (const rec of grouped) {
+      if (rec.txIds.some(id => existingTxIds.has(id))) { duplicates++; continue; }
+      if (accountId) { rec.accountId = accountId; rec.accountLabel = accountLabel; rec.accountType = accountType; }
+      existing.push(rec);
+      created++;
+    }
+
+    if (created > 0) _saveFees(existing);
+    res.json({ created, duplicates, total: grouped.length });
+  } catch (err) {
+    console.error('[fees/import-csv]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/fees/all — clear all fee records (for re-import)
+app.delete('/api/fees/all', (req, res) => {
+  _saveFees([]);
+  res.json({ ok: true });
+});
+
+// Parse TradeDay fees CSV (Account,Transaction ID,Timestamp,Date,Delta,Amount,Cash Change Type,Currency,Contract)
+function _parseTdFeesCsv(csvText) {
+  const lines = csvText.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim().split('\n');
+  const rawHeaders = _parseCsvLine(lines[0]);
+  const headers = rawHeaders.map(h => h.trim());
+  const FEE_TYPES = new Set(['Exchange Fee', 'Clearing Fee', 'Nfa Fee', 'Commission']);
+  return lines.slice(1).map(line => {
+    if (!line.trim()) return null;
+    const fields = _parseCsvLine(line);
+    const obj = {};
+    headers.forEach((h, i) => obj[h] = (fields[i] || '').trim());
+    return obj;
+  }).filter(r => r && FEE_TYPES.has(r['Cash Change Type']));
+}
+
+// Group fee rows by (Timestamp, Contract) → one round-turn fee record per group
+const CONTRACT_SYMBOL = { MNQH6:'MNQ', MGCJ6:'MGC', MESH6:'MES', MCLJ6:'MCL', MCLM6:'MCL', MNQM6:'MNQ', MGCM6:'MGC' };
+function _getSymbol(contract) {
+  if (CONTRACT_SYMBOL[contract]) return CONTRACT_SYMBOL[contract];
+  // Fallback: first 3 chars if it starts with MNQ/MGC/MES/MCL
+  for (const sym of ['MNQ','MGC','MES','MCL','BTC','ETH','XRP']) {
+    if (contract.startsWith(sym)) return sym;
+  }
+  return contract;
+}
+
+function _groupFeeRows(rows) {
+  const groups = new Map();
+  for (const row of rows) {
+    const key = `${row['Timestamp']}|${row['Contract']}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  }
+  const records = [];
+  for (const [, grp] of groups) {
+    const first = grp[0];
+    const contract = first['Contract'];
+    const symbol = _getSymbol(contract);
+    const rec = {
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+      date: first['Date'],
+      symbol,
+      contract,
+      timestamp: first['Timestamp'],
+      sourceAccount: first['Account'],
+      exchange: 0, clearing: 0, nfa: 0, commission: 0, total: 0,
+      txIds: grp.map(r => r['Transaction ID']),
+    };
+    for (const row of grp) {
+      const delta = -parseFloat((row['Delta'] || '0').replace(/,/g, '')) || 0; // fees are negative deltas
+      const type = row['Cash Change Type'];
+      if (type === 'Exchange Fee') rec.exchange += delta;
+      else if (type === 'Clearing Fee') rec.clearing += delta;
+      else if (type === 'Nfa Fee') rec.nfa += delta;
+      else if (type === 'Commission') rec.commission += delta;
+    }
+    rec.exchange    = +rec.exchange.toFixed(4);
+    rec.clearing    = +rec.clearing.toFixed(4);
+    rec.nfa         = +rec.nfa.toFixed(4);
+    rec.commission  = +rec.commission.toFixed(4);
+    rec.total       = +(rec.exchange + rec.clearing + rec.nfa + rec.commission).toFixed(4);
+    records.push(rec);
+  }
+  return records.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+}
 
 // ─── CSV Import helpers ───────────────────────────────────────────────────────
 
@@ -1164,6 +1384,44 @@ app.delete('/api/propfirms/payout/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+// POST /api/propfirms/account/:id/advance-phase — snapshot current phase, reset for next
+app.post('/api/propfirms/account/:id/advance-phase', (req, res) => {
+  const data = _loadPF();
+  const acc  = data.accounts.find(a => a.id === req.params.id);
+  if (!acc) return res.status(404).json({ error: 'Not found' });
+
+  const { phaseName, outcome, notes, newAccountSize, newMaxDrawdown, newDdType } = req.body;
+  if (!acc.phaseHistory) acc.phaseHistory = [];
+
+  const totalPnl = (acc.dailyProgress || []).reduce((s, d) => s + (+d.pnl || 0), 0);
+  const snapshot = {
+    id:           Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    phaseName:    phaseName || `Phase ${acc.phaseHistory.length + 1}`,
+    startDate:    acc.phaseStartDate || acc.date || '',
+    endDate:      new Date().toISOString().slice(0, 10),
+    accountSize:  acc.accountSize,
+    maxDrawdown:  acc.maxDrawdown,
+    ddType:       acc.ddType || 'static',
+    dailyProgress: (acc.dailyProgress || []).slice(),
+    finalValue:   acc.currentValue || acc.accountSize,
+    totalPnl,
+    outcome:      outcome || 'passed',
+    notes:        notes || '',
+  };
+  acc.phaseHistory.push(snapshot);
+
+  // Reset for new phase
+  acc.dailyProgress   = [];
+  acc.phaseStartDate  = new Date().toISOString().slice(0, 10);
+  if (newAccountSize)               acc.accountSize  = +newAccountSize;
+  if (newMaxDrawdown !== undefined && newMaxDrawdown !== '') acc.maxDrawdown = +newMaxDrawdown;
+  if (newDdType)                    acc.ddType       = newDdType;
+  acc.currentValue = acc.accountSize;
+
+  _savePF(data);
+  res.json({ ok: true });
+});
+
 // ---------------------------------------------------------------------------
 // Real Account Tracker — persistent JSON store
 // ---------------------------------------------------------------------------
@@ -1658,7 +1916,15 @@ async function _autoRefresh({ fetchData = true } = {}) {
   const newCount = await runScan();
   lastRefreshTs  = new Date().toISOString();
   nextRefreshTs  = new Date(Date.now() + refreshIntervalMs).toISOString();
-  broadcast({ type: 'data_refresh', ts: lastRefreshTs, newAlerts: newCount, nextRefresh: nextRefreshTs });
+  // Collect last candle time per symbol so clients can show accurate data-age
+  const lastCandleTime = {};
+  for (const sym of ['MNQ', 'MGC', 'MES', 'MCL', 'BTC', 'ETH', 'XRP']) {
+    try {
+      const c = getCandles(sym, '5m');
+      if (c && c.length) lastCandleTime[sym] = c[c.length - 1].time;
+    } catch (_) {}
+  }
+  broadcast({ type: 'data_refresh', ts: lastRefreshTs, newAlerts: newCount, nextRefresh: nextRefreshTs, lastCandleTime });
   console.log(`[refresh] Done — ${newCount} new alerts, data as of ${lastRefreshTs}`);
 }
 

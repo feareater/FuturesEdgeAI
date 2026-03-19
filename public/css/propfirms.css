@@ -595,6 +595,170 @@
 .pf-day-table tbody tr:last-child td { border-bottom: none; }
 .pf-day-table tbody tr:hover { background: rgba(255,255,255,0.02); }
 
+/* ── Complete Phase button ───────────────────────────────────────────────── */
+
+.pf-advance-btn {
+  margin-left: auto;
+  padding: 4px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: var(--radius);
+  border: 1px solid rgba(255,193,7,0.4);
+  background: rgba(255,193,7,0.08);
+  color: #ffc107;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+  white-space: nowrap;
+}
+.pf-advance-btn:hover { background: rgba(255,193,7,0.18); border-color: #ffc107; }
+
+/* ── Advance phase form ──────────────────────────────────────────────────── */
+
+.pf-advance-form {
+  margin-top: 12px;
+  padding: 14px 16px;
+  background: rgba(255,193,7,0.04);
+  border: 1px solid rgba(255,193,7,0.2);
+  border-radius: 8px;
+}
+
+.pf-advance-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: #ffc107;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 12px;
+}
+
+.pf-advance-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 16px;
+  margin-bottom: 12px;
+}
+
+.pf-advance-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pf-advance-field label {
+  font-size: 10px;
+  color: var(--text-dim);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.pf-advance-field input,
+.pf-advance-field select {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 12px;
+  padding: 5px 8px;
+}
+.pf-advance-wide { grid-column: 1 / -1; }
+
+.pf-advance-sep {
+  grid-column: 1 / -1;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+  margin-top: 2px;
+}
+
+.pf-advance-actions {
+  display: flex;
+  gap: 10px;
+}
+
+/* ── Phase history accordion ─────────────────────────────────────────────── */
+
+.pf-phase-history {
+  margin-bottom: 16px;
+  border: 1px solid rgba(100,181,246,0.15);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.pf-phase-history-title {
+  font-size: 10px;
+  font-weight: 700;
+  color: #64b5f6;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 8px 12px;
+  background: rgba(100,181,246,0.06);
+  border-bottom: 1px solid rgba(100,181,246,0.12);
+}
+
+.pf-phase-card { border-bottom: 1px solid rgba(100,181,246,0.08); }
+.pf-phase-card:last-child { border-bottom: none; }
+
+.pf-phase-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+  background: rgba(100,181,246,0.02);
+  transition: background 0.1s;
+  flex-wrap: wrap;
+}
+.pf-phase-card-header:hover { background: rgba(100,181,246,0.06); }
+
+.pf-phase-card-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  min-width: 60px;
+}
+
+.pf-phase-card-pnl {
+  font-size: 12px;
+  font-family: monospace;
+  font-weight: 700;
+}
+
+.pf-phase-card-notes {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-style: italic;
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.pf-phase-chevron {
+  font-size: 9px;
+  color: var(--text-dim);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.pf-phase-card-body {
+  padding: 12px;
+  background: rgba(0,0,0,0.15);
+  border-top: 1px solid rgba(100,181,246,0.08);
+}
+
+.pf-phase-meta {
+  display: flex;
+  gap: 16px;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: monospace;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
 /* ── Notes / blow reason cell ────────────────────────────────────────────── */
 
 .pf-notes-cell {

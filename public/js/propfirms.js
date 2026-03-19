@@ -168,6 +168,30 @@ function _liveStats(a) {
   `;
 }
 
+function _phaseLogTable(entries, startingSize, showPeak) {
+  if (!entries.length) return '<div class="pf-empty" style="padding:10px 0">No entries logged for this phase.</div>';
+  const chron  = entries.slice().sort((x, y) => (x.date || '').localeCompare(y.date || ''));
+  const balMap = {};
+  let cum = +startingSize || 0;
+  for (const d of chron) { cum += +d.pnl || 0; balMap[d.id] = cum; }
+  const display = entries.slice().sort((x, y) => (y.date || '').localeCompare(x.date || ''));
+  return `
+    <table class="pf-day-table">
+      <thead><tr><th>Date</th><th>Daily P&L</th><th>Balance</th>${showPeak ? '<th>Peak Bal</th>' : ''}<th>Notes</th></tr></thead>
+      <tbody>
+        ${display.map(d => `
+          <tr>
+            <td>${fmtDate(d.date)}</td>
+            <td style="font-family:monospace" class="${+d.pnl >= 0 ? 'pf-pos' : 'pf-neg'}">${+d.pnl >= 0 ? '+' : ''}${fmt(d.pnl)}</td>
+            <td style="font-family:monospace" class="pf-dim">${fmt(balMap[d.id])}</td>
+            ${showPeak ? `<td style="font-family:monospace" class="pf-dim">${d.maxValue ? fmt(d.maxValue) : '—'}</td>` : ''}
+            <td class="pf-notes-text">${_esc(d.notes || '')}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>`;
+}
+
 function _progressPanel(a) {
   const entries   = (a.dailyProgress || []).slice().sort((x, y) => (y.date || '').localeCompare(x.date || ''));
   const total     = entries.reduce((s, d) => s + (+d.pnl || 0), 0);
@@ -175,12 +199,14 @@ function _progressPanel(a) {
   const showPeak  = a.ddType === 'intraday_trail';
   const dd        = _computeDD(a);
   const isFunded  = a.phase === 'funded';
+  const history   = (a.phaseHistory || []);
+  const curPhaseNum = history.length + 1;
+
   // Payouts linked to this account
   const acctPayouts = (_data.payouts || []).filter(p => p.accountId === a.id)
     .sort((x, y) => (y.date || '').localeCompare(x.date || ''));
   const totalReceived = acctPayouts.reduce((s, p) => s + (+p.amount || 0), 0);
   const totalGross    = acctPayouts.reduce((s, p) => s + (+p.grossAmount || +p.amount || 0), 0);
-  const totalPayouts  = totalReceived; // used for header display
 
   const ddDetail = !dd ? '' : dd.type === 'funded_locked'
     ? `<span class="pf-dd-detail pf-dd-locked-label">
@@ -197,13 +223,53 @@ function _progressPanel(a) {
         · Avail: <span class="${dd.avail < 0 ? 'pf-neg' : 'pf-pos'}">${fmt(dd.avail)}</span>
       </span>`;
 
+  // ── Phase history accordion ───────────────────────────────────────────────
+  const historyHtml = !history.length ? '' : `
+    <div class="pf-phase-history">
+      <div class="pf-phase-history-title">Phase History (${history.length})</div>
+      ${history.map((ph, i) => {
+        const phCls   = ph.outcome === 'passed' ? 'pf-badge-passed' : 'pf-badge-failed';
+        const phLabel = ph.outcome === 'passed' ? 'Passed' : 'Failed';
+        const phPnlCls = ph.totalPnl > 0 ? 'pf-pos' : ph.totalPnl < 0 ? 'pf-neg' : '';
+        const phShowPeak = ph.ddType === 'intraday_trail';
+        return `
+          <div class="pf-phase-card" id="phcard-${a.id}-${ph.id}">
+            <div class="pf-phase-card-header" onclick="togglePhaseCard('${a.id}','${ph.id}')">
+              <span class="pf-phase-card-name">${_esc(ph.phaseName)}</span>
+              <span class="pf-dim" style="font-size:11px">${fmtDate(ph.startDate)} – ${fmtDate(ph.endDate)}</span>
+              <span class="pf-phase-card-pnl ${phPnlCls}">${ph.totalPnl >= 0 ? '+' : ''}${fmt(ph.totalPnl)}</span>
+              <span class="pf-badge ${phCls} pf-badge-sm">${phLabel}</span>
+              <span class="pf-dim" style="font-size:11px">${(ph.dailyProgress || []).length} days</span>
+              ${ph.notes ? `<span class="pf-phase-card-notes">${_esc(ph.notes)}</span>` : ''}
+              <span class="pf-phase-chevron" id="chev-${a.id}-${ph.id}">▶</span>
+            </div>
+            <div class="pf-phase-card-body" id="phbody-${a.id}-${ph.id}" style="display:none">
+              <div class="pf-phase-meta">
+                <span>Start: ${fmt(ph.accountSize)}</span>
+                <span>Final: ${fmt(ph.finalValue)}</span>
+                <span>Max DD: ${ph.maxDrawdown ? fmt(ph.maxDrawdown) : '—'}</span>
+                <span>DD Type: ${ph.ddType || 'static'}</span>
+              </div>
+              ${_phaseLogTable(ph.dailyProgress || [], ph.accountSize, phShowPeak)}
+            </div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+
   return `
     <div class="pf-progress-panel">
+      ${historyHtml}
       <div class="pf-progress-header">
-        <span class="pf-progress-title">Daily Log — ${_esc(a.firm)}${isFunded ? ' <span class="pf-badge pf-badge-funded pf-badge-sm">Funded</span>' : ''}</span>
+        <span class="pf-progress-title">
+          ${_esc(a.firm)} — Phase ${curPhaseNum}
+          ${isFunded ? '<span class="pf-badge pf-badge-funded pf-badge-sm">Funded</span>' : ''}
+        </span>
         ${entries.length ? `<span class="pf-progress-total ${totCls}">${total >= 0 ? '+' : ''}${fmt(total)}</span>` : ''}
         ${ddDetail}
         <button class="pf-add-day-btn" onclick="showAddDay('${a.id}')">+ Add Day</button>
+        <button class="pf-advance-btn" onclick="showAdvancePhase('${a.id}')" title="Complete this phase and start the next">Complete Phase →</button>
       </div>
       <div id="add-day-${a.id}" class="pf-add-day-form" style="display:none">
         <input type="hidden" id="day-id-${a.id}" />
@@ -220,7 +286,6 @@ function _progressPanel(a) {
           <tbody>
             ${(function() {
               let cum = +a.accountSize || 0;
-              // build in chronological order for running balance, then reverse for display
               const chron = (a.dailyProgress || []).slice().sort((x, y) => (x.date || '').localeCompare(y.date || ''));
               const balMap = {};
               for (const d of chron) { cum += +d.pnl || 0; balMap[d.id] = cum; }
@@ -243,6 +308,49 @@ function _progressPanel(a) {
           </tbody>
         </table>
       ` : '<div class="pf-empty" style="padding:10px 0">No entries yet — click "+ Add Day" to start logging.</div>'}
+
+      <!-- Advance Phase form -->
+      <div id="advance-phase-${a.id}" class="pf-advance-form" style="display:none">
+        <div class="pf-advance-title">Complete Phase ${curPhaseNum} &amp; Start Next</div>
+        <div class="pf-advance-grid">
+          <div class="pf-advance-field">
+            <label>Phase Name (being completed)</label>
+            <input type="text" id="adv-name-${a.id}" placeholder="Phase ${curPhaseNum}" value="Phase ${curPhaseNum}" />
+          </div>
+          <div class="pf-advance-field">
+            <label>Outcome</label>
+            <select id="adv-outcome-${a.id}">
+              <option value="passed">Passed ✓</option>
+              <option value="failed">Failed ✗</option>
+            </select>
+          </div>
+          <div class="pf-advance-field pf-advance-wide">
+            <label>Notes on this phase</label>
+            <input type="text" id="adv-notes-${a.id}" placeholder="Hit profit target, clean drawdown…" />
+          </div>
+          <div class="pf-advance-sep">New Phase Settings</div>
+          <div class="pf-advance-field">
+            <label>Starting Balance ($)</label>
+            <input type="number" id="adv-newsize-${a.id}" placeholder="${a.accountSize}" value="${a.accountSize}" />
+          </div>
+          <div class="pf-advance-field">
+            <label>Max Drawdown ($)</label>
+            <input type="number" id="adv-newdd-${a.id}" placeholder="${a.maxDrawdown || ''}" value="${a.maxDrawdown || ''}" />
+          </div>
+          <div class="pf-advance-field">
+            <label>Drawdown Type</label>
+            <select id="adv-newddtype-${a.id}">
+              <option value="static"${(!a.ddType || a.ddType === 'static') ? ' selected' : ''}>Static</option>
+              <option value="eod_trail"${a.ddType === 'eod_trail' ? ' selected' : ''}>EOD Trailing</option>
+              <option value="intraday_trail"${a.ddType === 'intraday_trail' ? ' selected' : ''}>Intraday Trailing</option>
+            </select>
+          </div>
+        </div>
+        <div class="pf-advance-actions">
+          <button class="pf-save-btn" onclick="confirmAdvancePhase('${a.id}')">Complete &amp; Advance →</button>
+          <button class="pf-cancel-btn" onclick="cancelAdvancePhase('${a.id}')">Cancel</button>
+        </div>
+      </div>
 
       ${isFunded ? `
         <div class="pf-payout-section">
@@ -661,6 +769,50 @@ window.cancelAccountPayout = function(accountId) {
   if (wrap) wrap.style.display = 'none';
   const idEl = document.getElementById('ap-id-' + accountId);
   if (idEl) idEl.value = '';
+};
+
+// ── Phase advance ─────────────────────────────────────────────────────────────
+
+window.togglePhaseCard = function(accountId, phaseId) {
+  const body = document.getElementById('phbody-' + accountId + '-' + phaseId);
+  const chev = document.getElementById('chev-'   + accountId + '-' + phaseId);
+  if (!body) return;
+  const open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : '';
+  if (chev) chev.textContent = open ? '▶' : '▼';
+};
+
+window.showAdvancePhase = function(accountId) {
+  // Hide add-day form if open
+  const addDay = document.getElementById('add-day-' + accountId);
+  if (addDay) addDay.style.display = 'none';
+  const wrap = document.getElementById('advance-phase-' + accountId);
+  if (wrap) wrap.style.display = '';
+  wrap?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+};
+
+window.cancelAdvancePhase = function(accountId) {
+  const wrap = document.getElementById('advance-phase-' + accountId);
+  if (wrap) wrap.style.display = 'none';
+};
+
+window.confirmAdvancePhase = async function(accountId) {
+  const phaseName  = document.getElementById('adv-name-'      + accountId)?.value.trim();
+  const outcome    = document.getElementById('adv-outcome-'   + accountId)?.value;
+  const notes      = document.getElementById('adv-notes-'     + accountId)?.value.trim();
+  const newSize    = document.getElementById('adv-newsize-'   + accountId)?.value;
+  const newDD      = document.getElementById('adv-newdd-'     + accountId)?.value;
+  const newDDType  = document.getElementById('adv-newddtype-' + accountId)?.value;
+
+  if (!confirm(`Archive the current log as "${phaseName || 'Phase'}" (${outcome}) and start a fresh phase?\n\nThis cannot be undone.`)) return;
+
+  await _api('POST', `/api/propfirms/account/${accountId}/advance-phase`, {
+    phaseName, outcome, notes,
+    newAccountSize: newSize,
+    newMaxDrawdown: newDD,
+    newDdType:      newDDType,
+  });
+  await load();
 };
 
 window.saveAccountPayout = async function(accountId) {
