@@ -1089,11 +1089,12 @@ app.get('/api/gamma', async (req, res) => {
   }
 });
 
-// GET /api/correlation — 4×4 rolling correlation matrix for all symbols
+// GET /api/correlation — rolling correlation matrix (tradeable + macro reference symbols)
+const CORR_SYMBOLS = [...SCAN_SYMBOLS, 'DXY', 'VIX', 'SIL'];
 app.get('/api/correlation', (req, res) => {
   try {
     const allCandles = {};
-    for (const sym of SCAN_SYMBOLS) {
+    for (const sym of CORR_SYMBOLS) {
       try { allCandles[sym] = getCandles(sym, '5m'); } catch { allCandles[sym] = []; }
     }
     const result = computeCorrelationMatrix(allCandles);

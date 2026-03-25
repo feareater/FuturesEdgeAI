@@ -22,6 +22,13 @@ const SYMBOLS = {
   MCL: 'CL=F',
 };
 
+// Correlation-only symbols — 5m data only (not scanned for setups).
+const CORR_SYMBOLS = {
+  DXY: 'DX-Y.NYB', // US Dollar Index (ICE)
+  VIX: '^VIX',     // CBOE Volatility Index
+  SIL: 'SIL',      // Global X Silver Miners ETF
+};
+
 // Yahoo Finance supports: 1m (max 7d), 2m (max 60d), 5m (max 60d), 15m/30m (max 60d),
 // 60m (max 730d). 3m/2h/4h are not native — derived by aggregating after fetch.
 const TIMEFRAMES = [
@@ -153,6 +160,21 @@ async function fetchAll() {
   // Fetch crypto perpetual futures from Coinbase International Exchange
   const { fetchAllCrypto } = require('./coinbaseFetch');
   await fetchAllCrypto();
+
+  // Correlation-only symbols — 5m candles only
+  for (const [symbol, yfSymbol] of Object.entries(CORR_SYMBOLS)) {
+    console.log(`[seedFetch] ── ${symbol} (${yfSymbol}) correlation-only ──`);
+    try {
+      const raw        = await fetchYahoo(yfSymbol, '5m', '30d');
+      const normalized = normalize(symbol, '5m', raw);
+      const outPath    = path.join(SEED_DIR, `${symbol}_5m.json`);
+      fs.writeFileSync(outPath, JSON.stringify(normalized, null, 2));
+      console.log(`[seedFetch] ${symbol} 5m  ${normalized.candles.length} candles → ${outPath}`);
+    } catch (err) {
+      console.warn(`[seedFetch] ${symbol} fetch failed: ${err.message}`);
+    }
+    await new Promise(r => setTimeout(r, 600));
+  }
 }
 
 // ---------------------------------------------------------------------------
