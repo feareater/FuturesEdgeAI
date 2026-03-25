@@ -211,7 +211,7 @@
 
   // ── Correlation heatmap ───────────────────────────────────────────────────
 
-  const CORR_SYMS = ['MNQ', 'MGC', 'MES', 'MCL'];
+  const CORR_SYMS = ['MNQ', 'MGC', 'MES', 'MCL', 'BTC', 'ETH', 'XRP'];
 
   function _corrColor(v) {
     // v in [-1, 1]: green for high positive, red for high negative, dim for near-0
@@ -239,9 +239,10 @@
         ageEl.textContent = mins < 2 ? '' : `${mins}m ago`;
       }
 
-      // Header row
+      // Header row — abbreviated for 7-col fit
+      const abbr = { MNQ:'NQ', MGC:'GC', MES:'ES', MCL:'CL', BTC:'BT', ETH:'ET', XRP:'XR' };
       let html = '<table class="corr-table"><thead><tr><th></th>';
-      CORR_SYMS.forEach(s => { html += `<th>${s}</th>`; });
+      CORR_SYMS.forEach(s => { html += `<th title="${s}">${abbr[s] || s}</th>`; });
       html += '</tr></thead><tbody>';
 
       CORR_SYMS.forEach(rowSym => {

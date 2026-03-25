@@ -202,6 +202,19 @@
           </div>
         </div>
 
+        <!-- ── Correlation Heatmap (left panel) ──────────────────────────── -->
+        <div class="panel-section" id="correlation-section-left">
+          <div class="panel-header collapsible-header" data-section="correlation-left">
+            Correlation <span class="corr-age" id="corr-age"></span>
+            <span class="section-chevron">▾</span>
+          </div>
+          <div class="section-body">
+            <div id="corr-heatmap">
+              <div class="corr-loading">Loading…</div>
+            </div>
+          </div>
+        </div>
+
       </aside>
 
       <div id="chart-wrap">
@@ -212,7 +225,7 @@
       <aside id="right-panel">
 
         <!-- ── Directional Prediction ─────────────────────────────────── -->
-        <div class="panel-section" id="prediction-section">
+        <div class="panel-section" id="prediction-section" style="display:none">
           <div class="panel-header collapsible-header" data-section="prediction">
             Bias <span id="pred-symbol-label" class="pred-symbol-label"></span>
             <span class="section-chevron">▾</span>
@@ -225,7 +238,7 @@
         </div>
 
         <!-- ── Scan Predictions ────────────────────────────────────────── -->
-        <div class="panel-section" id="scan-predictions-section">
+        <div class="panel-section" id="scan-predictions-section" style="display:none">
           <div class="panel-header collapsible-header" data-section="scan-predictions">
             Predictions <span id="pred-count-badge" class="pred-count-badge"></span>
             <span class="section-chevron">▾</span>
@@ -234,19 +247,6 @@
             <div id="daily-risk-banner" style="display:none"></div>
             <div id="predictions-feed">
               <p class="placeholder">Scanning…</p>
-            </div>
-          </div>
-        </div>
-
-        <!-- ── Correlation Heatmap ────────────────────────────────────── -->
-        <div class="panel-section" id="correlation-section">
-          <div class="panel-header collapsible-header" data-section="correlation">
-            Correlation <span class="corr-age" id="corr-age"></span>
-            <span class="section-chevron">▾</span>
-          </div>
-          <div class="section-body">
-            <div id="corr-heatmap">
-              <div class="corr-loading">Loading…</div>
             </div>
           </div>
         </div>
