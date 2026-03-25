@@ -209,6 +209,69 @@
     } catch (_) {}
   }
 
+  // ── Correlation heatmap ───────────────────────────────────────────────────
+
+  const CORR_SYMS = ['MNQ', 'MGC', 'MES', 'MCL'];
+
+  function _corrColor(v) {
+    // v in [-1, 1]: green for high positive, red for high negative, dim for near-0
+    if (v >= 0.7)  return '#4caf50';
+    if (v >= 0.4)  return '#8bc34a';
+    if (v >= 0.1)  return '#607d8b';
+    if (v >= -0.1) return '#546e7a';
+    if (v >= -0.4) return '#ef9a9a';
+    return '#ef4444';
+  }
+
+  async function _updateCorrHeatmap() {
+    const el = document.getElementById('corr-heatmap');
+    const ageEl = document.getElementById('corr-age');
+    if (!el) return;
+    try {
+      const res = await fetch('/api/correlation');
+      if (!res.ok) return;
+      const data = res.status === 204 ? null : await res.json();
+      if (!data?.matrix) { el.innerHTML = '<div class="corr-loading">Not enough data yet.</div>'; return; }
+
+      const { matrix, updatedAt } = data;
+      if (ageEl && updatedAt) {
+        const mins = Math.round((Date.now() - new Date(updatedAt)) / 60000);
+        ageEl.textContent = mins < 2 ? '' : `${mins}m ago`;
+      }
+
+      // Header row
+      let html = '<table class="corr-table"><thead><tr><th></th>';
+      CORR_SYMS.forEach(s => { html += `<th>${s}</th>`; });
+      html += '</tr></thead><tbody>';
+
+      CORR_SYMS.forEach(rowSym => {
+        html += `<tr><td class="corr-sym">${rowSym}</td>`;
+        CORR_SYMS.forEach(colSym => {
+          const v = matrix[rowSym]?.[colSym] ?? 0;
+          if (rowSym === colSym) {
+            html += `<td class="corr-cell corr-diag">—</td>`;
+          } else {
+            const color = _corrColor(v);
+            const label = v > 0 ? `+${v.toFixed(2)}` : v.toFixed(2);
+            html += `<td class="corr-cell" style="color:${color}" title="${rowSym} vs ${colSym}: ${label}">${label}</td>`;
+          }
+        });
+        html += '</tr>';
+      });
+
+      html += '</tbody></table>';
+      html += '<div class="corr-legend">';
+      html += '<span style="color:#4caf50">■</span> Strong+ &nbsp;';
+      html += '<span style="color:#8bc34a">■</span> Mild+ &nbsp;';
+      html += '<span style="color:#607d8b">■</span> Neutral &nbsp;';
+      html += '<span style="color:#ef9a9a">■</span> Mild− &nbsp;';
+      html += '<span style="color:#ef4444">■</span> Strong−';
+      html += '</div>';
+
+      el.innerHTML = html;
+    } catch (_) {}
+  }
+
   // ── Options data (OI walls, max pain, P/C ratio, ATM IV) ───────────────────
 
   // ── Forex rate (Polygon.io) ───────────────────────────────────────────────
@@ -256,6 +319,12 @@
       badge.className = 'data-age-badge ' + (
         candles < 1 ? 'age-fresh' : candles < 3 ? 'age-stale' : 'age-old'
       );
+      // Show last candle time in MT on hover
+      const candleMT = new Date(candleTimeUnix * 1000).toLocaleTimeString('en-US', {
+        hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true,
+        timeZone: 'America/Denver',
+      });
+      badge.title = `Last candle: ${candleMT} MT`;
     }
   }
 
@@ -699,6 +768,18 @@
         }
       }
     } catch (_) {}
+    // Seed the data-age badge immediately from the actual last candle (don't wait for an alert)
+    try {
+      const cRes = await fetch(`/api/candles?symbol=${activeSymbol}&timeframe=5m`);
+      if (cRes.ok) {
+        const { candles } = await cRes.json();
+        if (candles && candles.length) {
+          const lastCandle = candles[candles.length - 1];
+          _lastKnownCandleTime = lastCandle.time;
+          _updateDataAgeBadge(activeSymbol, lastCandle.time);
+        }
+      }
+    } catch (_) {}
 
     // Load trade log
     try {
@@ -775,6 +856,10 @@
     if (cfg.features?.economicCalendar)   _updateCalendarBadge();
     if (cfg.features?.relativeStrength && (activeSymbol === 'MNQ' || activeSymbol === 'MES')) {
       _updateRSWidget();
+    }
+    if (cfg.features?.correlationHeatmap) {
+      _updateCorrHeatmap();
+      setInterval(_updateCorrHeatmap, 5 * 60 * 1000); // refresh every 5 min
     }
     _fetchOptionsData(activeSymbol);
     _fetchForexRate();
@@ -2292,6 +2377,11 @@
           fetchAndRender();            // re-fetch alert feed (open outcomes may have resolved)
           _setRefreshTimes(msg.ts, msg.nextRefresh);
           if (msg.newAlerts > 0) _showNewAlertBanner(msg.newAlerts);
+          // Update data-age badge directly from last candle time — don't wait for alerts
+          if (msg.lastCandleTime && msg.lastCandleTime[activeSymbol]) {
+            _lastKnownCandleTime = msg.lastCandleTime[activeSymbol];
+            _updateDataAgeBadge(activeSymbol, msg.lastCandleTime[activeSymbol]);
+          }
         }
         if (msg.type === 'refresh_schedule') {
           // Server rescheduled the interval (e.g. settings change) — sync countdown + select
