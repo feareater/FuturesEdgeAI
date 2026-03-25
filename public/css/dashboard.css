@@ -74,6 +74,26 @@ html, body {
 .tb-row-tf   { border-bottom: 1px solid var(--border); }
 .tb-row-data { gap: 10px; }
 
+.tb-row-corr {
+  border-bottom: 1px solid var(--border);
+  gap: 8px;
+  padding-top: 3px;
+  padding-bottom: 3px;
+  align-items: flex-start;
+}
+
+/* Inline correlation table in topbar */
+.corr-inline { flex: 1; overflow-x: auto; }
+.corr-inline .corr-table {
+  margin-bottom: 0;
+  font-size: 9px;
+}
+.corr-inline .corr-table th { font-size: 9px; padding: 1px 3px; }
+.corr-inline .corr-sym      { font-size: 9px; padding: 2px 4px 2px 0; width: 20px; }
+.corr-inline .corr-cell     { padding: 2px 3px; font-size: 9px; }
+.corr-inline .corr-legend   { display: none; }
+.corr-inline .corr-loading  { font-size: 10px; }
+
 /* Brand + status stacked, centered */
 .tb-brand-block {
   display: flex;

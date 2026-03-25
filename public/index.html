@@ -95,7 +95,15 @@
         </div>
       </div>
 
-      <!-- Row 4: OHLC · Last price · RS · Options -->
+      <!-- Row 4: Correlation heatmap -->
+      <div class="tb-row tb-row-corr">
+        <span class="control-label">Corr <span class="corr-age" id="corr-age"></span></span>
+        <div id="corr-heatmap" class="corr-inline">
+          <span class="corr-loading">Loading…</span>
+        </div>
+      </div>
+
+      <!-- Row 5: OHLC · Last price · RS · Options -->
       <div class="tb-row tb-row-data">
         <div id="ohlc-display">
           <span class="ohlc-label">O</span><span id="ohlc-o">—</span>
@@ -202,19 +210,6 @@
           </div>
         </div>
 
-        <!-- ── Correlation Heatmap (left panel) ──────────────────────────── -->
-        <div class="panel-section" id="correlation-section-left">
-          <div class="panel-header collapsible-header" data-section="correlation-left">
-            Correlation <span class="corr-age" id="corr-age"></span>
-            <span class="section-chevron">▾</span>
-          </div>
-          <div class="section-body">
-            <div id="corr-heatmap">
-              <div class="corr-loading">Loading…</div>
-            </div>
-          </div>
-        </div>
-
       </aside>
 
       <div id="chart-wrap">
@@ -225,7 +220,7 @@
       <aside id="right-panel">
 
         <!-- ── Directional Prediction ─────────────────────────────────── -->
-        <div class="panel-section" id="prediction-section" style="display:none">
+        <div class="panel-section" id="prediction-section">
           <div class="panel-header collapsible-header" data-section="prediction">
             Bias <span id="pred-symbol-label" class="pred-symbol-label"></span>
             <span class="section-chevron">▾</span>
