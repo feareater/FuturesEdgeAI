@@ -13,7 +13,7 @@ const GAMMA_TTL_MS = 30 * 60 * 1000;       // 30-min cache for gamma (moves slow
 const _cache       = new Map();
 
 // Proxy ETF for each futures symbol (reserved for when options data is available)
-const OPTIONS_PROXY = { MNQ: 'QQQ', MES: 'SPY', MGC: 'GLD', MCL: 'USO' };
+const OPTIONS_PROXY = { MNQ: 'QQQ', MES: 'SPY', MGC: 'GLD', MCL: 'USO', SIL: 'SLV' };
 
 // ── Internals ──────────────────────────────────────────────────────────────
 

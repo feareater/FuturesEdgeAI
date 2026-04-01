@@ -40,11 +40,8 @@
             <span id="data-age-text">—</span>
           </div>
           <a href="/docs.html"           id="docs-nav-link"       title="Setup Guide">Guide</a>
-          <a href="/scanner.html"        id="scanner-nav-link"    title="All-Setups Scanner">Scanner</a>
-          <a href="/commentary.html"     id="ai-nav-link"         title="AI Analysis">AI</a>
-          <a href="/performance.html"    id="perf-nav-link"       title="Performance Analytics">Stats</a>
-          <a href="/backtest.html"       id="bt-nav-link"         title="Alert Replay">Replay</a>
-          <a href="/tradelog.html"      id="tradelog-nav-link"   title="Trade Log">Trade Log</a>
+          <a href="/performance.html"    id="perf-nav-link"       title="Performance Stats">Stats</a>
+          <a href="/tradelog.html"       id="tradelog-nav-link"   title="Trade Log">Trade Log</a>
           <a href="/propfirms.html"      id="propfirms-nav-link"  title="Prop Firm Tracker">Prop Firms</a>
           <a href="/tradingaccount.html" id="realaccount-nav-link" title="Real Account Tracker">Real Account</a>
           <button id="pine-copy-btn" title="Copy Pine Script for TradingView" onclick="window._copyPineScript()">Pine Script</button>
@@ -52,40 +49,54 @@
         </div>
       </div>
 
-      <!-- Row 2: Symbol selection -->
+      <!-- Row 2: Dashboard mode + Symbol selection -->
       <div class="tb-row tb-row-sym">
-        <span class="control-label">Symbol</span>
-        <div class="sym-groups">
+        <div class="dash-mode-group">
+          <button class="dash-mode-btn active" id="dash-mode-index" data-mode="index" title="Index &amp; Commodities dashboard">Futures</button>
+          <button class="dash-mode-btn"        id="dash-mode-crypto" data-mode="crypto" title="Crypto dashboard">Crypto</button>
+        </div>
+        <div class="sym-group-divider"></div>
+        <!-- Index/Commodities symbols (shown in Futures mode) -->
+        <div class="sym-groups" id="sym-groups-index">
           <div class="sym-group">
             <span class="sym-group-label">Index</span>
             <div class="btn-group">
-              <button class="sym-btn active" data-symbol="MNQ">MNQ</button>
-              <button class="sym-btn"        data-symbol="MES">MES</button>
+              <button class="sym-btn active" data-symbol="MNQ" data-mode="index">MNQ</button>
+              <button class="sym-btn"        data-symbol="MES" data-mode="index">MES</button>
             </div>
           </div>
           <div class="sym-group-divider"></div>
           <div class="sym-group">
             <span class="sym-group-label">Commodities</span>
             <div class="btn-group">
-              <button class="sym-btn" data-symbol="MGC">MGC</button>
-              <button class="sym-btn" data-symbol="MCL">MCL</button>
+              <button class="sym-btn" data-symbol="MGC" data-mode="index">MGC</button>
+              <button class="sym-btn" data-symbol="MCL" data-mode="index">MCL</button>
+              <button class="sym-btn" data-symbol="SIL" data-mode="index">SIL</button>
             </div>
           </div>
-          <div class="sym-group-divider"></div>
-          <div class="sym-group">
-            <span class="sym-group-label">Commodities</span>
-            <div class="btn-group">
-              <button class="sym-btn" data-symbol="SIL">SIL</button>
-            </div>
-          </div>
-          <div class="sym-group-divider"></div>
+        </div>
+        <!-- Crypto symbols (shown in Crypto mode) -->
+        <div class="sym-groups" id="sym-groups-crypto" style="display:none">
           <div class="sym-group">
             <span class="sym-group-label">Crypto</span>
             <div class="btn-group">
-              <button class="sym-btn" data-symbol="BTC">BTC</button>
-              <button class="sym-btn" data-symbol="ETH">ETH</button>
-              <button class="sym-btn" data-symbol="XRP">XRP</button>
-              <button class="sym-btn" data-symbol="XLM">XLM</button>
+              <button class="sym-btn" data-symbol="BTC" data-mode="crypto">BTC</button>
+              <button class="sym-btn" data-symbol="ETH" data-mode="crypto">ETH</button>
+              <button class="sym-btn" data-symbol="XRP" data-mode="crypto">XRP</button>
+              <button class="sym-btn" data-symbol="XLM" data-mode="crypto">XLM</button>
+            </div>
+          </div>
+        </div>
+        <!-- Reference symbols (always visible) -->
+        <div class="sym-group-divider"></div>
+        <div class="sym-groups" id="sym-groups-ref">
+          <div class="sym-group">
+            <span class="sym-group-label">Reference</span>
+            <div class="btn-group">
+              <button class="sym-btn" data-symbol="QQQ" data-mode="ref">QQQ</button>
+              <button class="sym-btn" data-symbol="SPY" data-mode="ref">SPY</button>
+              <button class="sym-btn" data-symbol="DXY" data-mode="ref">DXY</button>
+              <button class="sym-btn" data-symbol="VIX" data-mode="ref">VIX</button>
             </div>
           </div>
         </div>
@@ -107,7 +118,10 @@
       <!-- Row 4: Correlation heatmap -->
       <div class="tb-row tb-row-corr">
         <span class="control-label">Corr <span class="corr-age" id="corr-age"></span></span>
-        <div id="corr-heatmap" class="corr-inline">
+        <div id="corr-heatmap-index" class="corr-inline">
+          <span class="corr-loading">Loading…</span>
+        </div>
+        <div id="corr-heatmap-crypto" class="corr-inline" style="display:none">
           <span class="corr-loading">Loading…</span>
         </div>
       </div>
@@ -358,15 +372,6 @@
             </div>
           </div>
 
-          <!-- Feature toggles (server-rendered by layers.js) -->
-          <div class="collapsible-section">
-            <div class="panel-header features-header collapsible-header" data-section="features">
-              Features <span class="section-chevron">▾</span>
-            </div>
-            <div class="section-body">
-              <div id="feature-list"></div>
-            </div>
-          </div>
 
 
         </div>

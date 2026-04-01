@@ -11,10 +11,10 @@ const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour (CBOE data is 15-min delayed)
 const DAILY_TTL_MS = 30 * 60 * 1000; // 30 min for daily OHLC cache
 
 // ETF proxies for each futures symbol
-const ETF_PROXY     = { MNQ: 'QQQ', MES: 'SPY', MGC: 'GLD', MCL: 'USO' };
+const ETF_PROXY     = { MNQ: 'QQQ', MES: 'SPY', MGC: 'GLD', MCL: 'USO', SIL: 'SLV' };
 // Corresponding micro futures tickers on Yahoo Finance — used to get the live
 // futures price from the same source/time as the ETF price for accurate scaling.
-const FUTURES_YAHOO = { MNQ: 'MNQ=F', MES: 'MES=F', MGC: 'MGC=F', MCL: 'MCL=F' };
+const FUTURES_YAHOO = { MNQ: 'MNQ=F', MES: 'MES=F', MGC: 'MGC=F', MCL: 'MCL=F', SIL: 'SIL' };
 
 const _cache      = new Map(); // symbol → { data, timestamp }
 const _dailyCache = new Map(); // etfTicker → { data, timestamp }

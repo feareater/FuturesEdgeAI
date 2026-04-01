@@ -27,11 +27,10 @@ const { computeRelativeStrength } = require('./analysis/relativeStrength');
 const { computeCorrelationMatrix } = require('./analysis/correlation');
 const { computePerformanceStats }  = require('./analysis/performanceStats');
 const { predict }                  = require('./analysis/predictor');
-const { getCalendarEvents, getNextEvent, isNearEvent } = require('./data/calendar');
+const { getCalendarEvents } = require('./data/calendar');
 const { getOptionsData }                               = require('./data/options');
 const settings              = require('../config/settings.json');
 const fs                    = require('fs');
-const SETTINGS_PATH         = require('path').join(__dirname, '..', 'config', 'settings.json');
 
 const PORT        = process.env.PORT        || 3000;
 const DATA_SOURCE = process.env.DATA_SOURCE || 'seed';
@@ -200,9 +199,9 @@ app.get('/api/trendlines', (req, res) => {
   }
 });
 
-// GET /api/settings — returns the risk + features sections of settings.json for the frontend
+// GET /api/settings — returns the risk section of settings.json for the frontend
 app.get('/api/settings', (_req, res) => {
-  res.json({ risk: settings.risk || {}, features: settings.features || {} });
+  res.json({ risk: settings.risk || {} });
 });
 
 // POST /api/settings — update in-memory risk params and re-scan.
@@ -1000,31 +999,6 @@ app.get('/api/scan', async (_req, res) => {
   }
 });
 
-// POST /api/features — hot-toggle individual feature flags (no restart needed)
-// body: { "openingRange": false } or any subset of features
-app.post('/api/features', (req, res) => {
-  if (!settings.features) settings.features = {};
-  const updates = req.body;
-  const changed = [];
-  for (const [key, val] of Object.entries(updates)) {
-    if (typeof val === 'boolean') {
-      settings.features[key] = val;
-      changed.push(key);
-    }
-  }
-  if (changed.length) {
-    // Persist to disk
-    try {
-      const current = JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf8'));
-      current.features = settings.features;
-      fs.writeFileSync(SETTINGS_PATH, JSON.stringify(current, null, 2), 'utf8');
-      console.log(`[features] Updated: ${changed.join(', ')}`);
-    } catch (e) {
-      console.error('[features] Failed to persist:', e.message);
-    }
-  }
-  res.json({ features: settings.features });
-});
 
 // GET /api/calendar?symbol=MNQ — upcoming high-impact economic events
 app.get('/api/calendar', async (req, res) => {
@@ -1052,6 +1026,8 @@ app.get('/api/pine-script', async (req, res) => {
     const lz = d.scaledLiquidityZones     || [];
     const hp = d.scaledHedgePressureZones || [];
     const pv = d.scaledPivotCandidates    || [];
+    const PROXY_MAP   = { MNQ: 'QQQ', MES: 'SPY', MGC: 'GLD', MCL: 'USO', SIL: 'SLV' };
+    const proxyTicker = PROXY_MAP[symbol] || 'QQQ';
 
     const n  = v => v != null ? String(Math.round(v)) : 'na';
     const f  = v => v != null ? v.toFixed(4) : 'na';
@@ -1108,24 +1084,28 @@ app.get('/api/pine-script', async (req, res) => {
     }
 
     // barstate.islast: extend lines right + add labels
-    // Helper: `lbl(x, y, text, color)` → transparent-bg label extending right
+    // Uses line.all/label.all/box.all wipe at start of every islast run — definitively prevents accumulation
     const fixedExtLines = [
-      // [varName, show_flag, linecolor, linewidth, linestyle, label, textcolor]
-      [`oi1`,       `show_oi`,      `color.new(color.orange, 20)`,  2, `line.style_dashed`,  `"OI Wall 1 " + str.tostring(oi1, "#")`,       `color.orange`],
-      [`oi2`,       `show_oi`,      `color.new(color.orange, 45)`,  1, `line.style_dashed`,  `"OI Wall 2 " + str.tostring(oi2, "#")`,       `color.new(color.orange, 30)`],
-      [`oi3`,       `show_oi`,      `color.new(color.orange, 60)`,  1, `line.style_dashed`,  `"OI Wall 3 " + str.tostring(oi3, "#")`,       `color.new(color.orange, 45)`],
-      [`max_pain`,  `show_maxpain`, `color.new(color.fuchsia, 20)`, 1, `line.style_dotted`,  `"Max Pain " + str.tostring(max_pain, "#")`,   `color.fuchsia`],
-      [`gex_flip`,  `show_gexflip`, `color.new(color.aqua, 15)`,    2, `line.style_dashed`,  `"γ Flip " + str.tostring(gex_flip, "#")`,     `color.aqua`],
-      [`call_wall`, `show_walls`,   `color.new(color.teal, 30)`,    1, `line.style_dotted`,  `"Call Wall " + str.tostring(call_wall, "#")`, `color.teal`],
-      [`put_wall`,  `show_walls`,   `color.new(color.red, 30)`,     1, `line.style_dotted`,  `"Put Wall " + str.tostring(put_wall, "#")`,   `color.red`],
-      [`qqq_pdo`,   `show_daily`,   `color.new(color.purple, 25)`,  1, `line.style_dotted`,  `"QQQ PDO " + str.tostring(qqq_pdo, "#")`,    `color.purple`],
-      [`qqq_pdc`,   `show_daily`,   `color.new(color.yellow, 20)`,  1, `line.style_dotted`,  `"QQQ PDC " + str.tostring(qqq_pdc, "#")`,    `color.yellow`],
-      [`qqq_do`,    `show_daily`,   `color.new(color.silver, 30)`,  1, `line.style_dotted`,  `"QQQ DO " + str.tostring(qqq_do, "#")`,      `color.silver`],
+      // [varName, show_flag, linecolor, linewidth, linestyle, label, textcolor, size]
+      [`oi1`,       `show_oi`,      `color.new(color.orange, 20)`,  2, `line.style_dashed`,  `"OI Wall 1 " + str.tostring(oi1, "#")`,       `color.orange`,  `size.small`],
+      [`oi2`,       `show_oi`,      `color.new(color.orange, 45)`,  1, `line.style_dashed`,  `"OI Wall 2 " + str.tostring(oi2, "#")`,       `color.orange`,  `size.tiny`],
+      [`oi3`,       `show_oi`,      `color.new(color.orange, 60)`,  1, `line.style_dashed`,  `"OI Wall 3 " + str.tostring(oi3, "#")`,       `color.new(color.orange, 20)`, `size.tiny`],
+      [`max_pain`,  `show_maxpain`, `color.new(color.fuchsia, 20)`, 1, `line.style_dotted`,  `"Max Pain " + str.tostring(max_pain, "#")`,   `color.fuchsia`, `size.small`],
+      [`gex_flip`,  `show_gexflip`, `color.new(color.aqua, 15)`,    2, `line.style_dashed`,  `"GEX Flip " + str.tostring(gex_flip, "#")`,   `color.aqua`,    `size.small`],
+      [`call_wall`, `show_walls`,   `color.new(color.teal, 30)`,    1, `line.style_dotted`,  `"Call Wall " + str.tostring(call_wall, "#")`, `color.teal`,    `size.small`],
+      [`put_wall`,  `show_walls`,   `color.new(color.red, 30)`,     1, `line.style_dotted`,  `"Put Wall " + str.tostring(put_wall, "#")`,   `color.red`,     `size.small`],
+      [`qqq_pdo`,   `show_daily`,   `color.new(color.purple, 25)`,  1, `line.style_dotted`,  `"${proxyTicker} PDO " + str.tostring(qqq_pdo, "#")`,     `color.purple`,  `size.tiny`],
+      [`qqq_pdc`,   `show_daily`,   `color.new(color.yellow, 20)`,  1, `line.style_dotted`,  `"${proxyTicker} PDC " + str.tostring(qqq_pdc, "#")`,     `color.yellow`,  `size.tiny`],
+      [`qqq_do`,    `show_daily`,   `color.new(color.silver, 30)`,  1, `line.style_dotted`,  `"${proxyTicker} DO " + str.tostring(qqq_do, "#")`,       `color.silver`,  `size.tiny`],
     ];
-    let extFixed = fixedExtLines.map(([v, flag, lc, lw, ls, lbl, tc]) =>
+
+    // label.style_label_left: pin on left side of box, box extends right — standard right-edge label
+    // Semi-opaque dark background (70% transparency = 30% visible) makes text readable on any chart theme
+
+    let extFixed = fixedExtLines.map(([v, flag, lc, lw, ls, lbl, tc, sz]) =>
       `    if ${flag} and ${v} != 0 and not na(${v})\n` +
       `        line.new(bar_index, ${v}, bar_index + 1, ${v}, extend=extend.right, color=${lc}, width=${lw}, style=${ls})\n` +
-      `        label.new(bar_index + 2, ${v}, ${lbl}, style=label.style_label_left, color=color.new(color.black, 100), textcolor=${tc}, size=size.tiny)`
+      `        label.new(bar_index + 2, ${v}, ${lbl}, style=label.style_label_left, color=color.new(color.black, 70), textcolor=${tc}, size=${sz || 'size.small'})`
     ).join('\n');
 
     let extLz = '';
@@ -1133,10 +1113,11 @@ app.get('/api/pine-script', async (req, res) => {
       const z = lz[i]; if (!z) continue;
       const c  = LZ_COLOR[z.bias] || 'color.yellow';
       const lb = `LZ ${LZ_LABEL[z.bias] || ''}`;
+      const mid = Math.round((z.low + z.high) / 2);
       extLz +=
         `    if show_lz and not na(lz${i}_lo) and lz${i}_lo != 0\n` +
         `        box.new(bar_index, lz${i}_hi, bar_index + 1, lz${i}_lo, extend=extend.right, bgcolor=color.new(${c}, 88), border_color=color.new(${c}, 55), border_width=1)\n` +
-        `        label.new(bar_index + 2, (lz${i}_lo + lz${i}_hi) / 2, "${lb} ${Math.round((z.low+z.high)/2)}", style=label.style_label_left, color=color.new(color.black, 100), textcolor=color.new(${c}, 30), size=size.tiny)\n`;
+        `        label.new(bar_index + 2, (lz${i}_lo + lz${i}_hi) / 2, "${lb} ${mid}", style=label.style_label_left, color=color.new(color.black, 70), textcolor=${c}, size=size.small)\n`;
     }
 
     let extHp = '';
@@ -1145,10 +1126,11 @@ app.get('/api/pine-script', async (req, res) => {
       const c  = HP_COLOR(z.pressure);
       const a  = 20 + i * 15;
       const lw = i === 0 ? 2 : 1;
+      const hpTag = z.pressure === 'support' ? 'HP Sup' : 'HP Res';
       extHp +=
         `    if show_hp and not na(hp${i}) and hp${i} != 0\n` +
         `        line.new(bar_index, hp${i}, bar_index + 1, hp${i}, extend=extend.right, color=color.new(${c}, ${a}), width=${lw}, style=line.style_dashed)\n` +
-        `        label.new(bar_index + 2, hp${i}, "${z.pressure === 'support' ? 'HP ▲ ' : 'HP ▼ '}" + str.tostring(hp${i}, "#"), style=label.style_label_left, color=color.new(color.black, 100), textcolor=color.new(${c}, ${a}), size=size.tiny)\n`;
+        `        label.new(bar_index + 2, hp${i}, "${hpTag} " + str.tostring(hp${i}, "#"), style=label.style_label_left, color=color.new(color.black, 70), textcolor=${c}, size=size.small)\n`;
     }
 
     let extPv = '';
@@ -1158,26 +1140,26 @@ app.get('/api/pine-script', async (req, res) => {
       extPv +=
         `    if show_pv and not na(pv${i}) and pv${i} != 0\n` +
         `        line.new(bar_index, pv${i}, bar_index + 1, pv${i}, extend=extend.right, color=color.new(color.orange, ${a}), width=1, style=line.style_dotted)\n` +
-        `        label.new(bar_index + 2, pv${i}, "Pivot " + str.tostring(pv${i}, "#"), style=label.style_label_left, color=color.new(color.black, 100), textcolor=color.new(color.orange, 20), size=size.tiny)\n`;
+        `        label.new(bar_index + 2, pv${i}, "Pivot " + str.tostring(pv${i}, "#"), style=label.style_label_left, color=color.new(color.black, 70), textcolor=color.orange, size=size.small)\n`;
     }
 
     const pine = `//@version=6
 // ──────────────────────────────────────────────────────────────────────────────
-// FuturesEdge AI — QQQ Options Levels
+// FuturesEdge AI — ${proxyTicker} Options Levels
 // Generated: ${ts}
-// Symbol:    ${symbol}  |  Source: QQQ (via CBOE delayed quotes)
+// Symbol:    ${symbol}  |  Source: ${proxyTicker} (via CBOE delayed quotes)
 // Paste into TradingView Pine Editor on ${symbol === 'MNQ' ? 'NQ1! or MNQ1!' : symbol === 'MES' ? 'ES1! or MES1!' : symbol}
 // Refresh: re-run /api/pine-script on your FuturesEdge server and repaste.
 // Levels are drawn as plot() series — they integrate with the chart price scale.
 // ──────────────────────────────────────────────────────────────────────────────
-indicator("FuturesEdge QQQ Levels", overlay=true)
+indicator("FuturesEdge ${proxyTicker} Levels", overlay=true)
 
 // ── Groups ─────────────────────────────────────────────────────────────────────
 var g1 = "Options Levels"
 var g2 = "Liquidity Zones"
 var g3 = "Hedge Pressure"
 var g4 = "Pivot Candidates"
-var g5 = "QQQ Daily Levels"
+var g5 = "${proxyTicker} Daily Levels"
 var g6 = "Info Table"
 
 show_oi      = input.bool(true,  "OI Walls",         group=g1)
@@ -1187,7 +1169,7 @@ show_walls   = input.bool(true,  "Call / Put Walls",  group=g1)
 show_lz      = input.bool(true,  "Liquidity Zones",   group=g2)
 show_hp      = input.bool(true,  "Hedge Pressure",    group=g3)
 show_pv      = input.bool(true,  "Pivot Candidates",  group=g4)
-show_daily   = input.bool(true,  "QQQ Daily Levels",  group=g5)
+show_daily   = input.bool(true,  "${proxyTicker} Daily Levels",  group=g5)
 show_table   = input.bool(true,  "Show Info Table",   group=g6)
 tbl_pos      = input.string("top_right", "Table position", options=["top_right","top_left","bottom_right","bottom_left"], group=g6)
 
@@ -1227,10 +1209,10 @@ plot(show_gexflip and gex_flip != 0 ? gex_flip : na, "GEX Flip", color=color.new
 plot(show_walls and call_wall != 0 ? call_wall : na, "Call Wall", color=color.new(color.teal,    30), linewidth=1, style=plot.style_linebr)
 plot(show_walls and put_wall  != 0 ? put_wall  : na, "Put Wall",  color=color.new(color.red,     30), linewidth=1, style=plot.style_linebr)
 
-// QQQ daily reference levels
-plot(show_daily and qqq_pdo != 0 ? qqq_pdo : na, "QQQ Prev Day Open",  color=color.new(color.purple, 25), linewidth=1, style=plot.style_linebr)
-plot(show_daily and qqq_pdc != 0 ? qqq_pdc : na, "QQQ Prev Day Close", color=color.new(color.yellow, 20), linewidth=1, style=plot.style_linebr)
-plot(show_daily and qqq_do  != 0 ? qqq_do  : na, "QQQ Day Open",       color=color.new(color.silver, 30), linewidth=1, style=plot.style_linebr)
+// ${proxyTicker} daily reference levels
+plot(show_daily and qqq_pdo != 0 ? qqq_pdo : na, "${proxyTicker} Prev Day Open",  color=color.new(color.purple, 25), linewidth=1, style=plot.style_linebr)
+plot(show_daily and qqq_pdc != 0 ? qqq_pdc : na, "${proxyTicker} Prev Day Close", color=color.new(color.yellow, 20), linewidth=1, style=plot.style_linebr)
+plot(show_daily and qqq_do  != 0 ? qqq_do  : na, "${proxyTicker} Day Open",       color=color.new(color.silver, 30), linewidth=1, style=plot.style_linebr)
 
 // Liquidity zones — filled horizontal bands (plot + fill)
 ${lzPlotLines}
@@ -1239,7 +1221,14 @@ ${hpPlotLines}
 // Pivot candidates
 ${pvPlotLines}
 // ── Extend lines right + labels (last bar only) ────────────────────────────────
+// Wipe all dynamic objects first — prevents accumulation across ticks and bar transitions
 if barstate.islast
+    for _l in line.all
+        line.delete(_l)
+    for _lb in label.all
+        label.delete(_lb)
+    for _bx in box.all
+        box.delete(_bx)
 ${extFixed}
 ${extLz}
 ${extHp}
@@ -1253,7 +1242,7 @@ if barstate.islast and show_table
     hdr     = color.new(color.gray, 50)
     def_txt = color.new(color.white, 10)
 
-    table.cell(tbl, 0, 0, "FuturesEdge QQQ", bgcolor=color.new(color.blue, 60), text_color=color.white, text_size=size.small, tooltip="Generated ${ts}")
+    table.cell(tbl, 0, 0, "FuturesEdge ${proxyTicker}", bgcolor=color.new(color.blue, 60), text_color=color.white, text_size=size.small, tooltip="Generated ${ts}")
     table.cell(tbl, 1, 0, "${symbol}", bgcolor=color.new(color.blue, 60), text_color=color.white, text_size=size.small)
 
     table.cell(tbl, 0, 1, "P/C Ratio", bgcolor=hdr, text_color=def_txt, text_size=size.tiny)

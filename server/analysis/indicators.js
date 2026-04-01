@@ -51,11 +51,10 @@ function computeIndicators(candles, opts = {}) {
   const fvgs        = detectFVGs(candles, atrCurrent);
   const orderBlocks = detectOrderBlocks(candles, atrCurrent, impulseThreshold);
 
-  // Feature-gated indicators — only computed when the feature is enabled
   // Crypto assets (BTC/ETH/XRP) trade 24/7 — no RTH session, opening range, or Asian/London levels
-  const volumeProfile  = !isCrypto && features.volumeProfile && symbol ? computeVolumeProfile(candles, symbol) : null;
-  const openingRange   = !isCrypto && features.openingRange            ? computeOpeningRange(candles)           : null;
-  const sessionLevels  = !isCrypto && features.sessionLevels           ? computeSessionLevels(candles)          : null;
+  const volumeProfile  = !isCrypto && symbol ? computeVolumeProfile(candles, symbol) : null;
+  const openingRange   = !isCrypto          ? computeOpeningRange(candles)           : null;
+  const sessionLevels  = !isCrypto          ? computeSessionLevels(candles)          : null;
 
   console.log(
     `[indicators] ema9:${ema9.length} ema21:${ema21.length} ema50:${ema50.length}` +

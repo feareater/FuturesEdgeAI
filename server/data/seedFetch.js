@@ -24,10 +24,15 @@ const SYMBOLS = {
   SIL: 'SIL',   // Global X Silver Miners ETF — full multi-TF
 };
 
-// Correlation-only symbols — 5m data only (not scanned for setups).
-const CORR_SYMBOLS = {
+// Reference/correlation symbols — fetched with full timeframes so they can be charted.
+const REF_SYMBOLS = {
   DXY: 'DX-Y.NYB', // US Dollar Index (ICE)
   VIX: '^VIX',     // CBOE Volatility Index
+  QQQ: 'QQQ',      // Invesco QQQ Trust (NQ proxy)
+  SPY: 'SPY',      // SPDR S&P 500 ETF (ES proxy)
+  GLD: 'GLD',      // SPDR Gold Trust (MGC proxy)
+  USO: 'USO',      // US Oil Fund ETF (MCL proxy)
+  SLV: 'SLV',      // iShares Silver Trust (SIL proxy)
 };
 
 // Yahoo Finance supports: 1m (max 7d), 2m (max 60d), 5m (max 60d), 15m/30m (max 60d),
@@ -162,19 +167,33 @@ async function fetchAll() {
   const { fetchAllCrypto } = require('./coinbaseFetch');
   await fetchAllCrypto();
 
-  // Correlation-only symbols — 5m candles only
-  for (const [symbol, yfSymbol] of Object.entries(CORR_SYMBOLS)) {
-    console.log(`[seedFetch] ── ${symbol} (${yfSymbol}) correlation-only ──`);
-    try {
-      const raw        = await fetchYahoo(yfSymbol, '5m', '30d');
-      const normalized = normalize(symbol, '5m', raw);
-      const outPath    = path.join(SEED_DIR, `${symbol}_5m.json`);
-      fs.writeFileSync(outPath, JSON.stringify(normalized, null, 2));
-      console.log(`[seedFetch] ${symbol} 5m  ${normalized.candles.length} candles → ${outPath}`);
-    } catch (err) {
-      console.warn(`[seedFetch] ${symbol} fetch failed: ${err.message}`);
+  // Reference symbols (DXY, VIX, QQQ, SPY) — full timeframes for charting
+  for (const [symbol, yfSymbol] of Object.entries(REF_SYMBOLS)) {
+    console.log(`[seedFetch] ── ${symbol} (${yfSymbol}) reference ──`);
+    for (const { tf, yf, range } of TIMEFRAMES) {
+      try {
+        const raw        = await fetchYahoo(yfSymbol, yf, range);
+        const normalized = normalize(symbol, tf, raw);
+        const outPath    = path.join(SEED_DIR, `${symbol}_${tf}.json`);
+        fs.writeFileSync(outPath, JSON.stringify(normalized, null, 2));
+        console.log(`[seedFetch] ${symbol} ${tf}  ${normalized.candles.length} candles → ${outPath}`);
+      } catch (err) {
+        console.warn(`[seedFetch] ${symbol} ${tf} fetch failed: ${err.message}`);
+      }
+      await new Promise(r => setTimeout(r, 600));
     }
-    await new Promise(r => setTimeout(r, 600));
+    // Derive 2h and 4h from 1h
+    try {
+      const oneHPath = path.join(SEED_DIR, `${symbol}_1h.json`);
+      const oneH     = JSON.parse(fs.readFileSync(oneHPath, 'utf8'));
+      const twoH     = aggregate(symbol, '2h', oneH.candles, 2);
+      fs.writeFileSync(path.join(SEED_DIR, `${symbol}_2h.json`), JSON.stringify(twoH, null, 2));
+      const fourH    = aggregate(symbol, '4h', oneH.candles, 4);
+      fs.writeFileSync(path.join(SEED_DIR, `${symbol}_4h.json`), JSON.stringify(fourH, null, 2));
+      console.log(`[seedFetch] ${symbol} 2h/4h derived from 1h`);
+    } catch (err) {
+      console.warn(`[seedFetch] ${symbol} 2h/4h derivation failed: ${err.message}`);
+    }
   }
 }
 

@@ -23,8 +23,6 @@
               maxRiskDollars: 200, rrRatio: 2.0, features: {} };
   let minConf = 65;
 
-  // Sound alerts enabled flag (toggleable by feature panel)
-  window._soundAlertsEnabled = false;
 
   // ── Pine Script export ────────────────────────────────────────────────────
   window._copyPineScript = async function() {
@@ -170,11 +168,8 @@
       sessionBadgeEl.className   = `session-badge ${cls}`;
     }
     // Update calendar event countdown badge
-    if (cfg.features?.economicCalendar) _updateCalendarBadge();
-    // Update RS widget
-    if (cfg.features?.relativeStrength && (activeSymbol === 'MNQ' || activeSymbol === 'MES')) {
-      _updateRSWidget();
-    }
+    _updateCalendarBadge();
+    if (activeSymbol === 'MNQ' || activeSymbol === 'MES') _updateRSWidget();
   }
 
   // ── Calendar event badge ────────────────────────────────────────────────────
@@ -228,12 +223,52 @@
     } catch (_) {}
   }
 
+  // ── Dashboard mode (Futures vs Crypto) ────────────────────────────────────
+
+  let dashMode = 'index'; // 'index' | 'crypto'
+
+  const INDEX_SYMS  = ['MNQ', 'MES', 'MGC', 'MCL', 'SIL'];
+  const CRYPTO_SYMS = ['BTC', 'ETH', 'XRP', 'XLM'];
+
+  function _setDashMode(mode) {
+    dashMode = mode;
+
+    // Toggle mode buttons
+    document.querySelectorAll('.dash-mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+
+    // Toggle symbol groups
+    const idxGrp    = document.getElementById('sym-groups-index');
+    const cryptoGrp = document.getElementById('sym-groups-crypto');
+    if (idxGrp)    idxGrp.style.display    = mode === 'index'  ? '' : 'none';
+    if (cryptoGrp) cryptoGrp.style.display = mode === 'crypto' ? '' : 'none';
+
+    // Toggle correlation tables
+    const corrIdx    = document.getElementById('corr-heatmap-index');
+    const corrCrypto = document.getElementById('corr-heatmap-crypto');
+    if (corrIdx)    corrIdx.style.display    = mode === 'index'  ? '' : 'none';
+    if (corrCrypto) corrCrypto.style.display = mode === 'crypto' ? '' : 'none';
+
+    // Switch active symbol to default for the mode
+    const defaultSym = mode === 'crypto' ? 'BTC' : 'MNQ';
+    document.querySelectorAll('.sym-btn').forEach(b => b.classList.remove('active'));
+    const defaultBtn = document.querySelector(`.sym-btn[data-symbol="${defaultSym}"]`);
+    if (defaultBtn) defaultBtn.classList.add('active');
+
+    // Fire chart load for the new default symbol
+    document.dispatchEvent(new CustomEvent('dashModeChange', { detail: { symbol: defaultSym, mode } }));
+  }
+
+  document.querySelectorAll('.dash-mode-btn').forEach(btn => {
+    btn.addEventListener('click', () => _setDashMode(btn.dataset.mode));
+  });
+
   // ── Correlation heatmap ───────────────────────────────────────────────────
 
-  const CORR_SYMS = ['MNQ', 'MES', 'MCL', 'MGC', 'SIL', 'DXY', 'VIX', 'BTC', 'ETH', 'XRP', 'XLM'];
+  const CORR_INDEX_SYMS  = ['MNQ', 'MES', 'MGC', 'MCL', 'SIL', 'DXY', 'VIX'];
+  const CORR_CRYPTO_SYMS = ['BTC', 'ETH', 'XRP', 'XLM'];
+  const CORR_ABBR = { MNQ:'NQ', MES:'ES', MCL:'CL', MGC:'GC', SIL:'SI', DXY:'DX', VIX:'VX', BTC:'BT', ETH:'ET', XRP:'XR', XLM:'XL' };
 
   function _corrColor(v) {
-    // v in [-1, 1]: green for high positive, red for high negative, dim for near-0
     if (v >= 0.7)  return '#4caf50';
     if (v >= 0.4)  return '#8bc34a';
     if (v >= 0.1)  return '#607d8b';
@@ -242,15 +277,50 @@
     return '#ef4444';
   }
 
+  function _buildCorrTable(syms, matrix) {
+    let html = '<table class="corr-table"><thead><tr><th></th>';
+    syms.forEach(s => { html += `<th title="${s}">${CORR_ABBR[s] || s}</th>`; });
+    html += '</tr></thead><tbody>';
+    syms.forEach(rowSym => {
+      html += `<tr><td class="corr-sym">${rowSym}</td>`;
+      syms.forEach(colSym => {
+        const v = matrix[rowSym]?.[colSym] ?? 0;
+        if (rowSym === colSym) {
+          html += `<td class="corr-cell corr-diag">—</td>`;
+        } else {
+          const color = _corrColor(v);
+          const label = v > 0 ? `+${v.toFixed(2)}` : v.toFixed(2);
+          html += `<td class="corr-cell" style="color:${color}" title="${rowSym} vs ${colSym}: ${label}">${label}</td>`;
+        }
+      });
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    html += '<div class="corr-legend">';
+    html += '<span style="color:#4caf50">■</span> Strong+ &nbsp;';
+    html += '<span style="color:#8bc34a">■</span> Mild+ &nbsp;';
+    html += '<span style="color:#607d8b">■</span> Neutral &nbsp;';
+    html += '<span style="color:#ef9a9a">■</span> Mild− &nbsp;';
+    html += '<span style="color:#ef4444">■</span> Strong−';
+    html += '</div>';
+    return html;
+  }
+
   async function _updateCorrHeatmap() {
-    const el = document.getElementById('corr-heatmap');
-    const ageEl = document.getElementById('corr-age');
-    if (!el) return;
+    const ageEl      = document.getElementById('corr-age');
+    const idxEl      = document.getElementById('corr-heatmap-index');
+    const cryptoEl   = document.getElementById('corr-heatmap-crypto');
+    if (!idxEl && !cryptoEl) return;
     try {
       const res = await fetch('/api/correlation');
       if (!res.ok) return;
       const data = res.status === 204 ? null : await res.json();
-      if (!data?.matrix) { el.innerHTML = '<div class="corr-loading">Not enough data yet.</div>'; return; }
+      if (!data?.matrix) {
+        const msg = '<div class="corr-loading">Not enough data yet.</div>';
+        if (idxEl)    idxEl.innerHTML    = msg;
+        if (cryptoEl) cryptoEl.innerHTML = msg;
+        return;
+      }
 
       const { matrix, updatedAt } = data;
       if (ageEl && updatedAt) {
@@ -258,37 +328,8 @@
         ageEl.textContent = mins < 2 ? '' : `${mins}m ago`;
       }
 
-      // Header row — abbreviated for compact fit
-      const abbr = { MNQ:'NQ', MES:'ES', MCL:'CL', MGC:'GC', SIL:'SI', DXY:'DX', VIX:'VX', BTC:'BT', ETH:'ET', XRP:'XR', XLM:'XL' };
-      let html = '<table class="corr-table"><thead><tr><th></th>';
-      CORR_SYMS.forEach(s => { html += `<th title="${s}">${abbr[s] || s}</th>`; });
-      html += '</tr></thead><tbody>';
-
-      CORR_SYMS.forEach(rowSym => {
-        html += `<tr><td class="corr-sym">${rowSym}</td>`;
-        CORR_SYMS.forEach(colSym => {
-          const v = matrix[rowSym]?.[colSym] ?? 0;
-          if (rowSym === colSym) {
-            html += `<td class="corr-cell corr-diag">—</td>`;
-          } else {
-            const color = _corrColor(v);
-            const label = v > 0 ? `+${v.toFixed(2)}` : v.toFixed(2);
-            html += `<td class="corr-cell" style="color:${color}" title="${rowSym} vs ${colSym}: ${label}">${label}</td>`;
-          }
-        });
-        html += '</tr>';
-      });
-
-      html += '</tbody></table>';
-      html += '<div class="corr-legend">';
-      html += '<span style="color:#4caf50">■</span> Strong+ &nbsp;';
-      html += '<span style="color:#8bc34a">■</span> Mild+ &nbsp;';
-      html += '<span style="color:#607d8b">■</span> Neutral &nbsp;';
-      html += '<span style="color:#ef9a9a">■</span> Mild− &nbsp;';
-      html += '<span style="color:#ef4444">■</span> Strong−';
-      html += '</div>';
-
-      el.innerHTML = html;
+      if (idxEl)    idxEl.innerHTML    = _buildCorrTable(CORR_INDEX_SYMS,  matrix);
+      if (cryptoEl) cryptoEl.innerHTML = _buildCorrTable(CORR_CRYPTO_SYMS, matrix);
     } catch (_) {}
   }
 
@@ -797,29 +838,6 @@
     _switchTab(startTab);
   }
 
-  // ── Sound alerts (Web Audio API) ──────────────────────────────────────────
-
-  function _playAlertSound(direction) {
-    if (!window._soundAlertsEnabled) return;
-    try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      const f1 = direction === 'bullish' ? 440 : 550;
-      const f2 = direction === 'bullish' ? 550 : 440;
-
-      [f1, f2].forEach((freq, i) => {
-        const osc  = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type      = 'sine';
-        osc.frequency.value = freq;
-        gain.gain.setValueAtTime(0.3, ctx.currentTime + i * 0.15);
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.15 + 0.25);
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start(ctx.currentTime + i * 0.15);
-        osc.stop(ctx.currentTime  + i * 0.15 + 0.3);
-      });
-    } catch (_) {}
-  }
 
   // ── Boot ────────────────────────────────────────────────────────────────────
 
@@ -828,15 +846,8 @@
     try {
       const res = await fetch('/api/settings');
       if (res.ok) {
-        const { risk, features } = await res.json();
-        cfg = { ...cfg, ...risk, features: features || {} };
-        window._soundAlertsEnabled = !!features?.soundAlerts;
-        // Request notification permission if push notifications enabled
-        if (features?.pushNotifications && 'Notification' in window) {
-          if (Notification.permission === 'default') {
-            Notification.requestPermission();
-          }
-        }
+        const { risk } = await res.json();
+        cfg = { ...cfg, ...risk };
       }
     } catch (_) {}
 
@@ -935,12 +946,10 @@
     _tickClock();
     setInterval(_tickClock, 1000);
 
-    // Initial calendar load
-    if (cfg.features?.economicCalendar)   _updateCalendarBadge();
-    if (cfg.features?.relativeStrength && (activeSymbol === 'MNQ' || activeSymbol === 'MES')) {
-      _updateRSWidget();
-    }
-    if (cfg.features?.correlationHeatmap) {
+    // Initial calendar + RS + correlation load
+    _updateCalendarBadge();
+    if (activeSymbol === 'MNQ' || activeSymbol === 'MES') _updateRSWidget();
+    {
       _updateCorrHeatmap();
       setInterval(_updateCorrHeatmap, 5 * 60 * 1000); // refresh every 5 min
     }
@@ -948,6 +957,17 @@
     _fetchForexRate();
     _fetchPrediction();
     setInterval(_fetchForexRate, 10 * 60 * 1000); // refresh every 10 min
+
+    // Listen for dashboard mode changes (Futures ↔ Crypto)
+    document.addEventListener('dashModeChange', (e) => {
+      activeSymbol = e.detail.symbol;
+      _syncChartMarkers();
+      fetchAndRender();
+      const rsWidget = document.getElementById('rs-widget');
+      if (rsWidget) rsWidget.style.display = (activeSymbol === 'MNQ' || activeSymbol === 'MES') ? '' : 'none';
+      _fetchOptionsData(activeSymbol);
+      _fetchPrediction();
+    });
 
     // Listen for chart symbol/TF changes (dispatched by chart.js after each loadData)
     document.addEventListener('chartViewChange', (e) => {
@@ -961,11 +981,17 @@
       // RS widget only relevant for equity index symbols
       const rsWidget = document.getElementById('rs-widget');
       if (rsWidget) rsWidget.style.display = (activeSymbol === 'MNQ' || activeSymbol === 'MES') ? '' : 'none';
-      if (cfg.features?.relativeStrength && (activeSymbol === 'MNQ' || activeSymbol === 'MES')) {
-        _updateRSWidget();
+      if (activeSymbol === 'MNQ' || activeSymbol === 'MES') _updateRSWidget();
+      _updateCalendarBadge();
+      // Reference symbols (QQQ/SPY/DXY/VIX) have no options data or alerts
+      const REF_SYMS = ['QQQ', 'SPY', 'DXY', 'VIX'];
+      if (REF_SYMS.includes(activeSymbol)) {
+        _updateOptionsWidget(null);
+        const gammaEl = document.getElementById('gamma-widget');
+        if (gammaEl) gammaEl.style.display = 'none';
+      } else {
+        _fetchOptionsData(activeSymbol);
       }
-      if (cfg.features?.economicCalendar) _updateCalendarBadge();
-      _fetchOptionsData(activeSymbol);
       _fetchPrediction();
     });
 
@@ -1633,7 +1659,6 @@
           _renderFeed();
           _renderPredictions();
           _updateStats();
-          if (window._soundAlertsEnabled) _playAlertSound(setup.direction);
         } catch (err) {
           console.error('[pred-take] Save failed:', err.message);
         }
@@ -2407,22 +2432,6 @@
       try {
         const msg = JSON.parse(event.data);
         if (msg.type === 'setup') {
-          // Play sound alert if enabled and confidence passes user filter
-          if (window._soundAlertsEnabled && (msg.setup?.confidence ?? 0) >= minConf) {
-            _playAlertSound(msg.setup?.direction);
-          }
-          // Browser push notification for new high-confidence setups
-          if (cfg.features?.pushNotifications && Notification.permission === 'granted') {
-            const conf  = msg.setup?.confidence ?? 0;
-            const dir   = msg.setup?.direction === 'bullish' ? '▲' : '▼';
-            const type  = msg.setup?.type?.replace(/_/g, ' ') ?? 'setup';
-            new Notification(`${msg.symbol} ${msg.timeframe} ${dir}`, {
-              body: `${type} · ${conf}% confidence · Entry ${msg.setup?.entry?.toFixed(2) ?? ''}`,
-              icon: '/icons/icon-192.png',
-              tag:  `${msg.symbol}-${msg.timeframe}-${msg.setup?.time}`,
-              requireInteraction: false,
-            });
-          }
           fetchAndRender(); // re-fetch to keep trade filter accurate
         }
         if (msg.type === 'order') {

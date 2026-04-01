@@ -1,16 +1,4 @@
 {
-  "features": {
-    "volumeProfile": true,
-    "openingRange": true,
-    "performanceStats": true,
-    "economicCalendar": true,
-    "relativeStrength": true,
-    "sessionLevels": true,
-    "alertReplay": false,
-    "correlationHeatmap": true,
-    "soundAlerts": false,
-    "pushNotifications": true
-  },
   "layers": {
     "ema9": true,
     "ema21": true,

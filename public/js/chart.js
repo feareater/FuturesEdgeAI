@@ -708,9 +708,11 @@
       })});
     });
 
-    // QQQ Daily reference levels — scaled to futures price space
+    // Proxy ETF daily reference levels — scaled to futures price space
     const dl = data.scaledDaily;
     if (dl) {
+      const PROXY_LABEL = { MNQ: 'QQQ', MES: 'SPY', MGC: 'GLD', MCL: 'USO', SIL: 'SLV' };
+      const proxy = PROXY_LABEL[activeSymbol] || 'ETF';
       if (dl.prevDayOpen != null) {
         optionsPriceLines.push({ line: candleSeries.createPriceLine({
           price: dl.prevDayOpen,
@@ -718,7 +720,7 @@
           lineWidth: 1,
           lineStyle: Dotted,
           axisLabelVisible: true,
-          title: 'QQQ PDO',
+          title: `${proxy} PDO`,
         })});
       }
       if (dl.prevDayClose != null) {
@@ -728,7 +730,7 @@
           lineWidth: 1,
           lineStyle: Dotted,
           axisLabelVisible: true,
-          title: 'QQQ PDC',
+          title: `${proxy} PDC`,
         })});
       }
       if (dl.curDayOpen != null) {
@@ -738,7 +740,7 @@
           lineWidth: 1,
           lineStyle: Dotted,
           axisLabelVisible: true,
-          title: 'QQQ DO',
+          title: `${proxy} DO`,
         })});
       }
     }
@@ -1126,6 +1128,13 @@
       setActive('.sym-btn', 'symbol', activeSymbol);
       loadData(activeSymbol, activeTf).catch(err => console.error('[chart]', err.message));
     });
+  });
+
+  // Dashboard mode switch (Futures ↔ Crypto) — load default symbol for new mode
+  document.addEventListener('dashModeChange', (e) => {
+    activeSymbol = e.detail.symbol;
+    setActive('.sym-btn', 'symbol', activeSymbol);
+    loadData(activeSymbol, activeTf).catch(err => console.error('[chart] dashModeChange:', err.message));
   });
 
   document.querySelectorAll('.tf-btn').forEach(btn => {
