@@ -95,7 +95,6 @@
       sessionLevels:      'Session Levels (Asia/London)',
       economicCalendar:   'Economic Calendar',
       relativeStrength:   'Relative Strength (MNQ/MES)',
-      correlationHeatmap: 'Correlation Heatmap',
       alertReplay:        'Alert Replay / Backtest',
       soundAlerts:        'Sound Alerts',
       pushNotifications:  'Push Notifications',
@@ -132,7 +131,7 @@
         }).catch(err => console.warn('[features] Toggle failed:', err.message));
 
         // Visual-only toggles handled client-side immediately
-        if (key === 'correlationHeatmap' || key === 'volumeProfile' ||
+        if (key === 'volumeProfile' ||
             key === 'openingRange' || key === 'sessionLevels') {
           window.ChartAPI.setLayerVisible(key, cb.checked);
         }
@@ -144,5 +143,43 @@
   }
 
   loadFeatures();
+
+  // ── Collapsible panel sections ───────────────────────────────────────────
+  const COLLAPSED_KEY = 'futuresedge_sections_collapsed';
+
+  function _loadCollapsed() {
+    try { return new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY) || '[]')); } catch { return new Set(); }
+  }
+  function _saveCollapsed(set) {
+    localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...set]));
+  }
+
+  const collapsedSections = _loadCollapsed();
+
+  document.querySelectorAll('.collapsible-header').forEach(header => {
+    const section = header.dataset.section;
+    if (!section) return;
+    const body = header.nextElementSibling; // .section-body
+
+    // Apply persisted collapsed state
+    if (collapsedSections.has(section)) {
+      header.classList.add('collapsed');
+      if (body) body.style.display = 'none';
+    }
+
+    header.addEventListener('click', () => {
+      const isCollapsed = collapsedSections.has(section);
+      if (isCollapsed) {
+        collapsedSections.delete(section);
+        header.classList.remove('collapsed');
+        if (body) body.style.display = '';
+      } else {
+        collapsedSections.add(section);
+        header.classList.add('collapsed');
+        if (body) body.style.display = 'none';
+      }
+      _saveCollapsed(collapsedSections);
+    });
+  });
 
 })();

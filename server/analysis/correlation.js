@@ -2,7 +2,7 @@
 // 4×4 pairwise rolling Pearson correlation matrix across all instruments.
 // Uses 5m candle log-returns, 20-period rolling window.
 
-const SYMBOLS      = ['MNQ', 'MGC', 'MES', 'MCL', 'BTC', 'ETH', 'XRP', 'DXY', 'VIX', 'SIL'];
+const SYMBOLS      = ['MNQ', 'MES', 'MCL', 'MGC', 'SIL', 'DXY', 'VIX', 'BTC', 'ETH', 'XRP', 'XLM'];
 const CORR_PERIOD  = 20;
 
 /**

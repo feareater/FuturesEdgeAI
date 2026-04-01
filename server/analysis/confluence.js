@@ -34,28 +34,36 @@ const STACK_BONUS_PER_TF = 15;  // confidence bonus for one confirming higher TF
 const STACK_MAX          = 15;  // cap at 1 TF — double-stack is not additive
 const PROX_ATR_MULT      = 0.5; // zone proximity = 0.5 × higher-TF ATR
 
+// Symbols where HTF IOF alignment is an INVERTED predictor (contested levels break rather than hold).
+// Backtest: MGC + HTF IOF = 37.5% WR, PF 0.39 vs 49.5% base — penalise by INVERTED_PENALTY.
+const INVERTED_SYMBOLS = new Set(['MGC', 'MCL']);
+const INVERTED_PENALTY = -15; // confidence pts when HTF IOF aligns on inverted symbols
+
 /**
  * Check whether the setup's key price level has a confirming IOF zone
  * on one or more higher timeframes (same direction, active/open status).
  *
- * Only applied to MNQ — backtest showed MGC TF stack is an inverted predictor.
- * Bonus capped at one confirming TF (+15 max).
+ * • MNQ / MES: positive predictor → +15 pts per confirming TF (capped at 1 TF).
+ * • MGC / MCL: inverted predictor → −15 pts if ANY higher-TF IOF zone aligns
+ *   (contested levels tend to break rather than hold).
+ * • All other symbols: neutral (no bonus, no penalty).
  *
  * @param {Object}   setup             Setup object from detectSetups()
- * @param {string}   symbol            'MNQ' | 'MGC'
- * @param {string}   tf                Base timeframe of the setup ('1m' … '15m')
+ * @param {string}   symbol
+ * @param {string}   tf                Base timeframe of the setup
  * @param {Function} getCandles        (symbol, tf) → candle array
  * @param {Function} computeIndicators (candles, opts) → indicators
  * @param {Object}   settings          { swingLookback, impulseThreshold }
- * @returns {{ stackCount: number, bonus: number, tfs: string[] }}
+ * @returns {{ stackCount: number, bonus: number, tfs: string[], inverted: boolean }}
  */
 function checkTFZoneStack(setup, symbol, tf, getCandles, computeIndicators, settings) {
-  // TF stack is a positive predictor for equity index micros (MNQ, MES).
-  // For commodities (MGC, MCL), HTF IOF alignment means contested level — negative predictor.
-  if (symbol !== 'MNQ' && symbol !== 'MES') return { stackCount: 0, bonus: 0, tfs: [] };
+  const isPositive = symbol === 'MNQ' || symbol === 'MES';
+  const isInverted = INVERTED_SYMBOLS.has(symbol);
+
+  if (!isPositive && !isInverted) return { stackCount: 0, bonus: 0, tfs: [], inverted: false };
 
   const higherTfs = TF_HIGHER[tf] || [];
-  if (higherTfs.length === 0) return { stackCount: 0, bonus: 0, tfs: [] };
+  if (higherTfs.length === 0) return { stackCount: 0, bonus: 0, tfs: [], inverted: false };
 
   // Key level: zone price for zone rejections, entry otherwise
   const keyLevel = setup.zoneLevel ?? setup.entry ?? setup.price;
@@ -98,8 +106,14 @@ function checkTFZoneStack(setup, symbol, tf, getCandles, computeIndicators, sett
     }
   }
 
+  if (isInverted) {
+    // Any HTF IOF alignment on MGC/MCL means contested level — apply penalty
+    const bonus = stackCount > 0 ? INVERTED_PENALTY : 0;
+    return { stackCount, bonus, tfs: stackTfs, inverted: true };
+  }
+
   const bonus = Math.min(STACK_MAX, stackCount * STACK_BONUS_PER_TF);
-  return { stackCount, bonus, tfs: stackTfs };
+  return { stackCount, bonus, tfs: stackTfs, inverted: false };
 }
 
 module.exports = { checkTFZoneStack };

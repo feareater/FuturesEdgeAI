@@ -1,0 +1,496 @@
+// ═══════════════════════════════════════════════════════════════════════════════
+// FuturesEdge AI — Bias Dashboard
+// ═══════════════════════════════════════════════════════════════════════════════
+// Shows a bias panel for:
+//   · Current timeframe
+//   · Next higher TF  (auto-detected from chain below)
+//   · Two higher TF
+//
+// TF chain: 1m → 5m → 15m → 30m → 1h → 4h → 1D → 1W
+//
+// Bias is derived from:
+//   · EMA stack alignment (9 / 21 / 50)
+//   · Price vs session VWAP (confirmation)
+//   · STRONG = stack + VWAP agree  |  LEAN = stack or VWAP only
+//
+// Add as a standalone indicator on any chart / any timeframe.
+// Automatically adapts — no configuration needed.
+// ═══════════════════════════════════════════════════════════════════════════════
+//@version=6
+indicator("FuturesEdge — Bias Dashboard", shorttitle="FE·Bias", overlay=true)
+
+// ── Inputs ────────────────────────────────────────────────────────────────────
+grp = "── Panel Settings ─────────────────────────────────"
+i_pos  = input.string("Top Right", "Position",
+          options=["Top Right","Top Left","Bottom Right","Bottom Left"], group=grp)
+i_size = input.string("Small", "Text Size",
+          options=["Tiny","Small","Normal"], group=grp)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TF CHAIN HELPERS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Returns the next canonical TF up in the chain.
+// Handles non-standard TFs by snapping to the next standard one.
+_nextTF(tf) =>
+    switch tf
+        "1"   => "5"
+        "2"   => "5"
+        "3"   => "5"
+        "5"   => "15"
+        "10"  => "15"
+        "15"  => "30"
+        "20"  => "30"
+        "30"  => "60"
+        "45"  => "60"
+        "60"  => "240"
+        "120" => "240"
+        "180" => "240"
+        "240" => "D"
+        "D"   => "W"
+        =>       "W"   // already at top
+
+// Human-readable label for a TF string
+_tfLabel(tf) =>
+    switch tf
+        "1"   => "1m"
+        "2"   => "2m"
+        "3"   => "3m"
+        "5"   => "5m"
+        "10"  => "10m"
+        "15"  => "15m"
+        "20"  => "20m"
+        "30"  => "30m"
+        "45"  => "45m"
+        "60"  => "1h"
+        "120" => "2h"
+        "180" => "3h"
+        "240" => "4h"
+        "D"   => "1D"
+        "W"   => "1W"
+        =>       tf
+
+// ── Resolve the three timeframes ──────────────────────────────────────────────
+curTF = timeframe.period
+htf1  = _nextTF(curTF)
+htf2  = _nextTF(htf1)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// INDICATOR CALCULATIONS
+// Two request.security tuple calls keep the security count minimal (< 10).
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Current TF — use previous confirmed bar ([1]) so real-time and delayed views match.
+// The forming bar's live close causes confidence to swing wildly intra-bar; [1] locks
+// to the last closed candle, consistent with how request.security() works for HTF cols.
+e9_c   = ta.ema(close, 9)[1]
+e21_c  = ta.ema(close, 21)[1]
+e50_c  = ta.ema(close, 50)[1]
+atr_c  = ta.atr(14)[1]
+vwap_c = ta.vwap(hlc3)[1]
+cls_c  = close[1]
+
+// HTF 1 — individual security calls (tuple assignment not supported across lines)
+e9_1   = request.security(syminfo.tickerid, htf1, ta.ema(close, 9),  lookahead=barmerge.lookahead_off)
+e21_1  = request.security(syminfo.tickerid, htf1, ta.ema(close, 21), lookahead=barmerge.lookahead_off)
+e50_1  = request.security(syminfo.tickerid, htf1, ta.ema(close, 50), lookahead=barmerge.lookahead_off)
+atr_1  = request.security(syminfo.tickerid, htf1, ta.atr(14),        lookahead=barmerge.lookahead_off)
+vwap_1 = request.security(syminfo.tickerid, htf1, ta.vwap(hlc3),     lookahead=barmerge.lookahead_off)
+cls_1  = request.security(syminfo.tickerid, htf1, close,             lookahead=barmerge.lookahead_off)
+
+// HTF 2 — individual security calls
+e9_2   = request.security(syminfo.tickerid, htf2, ta.ema(close, 9),  lookahead=barmerge.lookahead_off)
+e21_2  = request.security(syminfo.tickerid, htf2, ta.ema(close, 21), lookahead=barmerge.lookahead_off)
+e50_2  = request.security(syminfo.tickerid, htf2, ta.ema(close, 50), lookahead=barmerge.lookahead_off)
+atr_2  = request.security(syminfo.tickerid, htf2, ta.atr(14),        lookahead=barmerge.lookahead_off)
+vwap_2 = request.security(syminfo.tickerid, htf2, ta.vwap(hlc3),     lookahead=barmerge.lookahead_off)
+cls_2  = request.security(syminfo.tickerid, htf2, close,             lookahead=barmerge.lookahead_off)
+
+// Prior Day High / Low — daily reference level, same for all columns
+pdh = request.security(syminfo.tickerid, "D", high[1], lookahead=barmerge.lookahead_on)
+pdl = request.security(syminfo.tickerid, "D", low[1],  lookahead=barmerge.lookahead_on)
+
+// RSI(14) — semi-predictive: OB/OS zones flag potential exhaustion/reversal
+// OB (>70) in an uptrend warns of pullback risk; OS (<30) in downtrend warns of bounce
+rsi_c = ta.rsi(close, 14)[1]
+rsi_1 = request.security(syminfo.tickerid, htf1, ta.rsi(close, 14), lookahead=barmerge.lookahead_off)
+rsi_2 = request.security(syminfo.tickerid, htf2, ta.rsi(close, 14), lookahead=barmerge.lookahead_off)
+
+// Volume vs 20-bar average — current TF only; confirms or questions the move
+vol_c    = volume[1]
+avgvol_c = ta.sma(volume, 20)[1]
+open_c   = open[1]
+
+// ══════════════════════════════════════════════════════════════════════════════
+// BIAS HELPERS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Overall bias text
+_biasTxt(e9, e21, e50, vwapV, clsV) =>
+    bull  = e9 > e21 and e21 > e50
+    bear  = e9 < e21 and e21 < e50
+    abvV  = clsV > vwapV
+    if bull and abvV
+        "▲ BULLISH"
+    else if bear and not abvV
+        "▼ BEARISH"
+    else if bull
+        "▲ Lean Bull"
+    else if bear
+        "▼ Lean Bear"
+    else if abvV
+        "◆ Above VWAP"
+    else
+        "◆ Below VWAP"
+
+// Overall bias color
+_biasClr(e9, e21, e50, vwapV, clsV) =>
+    bull  = e9 > e21 and e21 > e50
+    bear  = e9 < e21 and e21 < e50
+    abvV  = clsV > vwapV
+    if bull and abvV
+        #26a69a
+    else if bear and not abvV
+        #ef5350
+    else if bull
+        color.new(#26a69a, 35)
+    else if bear
+        color.new(#ef5350, 35)
+    else if abvV
+        color.new(#26a69a, 50)
+    else
+        color.new(#ef5350, 50)
+
+// EMA stack description
+_stackTxt(e9, e21, e50) =>
+    e9 > e21 and e21 > e50 ? "9 > 21 > 50" : e9 < e21 and e21 < e50 ? "9 < 21 < 50" : e9 > e21 ? "9>21 mixed" : "9<21 mixed"
+
+_stackClr(e9, e21, e50) =>
+    e9 > e21 and e21 > e50 ? color.new(#26a69a, 0) : e9 < e21 and e21 < e50 ? color.new(#ef5350, 0) : color.new(#78909c, 20)
+
+// VWAP position
+_vwapTxt(clsV, vwapV) => clsV > vwapV ? "▲ Above" : "▼ Below"
+_vwapClr(clsV, vwapV) => clsV > vwapV ? #26a69a   : #ef5350
+
+// Prior Day H/L position
+_pdTxt(clsV, pdhV, pdlV) =>
+    clsV > pdhV ? "▲ Above PDH" : clsV < pdlV ? "▼ Below PDL" : "Between H/L"
+
+_pdClr(clsV, pdhV, pdlV) =>
+    clsV > pdhV ? #26a69a : clsV < pdlV ? #ef5350 : #78909c
+
+// Table position lookup
+_tblPos() =>
+    switch i_pos
+        "Top Left"     => position.top_left
+        "Bottom Right" => position.bottom_right
+        "Bottom Left"  => position.bottom_left
+        =>                position.top_right
+
+// Text size lookup
+_tblSz() =>
+    switch i_size
+        "Tiny"   => size.tiny
+        "Normal" => size.normal
+        =>          size.small
+
+// RSI display helpers
+// OB/OS labels flag exhaustion risk — the most forward-looking signal in the dashboard
+_rsiTxt(rsiV) =>
+    r = str.tostring(math.round(rsiV))
+    rsiV >= 70 ? "⚠ OB " + r : rsiV <= 30 ? "⚠ OS " + r : r
+
+_rsiClr(rsiV) =>
+    rsiV >= 70 ? color.new(#ef5350, 0) : rsiV <= 30 ? color.new(#26a69a, 0) : rsiV >= 50 ? color.new(#26a69a, 35) : color.new(#ef5350, 35)
+
+// Volume helpers — current TF only (HTF volume not directly comparable)
+// HIGH (≥1.5× avg) confirms conviction; low (<0.8× avg) flags weak follow-through
+_volTxt(volV, avgV, clsV, openV) =>
+    ratio = math.round(volV / avgV * 10) / 10
+    dir   = clsV >= openV ? "▲" : "▼"
+    ratio >= 1.5 ? dir + " HIGH ×" + str.tostring(ratio, "#.#") : ratio >= 0.8 ? dir + " norm ×" + str.tostring(ratio, "#.#") : dir + " low  ×" + str.tostring(ratio, "#.#")
+
+_volClr(volV, avgV, clsV, openV) =>
+    ratio      = volV / avgV
+    bullCandle = clsV >= openV
+    ratio >= 1.5 and bullCandle ? color.new(#26a69a, 0) : ratio >= 1.5 and not bullCandle ? color.new(#ef5350, 0) : color.new(#78909c, 20)
+
+// ── Confidence score ──────────────────────────────────────────────────────────
+// Raw score: base 50, components push ±. Clamped [0,100].
+//   EMA full stack aligned   : ±20  (lagging — trend state)
+//   EMA partial (9>21 only)  : ±10  (lagging)
+//   Price vs VWAP            : ±10  (lagging)
+//   Price vs EMA 9           :  ±5  (lagging)
+//   Price vs PDH/PDL         : ±10  (reference)
+//   RSI momentum/exhaustion  : ±10  (semi-predictive — OB/OS flags reversal risk)
+// _conf()     → raw score 0–100 (50=neutral) — used internally
+// _confDir()  → directional 0–100% confidence (how strong is the stated bias)
+//               matches FuturesEdge convention: 95% SHORT = strongly bearish
+_conf(e9, e21, e50, vwapV, clsV, pdhV, pdlV, rsiV) =>
+    s = 50
+    s := s + (e9 > e21 and e21 > e50 ? 20 : e9 < e21 and e21 < e50 ? -20 : e9 > e21 ? 10 : -10)
+    s := s + (clsV > vwapV ? 10 : -10)
+    s := s + (clsV > e9 ? 5 : -5)
+    s := s + (clsV > pdhV ? 10 : clsV < pdlV ? -10 : 0)
+    // RSI: OB (>70) subtracts from bullish — warns the move is stretched
+    //      OS (<30) adds to bullish — warns downside may be exhausted
+    s := s + (rsiV >= 70 ? -10 : rsiV <= 30 ? 10 : rsiV >= 50 ? 5 : -5)
+    math.max(0, math.min(100, s))
+
+// Convert raw score → directional % (distance from neutral, scaled 0–100%)
+_confDir(rawScore) => math.round(math.abs(rawScore - 50) / 50 * 100)
+
+_confClr(rawScore) =>
+    rawScore >= 70 ? #26a69a : rawScore >= 55 ? color.new(#26a69a, 45) : rawScore <= 30 ? #ef5350 : rawScore <= 45 ? color.new(#ef5350, 45) : #78909c
+
+// Score breakdown string — shows each component's contribution compactly
+_confDetail(e9, e21, e50, vwapV, clsV, pdhV, pdlV, rsiV) =>
+    ema_pts  = e9 > e21 and e21 > e50 ? 20 : e9 < e21 and e21 < e50 ? -20 : e9 > e21 ? 10 : -10
+    vwap_pts = clsV > vwapV ? 10 : -10
+    e9_pts   = clsV > e9 ? 5 : -5
+    pd_pts   = clsV > pdhV ? 10 : clsV < pdlV ? -10 : 0
+    rsi_pts  = rsiV >= 70 ? -10 : rsiV <= 30 ? 10 : rsiV >= 50 ? 5 : -5
+    ema_lbl  = e9 > e21 and e21 > e50 ? "EMA full bull" : e9 < e21 and e21 < e50 ? "EMA full bear" : e9 > e21 ? "EMA part bull" : "EMA part bear"
+    vwap_lbl = clsV > vwapV ? "Abv VWAP" : "Blw VWAP"
+    e9_lbl   = clsV > e9 ? "Abv EMA9" : "Blw EMA9"
+    pd_lbl   = clsV > pdhV ? "Abv PDH" : clsV < pdlV ? "Blw PDL" : "Mid PD"
+    rsi_lbl  = rsiV >= 70 ? "RSI OB" : rsiV <= 30 ? "RSI OS" : rsiV >= 50 ? "RSI bull" : "RSI bear"
+    (ema_pts > 0 ? "+" : "") + str.tostring(ema_pts) + " " + ema_lbl + "  " + (vwap_pts > 0 ? "+" : "") + str.tostring(vwap_pts) + " " + vwap_lbl + "  " + (e9_pts > 0 ? "+" : "") + str.tostring(e9_pts) + " " + e9_lbl + "  " + (pd_pts > 0 ? "+" : "") + str.tostring(pd_pts) + " " + pd_lbl + "  " + (rsi_pts > 0 ? "+" : "") + str.tostring(rsi_pts) + " " + rsi_lbl
+
+// ── TP / SL based on bias direction and confidence ────────────────────────────
+// SL  = 1.5 × ATR from entry
+// TP  = conf ≥70 → 3× ATR  |  conf ≥55 → 2× ATR  |  else → 1.5× ATR
+_tp(clsV, atrV, conf) =>
+    rr = conf >= 70 ? 3.0 : conf >= 55 ? 2.0 : 1.5
+    conf > 50 ? clsV + rr * atrV : clsV - rr * atrV
+
+_sl(clsV, atrV, conf) =>
+    conf > 50 ? clsV - 1.5 * atrV : clsV + 1.5 * atrV
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TABLE  — 4 columns × 17 rows
+//
+//  Col 0: row label
+//  Col 1: current TF values
+//  Col 2: HTF1 values
+//  Col 3: HTF2 values
+//
+//  Row  0 : FE BIAS header  |  ticker  |  (blank)  |  "on Xm"
+//  Row  1 : (blank)         |  curTF   |  htf1     |  htf2
+//  ──────────────────────────────────────────────────────────
+//  Row  2 : BIAS
+//  Row  3 : Confidence %
+//  Row  4 : Score detail
+//  Row  5 : EMA Stack
+//  Row  6 : vs VWAP
+//  Row  7 : EMA 9
+//  Row  8 : EMA 21
+//  Row  9 : EMA 50
+//  Row 10 : ATR 14
+//  Row 11 : vs PD H/L
+//  Row 12 : VWAP value
+//  Row 13 : RSI 14  ← semi-predictive: OB/OS flags exhaustion
+//  Row 14 : Volume  ← confirms or questions conviction (cur TF only)
+//  Row 15 : TP
+//  Row 16 : SL
+// ══════════════════════════════════════════════════════════════════════════════
+var table tbl = table.new(_tblPos(), 4, 17,
+    bgcolor      = color.new(#0d1117, 0),
+    border_width = 1,
+    border_color = color.new(#30363d, 0),
+    frame_width  = 1,
+    frame_color  = color.new(#58a6ff, 0))
+
+// Palette
+C_HDR   = color.new(#58a6ff, 0)          // blue  — headers
+C_LABEL = color.new(#8b949e, 0)          // grey  — row labels
+C_DIM   = color.new(color.white, 40)     // dim white — numeric values
+C_WHT   = color.white
+BG_HDR  = color.new(#161b22, 0)
+BG_CELL = color.new(#0d1117, 0)
+
+if barstate.islast
+    SZ = _tblSz()
+
+    // ── Pre-compute this bar's values ─────────────────────────────────────────
+    bias0 = _biasTxt(e9_c, e21_c, e50_c, vwap_c, cls_c)
+    bclr0 = _biasClr(e9_c, e21_c, e50_c, vwap_c, cls_c)
+    bias1 = _biasTxt(e9_1, e21_1, e50_1, vwap_1, cls_1)
+    bclr1 = _biasClr(e9_1, e21_1, e50_1, vwap_1, cls_1)
+    bias2 = _biasTxt(e9_2, e21_2, e50_2, vwap_2, cls_2)
+    bclr2 = _biasClr(e9_2, e21_2, e50_2, vwap_2, cls_2)
+
+    conf0 = _conf(e9_c, e21_c, e50_c, vwap_c, cls_c, pdh, pdl, rsi_c)
+    conf1 = _conf(e9_1, e21_1, e50_1, vwap_1, cls_1, pdh, pdl, rsi_1)
+    conf2 = _conf(e9_2, e21_2, e50_2, vwap_2, cls_2, pdh, pdl, rsi_2)
+
+    // ── Row 0 : Title header ──────────────────────────────────────────────────
+    table.cell(tbl, 0, 0, "FE BIAS",
+               text_color=C_HDR, text_size=SZ,
+               bgcolor=BG_HDR, text_halign=text.align_left)
+    table.cell(tbl, 1, 0, syminfo.ticker,
+               text_color=C_WHT, text_size=SZ, bgcolor=BG_HDR)
+    table.cell(tbl, 2, 0, "",
+               text_color=C_LABEL, text_size=SZ, bgcolor=BG_HDR)
+    table.cell(tbl, 3, 0, "on " + _tfLabel(curTF),
+               text_color=C_DIM, text_size=SZ,
+               bgcolor=BG_HDR, text_halign=text.align_right)
+
+    // ── Row 1 : Column TF labels ──────────────────────────────────────────────
+    table.cell(tbl, 0, 1, "",
+               text_color=C_LABEL, text_size=SZ, bgcolor=BG_HDR)
+    table.cell(tbl, 1, 1, _tfLabel(curTF),
+               text_color=C_HDR, text_size=SZ, bgcolor=BG_HDR)
+    table.cell(tbl, 2, 1, _tfLabel(htf1),
+               text_color=C_HDR, text_size=SZ, bgcolor=BG_HDR)
+    table.cell(tbl, 3, 1, _tfLabel(htf2),
+               text_color=C_HDR, text_size=SZ, bgcolor=BG_HDR)
+
+    // ── Row 2 : BIAS ──────────────────────────────────────────────────────────
+    table.cell(tbl, 0, 2, "BIAS",
+               text_color=C_LABEL, text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 1, 2, bias0, text_color=bclr0, text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 2, 2, bias1, text_color=bclr1, text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 3, 2, bias2, text_color=bclr2, text_size=SZ, bgcolor=BG_CELL)
+
+    // ── Row 3 : Confidence % (directional — matches FuturesEdge convention) ──────
+    // 95% SHORT means strongly bearish; 5% raw score → _confDir() → 90%
+    table.cell(tbl, 0, 3, "Conf %",
+               text_color=C_LABEL, text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 1, 3, str.tostring(_confDir(conf0)) + "%",
+               text_color=_confClr(conf0), text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 2, 3, str.tostring(_confDir(conf1)) + "%",
+               text_color=_confClr(conf1), text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 3, 3, str.tostring(_confDir(conf2)) + "%",
+               text_color=_confClr(conf2), text_size=SZ, bgcolor=BG_CELL)
+
+    // ── Row 4 : Score detail (current TF only — spans cols 1-3) ───────────────
+    table.cell(tbl, 0, 4, "Score",
+               text_color=C_LABEL, text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 1, 4, _confDetail(e9_c, e21_c, e50_c, vwap_c, cls_c, pdh, pdl, rsi_c),
+               text_color=C_DIM, text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 2, 4, _confDetail(e9_1, e21_1, e50_1, vwap_1, cls_1, pdh, pdl, rsi_1),
+               text_color=C_DIM, text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 3, 4, _confDetail(e9_2, e21_2, e50_2, vwap_2, cls_2, pdh, pdl, rsi_2),
+               text_color=C_DIM, text_size=SZ, bgcolor=BG_CELL)
+
+    // ── Row 5 : EMA Stack ─────────────────────────────────────────────────────
+    table.cell(tbl, 0, 5, "EMA Stack",
+               text_color=C_LABEL, text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 1, 5, _stackTxt(e9_c, e21_c, e50_c),
+               text_color=_stackClr(e9_c, e21_c, e50_c), text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 2, 5, _stackTxt(e9_1, e21_1, e50_1),
+               text_color=_stackClr(e9_1, e21_1, e50_1), text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 3, 5, _stackTxt(e9_2, e21_2, e50_2),
+               text_color=_stackClr(e9_2, e21_2, e50_2), text_size=SZ, bgcolor=BG_CELL)
+
+    // ── Row 6 : vs VWAP ───────────────────────────────────────────────────────
+    table.cell(tbl, 0, 6, "vs VWAP",
+               text_color=C_LABEL, text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 1, 6, _vwapTxt(cls_c, vwap_c),
+               text_color=_vwapClr(cls_c, vwap_c), text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 2, 6, _vwapTxt(cls_1, vwap_1),
+               text_color=_vwapClr(cls_1, vwap_1), text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 3, 6, _vwapTxt(cls_2, vwap_2),
+               text_color=_vwapClr(cls_2, vwap_2), text_size=SZ, bgcolor=BG_CELL)
+
+    // ── Row 7 : EMA 9 ─────────────────────────────────────────────────────────
+    table.cell(tbl, 0, 7, "EMA 9",
+               text_color=C_LABEL, text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 1, 7, str.tostring(e9_c, format.mintick),
+               text_color=C_DIM, text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 2, 7, str.tostring(e9_1, format.mintick),
+               text_color=C_DIM, text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 3, 7, str.tostring(e9_2, format.mintick),
+               text_color=C_DIM, text_size=SZ, bgcolor=BG_CELL)
+
+    // ── Row 8 : EMA 21 ────────────────────────────────────────────────────────
+    table.cell(tbl, 0, 8, "EMA 21",
+               text_color=C_LABEL, text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 1, 8, str.tostring(e21_c, format.mintick),
+               text_color=C_DIM, text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 2, 8, str.tostring(e21_1, format.mintick),
+               text_color=C_DIM, text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 3, 8, str.tostring(e21_2, format.mintick),
+               text_color=C_DIM, text_size=SZ, bgcolor=BG_CELL)
+
+    // ── Row 9 : EMA 50 ────────────────────────────────────────────────────────
+    table.cell(tbl, 0, 9, "EMA 50",
+               text_color=C_LABEL, text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 1, 9, str.tostring(e50_c, format.mintick),
+               text_color=C_DIM, text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 2, 9, str.tostring(e50_1, format.mintick),
+               text_color=C_DIM, text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 3, 9, str.tostring(e50_2, format.mintick),
+               text_color=C_DIM, text_size=SZ, bgcolor=BG_CELL)
+
+    // ── Row 10 : ATR 14 ───────────────────────────────────────────────────────
+    table.cell(tbl, 0, 10, "ATR 14",
+               text_color=C_LABEL, text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 1, 10, str.tostring(atr_c, format.mintick),
+               text_color=C_DIM, text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 2, 10, str.tostring(atr_1, format.mintick),
+               text_color=C_DIM, text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 3, 10, str.tostring(atr_2, format.mintick),
+               text_color=C_DIM, text_size=SZ, bgcolor=BG_CELL)
+
+    // ── Row 11 : vs Prior Day H/L ─────────────────────────────────────────────
+    table.cell(tbl, 0, 11, "vs PD H/L",
+               text_color=C_LABEL, text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 1, 11, _pdTxt(cls_c, pdh, pdl),
+               text_color=_pdClr(cls_c, pdh, pdl), text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 2, 11, _pdTxt(cls_1, pdh, pdl),
+               text_color=_pdClr(cls_1, pdh, pdl), text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 3, 11, _pdTxt(cls_2, pdh, pdl),
+               text_color=_pdClr(cls_2, pdh, pdl), text_size=SZ, bgcolor=BG_CELL)
+
+    // ── Row 12 : VWAP value ───────────────────────────────────────────────────
+    table.cell(tbl, 0, 12, "VWAP",
+               text_color=C_LABEL, text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 1, 12, str.tostring(vwap_c, format.mintick),
+               text_color=C_DIM, text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 2, 12, str.tostring(vwap_1, format.mintick),
+               text_color=C_DIM, text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 3, 12, str.tostring(vwap_2, format.mintick),
+               text_color=C_DIM, text_size=SZ, bgcolor=BG_CELL)
+
+    // ── Row 13 : RSI 14 — OB/OS = exhaustion warning ─────────────────────────
+    table.cell(tbl, 0, 13, "RSI 14",
+               text_color=C_LABEL, text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 1, 13, _rsiTxt(rsi_c),
+               text_color=_rsiClr(rsi_c), text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 2, 13, _rsiTxt(rsi_1),
+               text_color=_rsiClr(rsi_1), text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 3, 13, _rsiTxt(rsi_2),
+               text_color=_rsiClr(rsi_2), text_size=SZ, bgcolor=BG_CELL)
+
+    // ── Row 14 : Volume vs avg — HIGH + direction confirms conviction ─────────
+    table.cell(tbl, 0, 14, "Volume",
+               text_color=C_LABEL, text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 1, 14, _volTxt(vol_c, avgvol_c, cls_c, open_c),
+               text_color=_volClr(vol_c, avgvol_c, cls_c, open_c), text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 2, 14, "—",
+               text_color=C_DIM, text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 3, 14, "—",
+               text_color=C_DIM, text_size=SZ, bgcolor=BG_CELL)
+
+    // ── Row 15 : Target (TP) ──────────────────────────────────────────────────
+    // R:R scales with confidence: ≥70% → 3R  |  ≥55% → 2R  |  else → 1.5R
+    tp_lbl0 = (conf0 >= 70 ? "TP 3R" : conf0 >= 55 ? "TP 2R" : "TP 1.5R") + " " + str.tostring(_tp(cls_c, atr_c, conf0), format.mintick)
+    tp_lbl1 = (conf1 >= 70 ? "TP 3R" : conf1 >= 55 ? "TP 2R" : "TP 1.5R") + " " + str.tostring(_tp(cls_1, atr_1, conf1), format.mintick)
+    tp_lbl2 = (conf2 >= 70 ? "TP 3R" : conf2 >= 55 ? "TP 2R" : "TP 1.5R") + " " + str.tostring(_tp(cls_2, atr_2, conf2), format.mintick)
+    table.cell(tbl, 0, 15, "Target",
+               text_color=C_LABEL, text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 1, 15, tp_lbl0, text_color=bclr0, text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 2, 15, tp_lbl1, text_color=bclr1, text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 3, 15, tp_lbl2, text_color=bclr2, text_size=SZ, bgcolor=BG_CELL)
+
+    // ── Row 16 : Stop (SL) — always 1.5× ATR ─────────────────────────────────
+    table.cell(tbl, 0, 16, "Stop",
+               text_color=C_LABEL, text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 1, 16, str.tostring(_sl(cls_c, atr_c, conf0), format.mintick),
+               text_color=color.new(#ef5350, 20), text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 2, 16, str.tostring(_sl(cls_1, atr_1, conf1), format.mintick),
+               text_color=color.new(#ef5350, 20), text_size=SZ, bgcolor=BG_CELL)
+    table.cell(tbl, 3, 16, str.tostring(_sl(cls_2, atr_2, conf2), format.mintick),
+               text_color=color.new(#ef5350, 20), text_size=SZ, bgcolor=BG_CELL)

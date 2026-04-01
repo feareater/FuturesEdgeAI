@@ -14,19 +14,20 @@ const path = require('path');
 const SEED_DIR = path.join(__dirname, '..', '..', 'data', 'seed');
 
 // Yahoo Finance symbols for the contracts we care about.
-// Full-size front-month contracts — price is identical to the micro versions.
+// Use micro contract tickers directly (MNQ=F, MES=F) — they trade at a slightly
+// different price than the full-size contracts (NQ=F, ES=F) and are what Jeff trades.
 const SYMBOLS = {
-  MNQ: 'NQ=F',
-  MGC: 'GC=F',
-  MES: 'ES=F',
-  MCL: 'CL=F',
+  MNQ: 'MNQ=F',
+  MGC: 'MGC=F',
+  MES: 'MES=F',
+  MCL: 'MCL=F',
+  SIL: 'SIL',   // Global X Silver Miners ETF — full multi-TF
 };
 
 // Correlation-only symbols — 5m data only (not scanned for setups).
 const CORR_SYMBOLS = {
   DXY: 'DX-Y.NYB', // US Dollar Index (ICE)
   VIX: '^VIX',     // CBOE Volatility Index
-  SIL: 'SIL',      // Global X Silver Miners ETF
 };
 
 // Yahoo Finance supports: 1m (max 7d), 2m (max 60d), 5m (max 60d), 15m/30m (max 60d),

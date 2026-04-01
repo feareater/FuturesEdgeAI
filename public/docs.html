@@ -229,7 +229,8 @@
 
     <div class="nav-section">Chart Layers</div>
     <a href="#layers">All Layers Explained</a>
-    <a href="#market-depth">CVD &amp; Options Levels</a>
+    <a href="#market-depth">CVD</a>
+    <a href="#qqq-options">QQQ Options Levels</a>
 
     <div class="nav-section">Features &amp; Tools</div>
     <a href="#features">Feature Toggles</a>
@@ -1306,22 +1307,249 @@
           genuine buying; price rising with falling CVD = short-covering, not conviction.
           The sub-panel time scale is locked to the main chart.</p>
         </div>
-        <div class="card" style="border-top-color:#ff5722">
-          <h4>Options Levels <code>optionsLevels</code></h4>
-          <p>Horizontal price lines derived from the nearest-expiry options chain for each
-          instrument (via Yahoo Finance, refreshed hourly):<br/>
-          <strong>OI Walls</strong> (orange dashed, up to 3 lines) — the strikes with the
-          highest combined call + put open interest. Market makers are delta-hedged around
-          these levels, creating gravitational pulls or repulsion depending on gamma.<br/>
-          <strong>Max Pain</strong> (magenta dotted) — the strike at which total intrinsic
-          value paid out to all option buyers is minimized; index prices tend to gravitate
-          toward max pain into expiry.<br/>
-          The topbar shows <strong>P/C ratio</strong> (put OI ÷ call OI — above 1.3 is
-          bearish skew, below 0.7 is bullish skew) and <strong>ATM IV%</strong> (implied
-          volatility of the call nearest to spot price). Widget and lines are hidden
-          automatically when Yahoo has no options data for that instrument.</p>
+      </div>
+    </section>
+
+    <!-- ── QQQ Options Levels ───────────────────────────────────────────────── -->
+    <section id="qqq-options">
+      <h2>QQQ Options Levels</h2>
+      <p class="lead">When MNQ or MES is active, FuturesEdge AI overlays a set of options-derived
+        reference levels on the chart. The data comes from QQQ (for MNQ) and SPY (for MES) — liquid
+        ETFs whose options market provides far better data than NQ futures contracts directly.
+        All QQQ strikes are automatically scaled to NQ futures price space using the live QQQ/NQ
+        price ratio. Data is sourced from CBOE delayed quotes (free, 15-min delayed) and refreshed
+        hourly.</p>
+
+      <div class="callout">
+        <p><strong>Why QQQ instead of NQ futures?</strong> QQQ options are among the most actively
+        traded options in the world. Tens of millions of contracts change hands daily.
+        NQ futures options are thinly traded by comparison — the data is sparse and often
+        meaningless. QQQ tracks the Nasdaq-100 index within fractions of a percent, so its options
+        market is the real institutional positioning you want to see.</p>
+      </div>
+
+      <h3>The Chart Lines</h3>
+
+      <table class="score-table">
+        <thead>
+          <tr>
+            <th>Line</th>
+            <th>Color</th>
+            <th>Label</th>
+            <th>What it is</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>OI Walls</td>
+            <td><span style="color:#ff5722">■</span> Orange dashed</td>
+            <td><code>OI1</code> <code>OI2</code> <code>OI3</code></td>
+            <td>The three strikes with the highest combined call + put open interest in the
+              nearest 30-day options chain.</td>
+          </tr>
+          <tr>
+            <td>Max Pain</td>
+            <td><span style="color:#e91e63">■</span> Magenta dotted</td>
+            <td><code>MaxPain</code></td>
+            <td>The strike price at which the total payout to all option buyers would be
+              minimized — i.e. where option sellers profit most at expiry.</td>
+          </tr>
+          <tr>
+            <td>Gamma Flip</td>
+            <td><span style="color:#00e5ff">■</span> Cyan dashed</td>
+            <td><code>γ Flip</code></td>
+            <td>The level where dealer net gamma exposure crosses zero. Above it = low-vol,
+              mean-reverting. Below it = high-vol, trending.</td>
+          </tr>
+          <tr>
+            <td>Call Wall</td>
+            <td><span style="color:#26a69a">■</span> Teal dotted</td>
+            <td><code>Call Wall</code></td>
+            <td>The single strike above current price with the highest call open interest.
+              The largest resistance concentration in the chain.</td>
+          </tr>
+          <tr>
+            <td>Put Wall</td>
+            <td><span style="color:#ef5350">■</span> Red dotted</td>
+            <td><code>Put Wall</code></td>
+            <td>The single strike below current price with the highest put open interest.
+              The largest support concentration in the chain.</td>
+          </tr>
+          <tr>
+            <td>QQQ Prev Day Open</td>
+            <td><span style="color:#b388ff">■</span> Purple dotted</td>
+            <td><code>QQQ PDO</code></td>
+            <td>Yesterday's opening price for QQQ, scaled to NQ. A key reference for
+              gap analysis — is today's session above or below where yesterday began?</td>
+          </tr>
+          <tr>
+            <td>QQQ Prev Day Close</td>
+            <td><span style="color:#ffd54f">■</span> Amber dotted</td>
+            <td><code>QQQ PDC</code></td>
+            <td>Yesterday's closing price for QQQ, scaled to NQ. The most-watched daily
+              reference level — institutions use it as the anchor for overnight positioning.</td>
+          </tr>
+          <tr>
+            <td>QQQ Day Open</td>
+            <td><span style="color:#e0e0e0">■</span> Grey dotted</td>
+            <td><code>QQQ DO</code></td>
+            <td>Today's opening price for QQQ, scaled to NQ. The starting point for the
+              current session — price above = day-session is net bullish so far.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>OI Walls — Open Interest Concentration</h3>
+      <p>Open interest (OI) is the total number of options contracts that are still open and
+        haven't been settled. Large OI at a strike means a lot of people — institutions, funds,
+        hedgers — have positioned around that level. Market makers who sold those contracts are
+        now delta-hedging, which creates mechanical buying and selling activity around those strikes.</p>
+      <div class="two-col">
+        <div class="callout success">
+          <p><strong>Price approaching an OI Wall from below:</strong> Market makers are short calls
+            at that strike. As price rises and those calls go ITM, MMs must buy futures to stay
+            delta-neutral. This buying supports price and can act as a magnet pulling price up
+            — until it breaks, at which point the forced buying accelerates the move.</p>
+        </div>
+        <div class="callout danger">
+          <p><strong>Price approaching an OI Wall from above:</strong> Market makers are short puts
+            at that strike. As price falls, MMs must sell futures to stay delta-neutral. This selling
+            acts as a ceiling or resistance. A clean break below a major OI wall is often followed
+            by acceleration downward.</p>
         </div>
       </div>
+      <div class="callout warning">
+        <p><strong>OI Walls are gravitational, not absolute.</strong> Price frequently pins near
+          the top OI wall into weekly expiration. But on high-momentum days (earnings, FOMC, CPI),
+          the wall gives way. Use OI walls as context for <em>where</em> price is likely to stall
+          or react — not as guaranteed turn points.</p>
+      </div>
+
+      <h3>Max Pain</h3>
+      <p>For every possible expiry strike, you can calculate how much total money option buyers
+        would receive if price settled exactly there. Max pain is the strike where that total payout
+        is <em>lowest</em> — meaning option sellers (primarily market makers and institutions who
+        write options) collectively profit the most.</p>
+      <p>The theory: because large institutions with significant short-options exposure have the size
+        to influence price action near expiry, price tends to gravitate toward the max pain strike
+        in the days leading into expiration — particularly into the final 1–2 hours of trading on
+        expiry day (Mon/Wed/Fri for QQQ).</p>
+      <div class="callout">
+        <p><strong>How to use it:</strong> Max pain is most meaningful on expiration days. If price
+          is well above max pain on a Wednesday, expect a gravitational pull downward during the
+          afternoon session. If price is below max pain, expect a potential lift into close.
+          On non-expiry days, treat it as a medium-term magnet — not an immediate target.</p>
+      </div>
+
+      <h3>Gamma Flip (γ Flip)</h3>
+      <p>Gamma measures how quickly a dealer's delta changes as price moves. When dealers are
+        <strong>net long gamma</strong> (positive GEX), they automatically buy dips and sell rips
+        to stay hedged — this is stabilizing. When dealers are <strong>net short gamma</strong>
+        (negative GEX), they have to chase price in the same direction it's moving to re-hedge —
+        this is destabilizing and amplifies volatility.</p>
+      <p>The gamma flip level is the price where dealer net gamma exposure crosses from positive to
+        negative (or vice versa). It is the volatility regime boundary.</p>
+      <div class="two-col">
+        <div class="callout success">
+          <p><strong>Price above γ Flip:</strong> Dealers are net long gamma. They act as shock
+            absorbers — selling into strength, buying into weakness. Expect smaller intraday ranges,
+            mean-reverting price action, and tighter ranges around key levels. Good environment for
+            range setups and zone rejections.</p>
+        </div>
+        <div class="callout danger">
+          <p><strong>Price below γ Flip:</strong> Dealers are net short gamma. They must chase
+            price directionally to re-hedge — amplifying moves. Expect larger intraday ranges,
+            trending price action, and levels breaking cleanly. Good environment for breakout and
+            PDH/PDL setups.</p>
+        </div>
+      </div>
+      <p>The header bar gamma widget shows your current regime: <strong>▲ Above γ Flip — low vol</strong>
+        (teal) or <strong>▼ Below γ Flip — high vol</strong> (red). On Mon/Wed/Fri, a
+        <strong>0DTE</strong> tag appears — gamma pinning effects are strongest on these days because
+        short-dated options have the highest gamma per contract.</p>
+
+      <h3>Call Wall and Put Wall</h3>
+      <p>The call wall is the single strike <em>above</em> current price with the highest call OI.
+        The put wall is the single strike <em>below</em> current price with the highest put OI.
+        Together they define the current options-implied range — the zone where dealer hedging
+        activity is most concentrated right now.</p>
+      <div class="callout">
+        <p><strong>Practical use:</strong> The call wall is resistance, the put wall is support.
+          Price tends to chop between them on low-momentum days. A clean close outside either wall
+          — especially on volume — signals that options positioning has flipped and the move may
+          extend further than expected.</p>
+      </div>
+
+      <h3>QQQ Daily Reference Levels (PDO / PDC / DO)</h3>
+      <p>These three levels anchor the current session relative to yesterday's price action.
+        They're simple but among the most-watched levels by institutional desks:</p>
+
+      <div class="cards">
+        <div class="card purple">
+          <h4>QQQ PDO — Previous Day Open</h4>
+          <p>Where yesterday's regular session began. A gap above PDO that holds signals bullish
+            continuation from yesterday's open. A gap below PDO that fails to reclaim it signals
+            bearish distribution. Less commonly referenced than PDC but useful for multi-day
+            trend analysis.</p>
+        </div>
+        <div class="card amber">
+          <h4>QQQ PDC — Previous Day Close</h4>
+          <p>The single most-watched reference level on any given day. Overnight futures pricing,
+            institutional rebalancing, and pre-market activity all reference the prior close.
+            Opening above PDC = bullish gap. Opening below PDC = bearish gap. Price often
+            revisits PDC during the session as institutions flatten positions established overnight.</p>
+        </div>
+        <div class="card">
+          <h4>QQQ DO — Current Day Open</h4>
+          <p>Where today's regular session opened. Holding above the day open = bulls in control
+            of today's session. Falling below and failing to reclaim = bearish session structure.
+            The day open is a live reference — it doesn't move. A powerful short-term anchor for
+            bias: are we net up or net down since today began?</p>
+        </div>
+      </div>
+
+      <div class="callout warning">
+        <p><strong>All levels are scaled from QQQ to NQ price space</strong> using the live
+          QQQ/NQ price ratio at the time of the fetch (typically ~37–40×). The scaling is
+          re-applied on every request so it stays accurate as the ratio shifts intraday.
+          The widget refreshes every hour — if you want a manual refresh, switch symbols
+          and back to MNQ.</p>
+      </div>
+
+      <h3>Reading the Header Widget</h3>
+      <p>When MNQ is active, the topbar shows:</p>
+      <div class="alert-mock" style="border-left-color:#ff5722">
+        <div class="alert-mock-header">
+          <span class="tag" style="color:#2196f3;font-weight:700">QQQ</span>
+          <span style="color:#787b86;font-size:11px">P/C</span>
+          <strong>0.94</strong>
+          <span style="color:#787b86;font-size:11px">|</span>
+          <span style="color:#787b86;font-size:11px">IV</span>
+          <strong>34.2%</strong>
+          <span style="color:#787b86;font-size:11px">|</span>
+          <span style="color:#787b86;font-size:11px">MaxPain</span>
+          <strong>24,205</strong>
+        </div>
+        <div style="font-size:12px;color:#787b86">
+          <strong style="color:#ef5350">▼ Below γ Flip — high vol</strong>
+          <span>(23,500)</span>
+          <span style="background:#ef5350;color:#fff;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">0DTE</span>
+        </div>
+      </div>
+      <ul class="checklist green" style="margin-top:12px">
+        <li><strong>P/C ratio:</strong> Put OI ÷ Call OI. Above 1.3 = heavy put buying = bearish
+          skew or hedging. Below 0.7 = heavy call buying = bullish / speculative. 0.8–1.2 = neutral.</li>
+        <li><strong>IV%:</strong> Implied volatility of the QQQ call strike nearest to current price.
+          High IV means the market expects large moves. Low IV means calm expected. Compare to recent
+          history — a sudden IV spike mid-session often precedes a sharp directional move.</li>
+        <li><strong>MaxPain:</strong> The NQ-scaled max pain strike for the nearest QQQ expiry.
+          Shown in NQ points so you can compare directly to the price on your chart.</li>
+        <li><strong>γ Flip:</strong> The NQ level separating low-vol (above) from high-vol (below)
+          dealer gamma regimes. The label updates live as price crosses the flip level.</li>
+        <li><strong>0DTE tag:</strong> Appears on Monday, Wednesday, and Friday — QQQ expiration
+          days. Gamma effects are most pronounced; expect tighter pinning around max pain and OI
+          walls into the close.</li>
+      </ul>
     </section>
 
     <!-- ── Features & Analysis Tools ──────────────────────────────────────── -->

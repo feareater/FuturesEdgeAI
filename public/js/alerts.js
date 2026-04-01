@@ -26,6 +26,25 @@
   // Sound alerts enabled flag (toggleable by feature panel)
   window._soundAlertsEnabled = false;
 
+  // ── Pine Script export ────────────────────────────────────────────────────
+  window._copyPineScript = async function() {
+    const btn = document.getElementById('pine-copy-btn');
+    if (btn) { btn.textContent = 'Fetching…'; btn.disabled = true; }
+    try {
+      const res  = await fetch(`/api/pine-script?symbol=${activeSymbol}`);
+      const text = await res.text();
+      await navigator.clipboard.writeText(text);
+      if (btn) { btn.textContent = '✓ Copied!'; btn.classList.add('copied'); }
+      setTimeout(() => {
+        if (btn) { btn.textContent = 'Pine Script'; btn.classList.remove('copied'); btn.disabled = false; }
+      }, 3000);
+    } catch (err) {
+      if (btn) { btn.textContent = 'Error'; btn.disabled = false; }
+      setTimeout(() => { if (btn) { btn.textContent = 'Pine Script'; } }, 2000);
+      console.error('[pine] copy failed:', err.message);
+    }
+  };
+
   // ── Active chart view — synced from chart.js via chartViewChange event ──────
   let activeSymbol = 'MNQ';
   let activeTf     = '5m';
@@ -211,7 +230,7 @@
 
   // ── Correlation heatmap ───────────────────────────────────────────────────
 
-  const CORR_SYMS = ['MNQ', 'MGC', 'MES', 'MCL', 'BTC', 'ETH', 'XRP', 'DXY', 'VIX', 'SIL'];
+  const CORR_SYMS = ['MNQ', 'MES', 'MCL', 'MGC', 'SIL', 'DXY', 'VIX', 'BTC', 'ETH', 'XRP', 'XLM'];
 
   function _corrColor(v) {
     // v in [-1, 1]: green for high positive, red for high negative, dim for near-0
@@ -240,7 +259,7 @@
       }
 
       // Header row — abbreviated for compact fit
-      const abbr = { MNQ:'NQ', MGC:'GC', MES:'ES', MCL:'CL', BTC:'BT', ETH:'ET', XRP:'XR', DXY:'DX', VIX:'VX', SIL:'SI' };
+      const abbr = { MNQ:'NQ', MES:'ES', MCL:'CL', MGC:'GC', SIL:'SI', DXY:'DX', VIX:'VX', BTC:'BT', ETH:'ET', XRP:'XR', XLM:'XL' };
       let html = '<table class="corr-table"><thead><tr><th></th>';
       CORR_SYMS.forEach(s => { html += `<th title="${s}">${abbr[s] || s}</th>`; });
       html += '</tr></thead><tbody>';
@@ -332,6 +351,9 @@
     // Last gamma data — shared between options widget and predictions panel
   let _lastGammaData = null;
 
+  // QQQ options expire Mon/Wed/Fri — these are 0DTE days for equity index futures (MNQ/MES)
+  function _isZeroDTE() { const d = new Date().getDay(); return [1, 3, 5].includes(d); }
+
   async function _fetchOptionsData(symbol) {
     // Get current futures price for strike scaling
     let futuresPrice = null;
@@ -349,7 +371,7 @@
     let usedPolygon = false;
     try {
       const [yahoRes, polyRes, gammaRes] = await Promise.all([
-        fetch(`/api/options?symbol=${symbol}`),
+        fetch(`/api/options?symbol=${symbol}${fp}`),
         fetch(`/api/options/flow?symbol=${symbol}${fp}`),
         fetch(`/api/gamma?symbol=${symbol}${fp}`),
       ]);
@@ -378,11 +400,49 @@
         }
       }
 
-      // Yahoo Finance fallback
+      // CBOE/Yahoo — QQQ/SPY proxy for MNQ/MES; GLD/USO for MGC/MCL.
+      // Returns scaled* fields when futuresPrice was provided.
       if (!usedPolygon && yahoRes.ok) {
         const { options } = await yahoRes.json();
-        window.ChartAPI?.setOptionsLevels?.(options);
-        _updateOptionsWidget(options);
+        if (options) {
+          // Use futures-scaled levels when available (MNQ→QQQ proxy, scaled to NQ price space)
+          const hasScaled = options.scaledOiWalls || options.scaledMaxPain;
+          const scaledLevels = hasScaled
+            ? {
+                oiWalls:                options.scaledOiWalls           ?? options.oiWalls,
+                maxPain:                options.scaledMaxPain            ?? options.maxPain,
+                pcRatio:                options.pcRatio,
+                atmIV:                  options.atmIV,
+                source:                 options.source,
+                dexScore:               options.dexScore,
+                dexBias:                options.dexBias,
+                resilience:             options.resilience,
+                resilienceLabel:        options.resilienceLabel,
+                scaledDaily:            options.scaledDaily             ?? null,
+                scaledLiquidityZones:   options.scaledLiquidityZones    ?? null,
+                scaledHedgePressureZones: options.scaledHedgePressureZones ?? null,
+                scaledPivotCandidates:  options.scaledPivotCandidates   ?? null,
+              }
+            : options;
+          window.ChartAPI?.setOptionsLevels?.(scaledLevels);
+          _updateOptionsWidget(scaledLevels);
+
+          // Also push gamma-derived levels to the gamma chart layer (flip, call wall, put wall)
+          const flip     = options.scaledGexFlip   ?? options.gexFlip;
+          const callWall = options.scaledCallWall  ?? options.callWall;
+          const putWall  = options.scaledPutWall   ?? options.putWall;
+          if (flip != null || callWall != null || putWall != null) {
+            const gammaData = {
+              flipLevel: flip, callWall, putWall,
+              hasGreeks: true,
+              isZeroDTE: _isZeroDTE(),
+              source: options.source,
+            };
+            _lastGammaData = gammaData;
+            window.ChartAPI?.setGammaLevels?.(gammaData);
+            _updateGammaWidget(gammaData);
+          }
+        }
       }
     } catch (_) {}
   }
@@ -429,12 +489,19 @@
   }
 
   function _updateOptionsWidget(data) {
-    const widget = document.getElementById('options-widget');
-    const pcEl   = document.getElementById('opt-pc');
-    const ivEl   = document.getElementById('opt-iv');
+    const widget        = document.getElementById('options-widget');
+    const pcEl          = document.getElementById('opt-pc');
+    const ivEl          = document.getElementById('opt-iv');
+    const maxPainEl     = document.getElementById('opt-maxpain');
+    const sourceEl      = document.getElementById('opt-source');
+    const dexEl         = document.getElementById('opt-dex');
+    const resilienceEl  = document.getElementById('opt-resilience');
     if (!widget) return;
     if (!data) { widget.style.display = 'none'; return; }
     widget.style.display = '';
+    if (sourceEl) {
+      sourceEl.textContent = data.source ? `${data.source} ` : '';
+    }
     if (pcEl) {
       const v = data.pcRatio;
       pcEl.textContent = v != null ? v.toFixed(2) : '—';
@@ -442,6 +509,21 @@
     }
     if (ivEl) {
       ivEl.textContent = data.atmIV != null ? `${(data.atmIV * 100).toFixed(1)}%` : '—';
+    }
+    if (maxPainEl) {
+      const mp = data.maxPain;
+      maxPainEl.textContent = mp != null ? mp.toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—';
+    }
+    if (dexEl && data.dexBias != null) {
+      const score = data.dexScore;
+      dexEl.textContent = score != null ? `${score > 0 ? '+' : ''}${score}` : '—';
+      dexEl.className   = 'opt-value' + (data.dexBias === 'bullish' ? ' opt-bullish' : data.dexBias === 'bearish' ? ' opt-bearish' : '');
+      dexEl.title       = `Dealer Delta Exposure: dealers are net ${data.dexBias === 'bullish' ? 'long futures (buying pressure)' : data.dexBias === 'bearish' ? 'short futures (selling pressure)' : 'flat'}`;
+    }
+    if (resilienceEl && data.resilience != null) {
+      resilienceEl.textContent = `${data.resilience}`;
+      resilienceEl.className   = 'opt-value' + (data.resilience >= 65 ? ' opt-bullish' : data.resilience < 40 ? ' opt-bearish' : '');
+      resilienceEl.title       = `Market resilience: ${data.resilienceLabel} — ${data.resilience >= 65 ? 'options market acting as shock absorber (mean-reverting)' : data.resilience < 40 ? 'options market amplifying moves (trending)' : 'mixed regime'}`;
     }
   }
 

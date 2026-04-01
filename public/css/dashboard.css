@@ -312,6 +312,22 @@ html, body {
 #perf-nav-link,
 #bt-nav-link,
 #propfirms-nav-link,
+#pine-copy-btn {
+  padding: 3px 10px;
+  background: rgba(38,166,154,0.12);
+  border: 1px solid rgba(38,166,154,0.35);
+  border-radius: 4px;
+  color: #26a69a;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+  font-family: inherit;
+}
+#pine-copy-btn:hover  { background: rgba(38,166,154,0.22); }
+#pine-copy-btn.copied { background: rgba(38,166,154,0.35); color: #fff; }
+
 #realaccount-nav-link,
 #export-nav-link {
   padding: 3px 10px;
@@ -1755,11 +1771,22 @@ html, body {
   font-family: monospace;
   font-size: 10px;
   border-radius: 2px;
+  border: 1px solid rgba(255,255,255,0.06);
 }
 
 .corr-diag {
   color: var(--text-dim);
   opacity: 0.4;
+  border: 1px solid rgba(255,255,255,0.06);
+}
+
+.corr-table th {
+  border-bottom: 1px solid rgba(255,255,255,0.12);
+  border-right: 1px solid rgba(255,255,255,0.06);
+}
+
+.corr-sym {
+  border-right: 1px solid rgba(255,255,255,0.12);
 }
 
 .corr-legend {
@@ -1786,6 +1813,7 @@ html, body {
 .opt-label    { color: var(--text-dim); font-size: 10px; text-transform: uppercase; }
 .opt-value    { font-weight: 600; color: var(--text); }
 .opt-sep      { color: var(--text-dim); }
+.opt-source   { color: var(--accent); font-size: 9px; font-weight: 700; letter-spacing: 0.05em; opacity: 0.8; }
 .opt-bullish  { color: var(--bull); }
 .opt-bearish  { color: var(--bear); }
 

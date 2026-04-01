@@ -1,0 +1,1180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FuturesEdge AI — Phase 3 Trading Guide</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #131722;
+      --bg-panel: #1e222d;
+      --bg-card:  #181b26;
+      --border:   #2a2e39;
+      --text:     #d1d4dc;
+      --dim:      #787b86;
+      --accent:   #2196f3;
+      --bull:     #26a69a;
+      --bear:     #ef5350;
+      --amber:    #ffb300;
+      --purple:   #ab47bc;
+    }
+
+    html, body { height: 100%; background: var(--bg); color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 14px; line-height: 1.6; }
+
+    /* ── Top bar ─────────────────────────────────────────────────────── */
+    #topbar {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      background: var(--bg-panel); border-bottom: 1px solid var(--border);
+      display: flex; flex-direction: column; align-items: center;
+      padding: 5px 0 3px;
+    }
+    #brand { font-size: 13px; font-weight: 700; color: var(--accent); letter-spacing: 0.4px; }
+    .tb-nav-links {
+      display: flex; align-items: center; justify-content: center; flex-wrap: wrap;
+      gap: 4px; padding: 3px 16px; overflow-x: auto; scrollbar-width: none;
+      white-space: nowrap; width: 100%;
+    }
+    .tb-nav-links a {
+      color: var(--accent); text-decoration: none; font-size: 0.72rem; font-weight: 600;
+      padding: 3px 10px; border: 1px solid rgba(33,150,243,0.3);
+      border-radius: 4px; background: rgba(33,150,243,0.12);
+      transition: background 0.15s; white-space: nowrap;
+    }
+    .tb-nav-links a:hover  { background: rgba(33,150,243,0.22); }
+    .tb-nav-links a.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+    /* ── Layout ──────────────────────────────────────────────────────── */
+    #layout { display: flex; padding-top: 72px; min-height: 100vh; }
+
+    /* ── Sidebar ─────────────────────────────────────────────────────── */
+    #sidebar {
+      width: 220px; flex-shrink: 0; position: fixed; top: 72px; bottom: 0;
+      background: var(--bg-panel); border-right: 1px solid var(--border);
+      overflow-y: auto; padding: 20px 0;
+    }
+    #sidebar .nav-section { font-size: 9px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.8px; color: var(--dim); padding: 12px 18px 4px; }
+    #sidebar a {
+      display: block; padding: 6px 18px; color: var(--dim); text-decoration: none;
+      font-size: 12px; border-left: 2px solid transparent; transition: all 0.12s;
+    }
+    #sidebar a:hover  { color: var(--text); background: rgba(255,255,255,0.03); }
+    #sidebar a.active { color: var(--accent); border-left-color: var(--accent);
+                        background: rgba(33,150,243,0.06); }
+
+    /* ── Main content ────────────────────────────────────────────────── */
+    #content { margin-left: 220px; padding: 40px 48px; max-width: 920px; }
+
+    section { margin-bottom: 60px; scroll-margin-top: 84px; }
+
+    h1 { font-size: 28px; font-weight: 700; margin-bottom: 8px; color: var(--text); }
+    h2 { font-size: 20px; font-weight: 700; color: var(--text); margin-bottom: 16px;
+         padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+    h3 { font-size: 15px; font-weight: 600; color: var(--text); margin: 24px 0 8px; }
+    p  { color: var(--text); margin-bottom: 12px; line-height: 1.7; }
+    .lead { font-size: 15px; color: var(--dim); margin-bottom: 24px; line-height: 1.7; }
+
+    hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+    code { background: var(--bg-card); padding: 1px 5px; border-radius: 3px;
+           font-family: monospace; font-size: 12px; color: var(--amber); }
+
+    /* ── Cards ───────────────────────────────────────────────────────── */
+    .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+             gap: 16px; margin: 20px 0; }
+    .card {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px;
+      padding: 16px; border-top: 3px solid var(--accent);
+    }
+    .card.bull   { border-top-color: var(--bull); }
+    .card.bear   { border-top-color: var(--bear); }
+    .card.amber  { border-top-color: var(--amber); }
+    .card.purple { border-top-color: var(--purple); }
+    .card h4 { font-size: 13px; font-weight: 700; margin-bottom: 8px; }
+    .card p  { font-size: 12px; color: var(--dim); margin: 0; line-height: 1.5; }
+
+    /* ── Callout boxes ───────────────────────────────────────────────── */
+    .callout {
+      border-left: 3px solid var(--accent); background: rgba(33,150,243,0.06);
+      padding: 12px 16px; border-radius: 0 4px 4px 0; margin: 16px 0;
+    }
+    .callout.warning { border-left-color: var(--amber); background: rgba(255,179,0,0.06); }
+    .callout.danger  { border-left-color: var(--bear);  background: rgba(239,83,80,0.06); }
+    .callout.success { border-left-color: var(--bull);  background: rgba(38,166,154,0.06); }
+    .callout p { margin: 0; font-size: 13px; }
+    .callout p + p { margin-top: 8px; }
+
+    /* ── Setup badge ─────────────────────────────────────────────────── */
+    .setup-badge {
+      display: inline-block; font-size: 10px; font-weight: 700; padding: 2px 8px;
+      border-radius: 10px; text-transform: uppercase; letter-spacing: 0.5px;
+      margin-bottom: 12px;
+    }
+    .setup-badge.s1 { background: rgba(33,150,243,0.15); color: var(--accent); }
+    .setup-badge.s2 { background: rgba(38,166,154,0.15); color: var(--bull); }
+    .setup-badge.s3 { background: rgba(255,179,0,0.15);  color: var(--amber); }
+    .setup-badge.sq { background: rgba(171,71,188,0.15); color: var(--purple); }
+    .setup-badge.s4 { background: rgba(255,138,0,0.15);  color: #ff8a00; }
+
+    /* ── Checklist ───────────────────────────────────────────────────── */
+    .checklist { list-style: none; margin: 12px 0 20px; }
+    .checklist li {
+      padding: 6px 0 6px 26px; position: relative; font-size: 13px;
+      color: var(--text); border-bottom: 1px solid rgba(255,255,255,0.04);
+    }
+    .checklist li::before { content: ''; position: absolute; left: 4px; top: 12px;
+      width: 10px; height: 10px; border-radius: 50%; background: var(--border); }
+    .checklist.green li::before { background: var(--bull); }
+    .checklist.red   li::before { background: var(--bear); }
+    .checklist.amber li::before { background: var(--amber); }
+
+    /* ── Score table ─────────────────────────────────────────────────── */
+    .score-table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13px; }
+    .score-table th { text-align: left; padding: 8px 12px; font-size: 11px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.5px; color: var(--dim);
+      background: var(--bg-card); border-bottom: 1px solid var(--border); }
+    .score-table td { padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.03);
+      vertical-align: top; }
+    .score-table tr:last-child td { border-bottom: none; }
+    .score-table .pts { color: var(--accent); font-weight: 700; white-space: nowrap; }
+    .score-table .bull-col { color: var(--bull); font-weight: 600; }
+    .score-table .bear-col { color: var(--bear); font-weight: 600; }
+    .score-table .dim-col  { color: var(--dim); }
+
+    /* ── Two-col ─────────────────────────────────────────────────────── */
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin: 16px 0; }
+    @media (max-width: 680px) { .two-col { grid-template-columns: 1fr; } }
+
+    /* ── Bias panel mock ─────────────────────────────────────────────── */
+    .bias-panel {
+      background: #0d1117; border: 1px solid var(--border); border-radius: 6px;
+      overflow: hidden; margin: 20px 0; font-size: 12px;
+    }
+    .bias-panel table { width: 100%; border-collapse: collapse; }
+    .bias-panel th {
+      background: #161b22; padding: 6px 10px; font-size: 10px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.6px; color: var(--dim);
+      border-bottom: 1px solid var(--border); text-align: center;
+    }
+    .bias-panel th:first-child { text-align: left; }
+    .bias-panel td {
+      padding: 6px 10px; border-bottom: 1px solid rgba(255,255,255,0.03);
+      text-align: center; font-size: 12px;
+    }
+    .bias-panel td:first-child { text-align: left; color: var(--dim); font-size: 11px; }
+    .bias-panel tr:last-child td { border-bottom: none; }
+    .bull-val { color: var(--bull); font-weight: 700; }
+    .bear-val { color: var(--bear); font-weight: 700; }
+    .dim-val  { color: var(--dim); }
+    .warn-val { color: var(--amber); font-weight: 700; }
+
+    /* ── Signal label mock ───────────────────────────────────────────── */
+    .signal-label {
+      display: inline-block; padding: 6px 12px; border-radius: 4px;
+      font-size: 12px; font-weight: 700; line-height: 1.4; text-align: center;
+      margin: 4px;
+    }
+    .signal-label.bull { background: rgba(38,166,154,0.2); color: var(--bull);
+                         border: 1px solid rgba(38,166,154,0.4); }
+    .signal-label.bear { background: rgba(239,83,80,0.2); color: var(--bear);
+                         border: 1px solid rgba(239,83,80,0.4); }
+    .signal-label.blue { background: rgba(33,150,243,0.2); color: var(--accent);
+                         border: 1px solid rgba(33,150,243,0.4); }
+    .signal-label.teal { background: rgba(0,121,107,0.2); color: #4db6ac;
+                         border: 1px solid rgba(0,121,107,0.4); }
+    .signal-label.red  { background: rgba(183,28,28,0.2); color: #e57373;
+                         border: 1px solid rgba(183,28,28,0.4); }
+
+    /* ── Flow chart ──────────────────────────────────────────────────── */
+    .flow { background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px;
+            padding: 20px 24px; margin: 20px 0; }
+    .flow-step { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
+    .flow-step:last-child { margin-bottom: 0; }
+    .flow-num { width: 24px; height: 24px; flex-shrink: 0; background: var(--accent);
+                border-radius: 50%; display: flex; align-items: center; justify-content: center;
+                font-size: 11px; font-weight: 700; color: #fff; margin-top: 1px; }
+    .flow-num.green { background: var(--bull); }
+    .flow-num.red   { background: var(--bear); }
+    .flow-num.amber { background: var(--amber); color: #000; }
+    .flow-body { flex: 1; }
+    .flow-body strong { display: block; font-size: 13px; margin-bottom: 2px; }
+    .flow-body span   { font-size: 12px; color: var(--dim); }
+    .flow-connector { width: 24px; flex-shrink: 0; display: flex; justify-content: center; }
+    .flow-connector::before { content: ''; width: 2px; height: 16px;
+                               background: var(--border); margin: -8px 0; }
+
+    /* ── Webhook flow ────────────────────────────────────────────────── */
+    .wh-chain { display: flex; align-items: center; gap: 0; margin: 20px 0;
+                flex-wrap: wrap; }
+    .wh-node {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px;
+      padding: 12px 16px; text-align: center; min-width: 130px;
+    }
+    .wh-node .label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px;
+                      color: var(--dim); margin-bottom: 4px; }
+    .wh-node .val   { font-size: 13px; font-weight: 700; }
+    .wh-node.accent { border-color: var(--accent); background: rgba(33,150,243,0.06); }
+    .wh-node.bull   { border-color: var(--bull);   background: rgba(38,166,154,0.06); }
+    .wh-node.amber  { border-color: var(--amber);  background: rgba(255,179,0,0.06); }
+    .wh-arrow { font-size: 18px; color: var(--dim); padding: 0 8px; flex-shrink: 0; }
+
+    /* ── Print / PDF ─────────────────────────────────────────────────── */
+    #print-btn {
+      position: fixed; bottom: 24px; right: 24px; z-index: 200;
+      background: var(--accent); color: #fff; border: none; border-radius: 6px;
+      padding: 10px 20px; font-size: 13px; font-weight: 700; cursor: pointer;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    }
+    #print-btn:hover { background: #1976d2; }
+
+    @media print {
+      #topbar, #sidebar, #print-btn { display: none !important; }
+      #layout { padding-top: 0; }
+      #content { margin-left: 0; padding: 20px 32px; max-width: 100%; }
+      body { background: #fff; color: #111; font-size: 12px; }
+      :root {
+        --bg: #fff; --bg-panel: #f5f5f5; --bg-card: #f0f0f0; --border: #ddd;
+        --text: #111; --dim: #555; --accent: #1565c0; --bull: #1b7a71;
+        --bear: #c62828; --amber: #e65100; --purple: #6a1b9a;
+      }
+      .callout, .card, .flow, .wh-node { border: 1px solid #ccc !important;
+        background: #fafafa !important; }
+      .callout.success { background: #f0faf9 !important; }
+      .callout.warning { background: #fffde7 !important; }
+      .callout.danger  { background: #ffebee !important; }
+      .bias-panel { border: 1px solid #ccc !important; }
+      .bias-panel th, .bias-panel table { background: #f5f5f5 !important; }
+      .signal-label { border: 1px solid #bbb !important; background: #f5f5f5 !important;
+                      color: #111 !important; }
+      section { page-break-inside: avoid; margin-bottom: 32px; }
+      h2 { page-break-after: avoid; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Top bar ───────────────────────────────────────────────────────────── -->
+<div id="topbar">
+  <span id="brand">FuturesEdge AI</span>
+  <nav class="tb-nav-links">
+    <a href="/">Dashboard</a>
+    <a href="/scanner.html">Scanner</a>
+    <a href="/commentary.html">AI</a>
+    <a href="/performance.html">Stats</a>
+    <a href="/backtest.html">Replay</a>
+    <a href="/tradelog.html">Trade Log</a>
+    <a href="/propfirms.html">Prop Firms</a>
+    <a href="/tradingaccount.html">Real Account</a>
+    <a href="/docs.html">Guide</a>
+    <a href="/phase3-guide.html" class="active">Phase 3 Guide</a>
+  </nav>
+</div>
+
+<!-- ── Print button ──────────────────────────────────────────────────────── -->
+<button id="print-btn" onclick="window.print()">⬇ Export PDF</button>
+
+<!-- ── Layout ────────────────────────────────────────────────────────────── -->
+<div id="layout">
+
+  <!-- Sidebar -->
+  <nav id="sidebar">
+    <div class="nav-section">Setup</div>
+    <a href="#intro">Introduction</a>
+    <a href="#chart-setup">Chart Setup</a>
+
+    <div class="nav-section">Bias Dashboard</div>
+    <a href="#bias-overview">Reading the Panel</a>
+    <a href="#bias-states">The Five Bias States</a>
+    <a href="#bias-align">Timeframe Alignment</a>
+    <a href="#rsi-vol">RSI &amp; Volume Rows</a>
+
+    <div class="nav-section">Phase 3 Overlays</div>
+    <a href="#ema-stack">EMA Stack</a>
+    <a href="#vwap">VWAP &amp; Bands</a>
+    <a href="#iof-zones">IOF Zones</a>
+    <a href="#pdh-pdl">PDH / PDL Lines</a>
+
+    <div class="nav-section">The Four Setups</div>
+    <a href="#zone-rej">1 · Zone Rejection</a>
+    <a href="#pdh-break">2 · PDH/PDL Breakout</a>
+    <a href="#tl-break">3 · Trendline Break</a>
+    <a href="#bos">4 · BOS (Qualifier)</a>
+
+    <div class="nav-section">Execution</div>
+    <a href="#confidence">Confidence Score</a>
+    <a href="#flowchart">Decision Flowchart</a>
+    <a href="#mistakes">Common Mistakes</a>
+
+    <div class="nav-section">AI &amp; Webhooks</div>
+    <a href="#webhook-setup">Webhook Setup</a>
+    <a href="#webhook-flow">How It Works</a>
+    <a href="#ai-commentary">Using AI Commentary</a>
+  </nav>
+
+  <!-- Main content -->
+  <main id="content">
+
+    <!-- ── Introduction ───────────────────────────────────────────────── -->
+    <section id="intro">
+      <h1>Phase 3 + Bias Dashboard — Trading Guide</h1>
+      <p class="lead">A complete walkthrough for reading the FuturesEdge Phase 3 indicator
+        alongside the Bias Dashboard, making trade decisions, and using the AI webhook
+        to get Claude commentary on every setup.</p>
+
+      <div class="cards">
+        <div class="card bull">
+          <h4>Phase 3 — What it does</h4>
+          <p>All chart overlays (EMA, VWAP, IOF zones, trendlines) plus setup detection
+          and structured JSON alerts that fire to your FuturesEdge server.</p>
+        </div>
+        <div class="card">
+          <h4>Bias Dashboard — What it does</h4>
+          <p>A standalone multi-timeframe bias panel. Reads your chart TF and the two
+          higher timeframes automatically. Shows EMA stack, VWAP, RSI, and volume per TF.</p>
+        </div>
+        <div class="card amber">
+          <h4>Why use both together</h4>
+          <p>Phase 3 fires at the bar level — it sees the setup on your TF. The Bias
+          Dashboard tells you whether the higher timeframes agree. Agreement = higher
+          probability.</p>
+        </div>
+        <div class="card purple">
+          <h4>The AI loop</h4>
+          <p>Every Phase 3 alert fires a JSON webhook to FuturesEdge. The server calls
+          Claude with full market context and returns a plain-language assessment within
+          seconds.</p>
+        </div>
+      </div>
+
+      <div class="callout">
+        <p><strong>Which scripts to run:</strong> Add <strong>FuturesEdge AI — Phase 3 AI</strong>
+        and <strong>FuturesEdge — Bias Dashboard</strong> to the same chart. You do not need
+        Phase 1 or Phase 2 — Phase 3 includes everything from both. The Bias Dashboard is a
+        separate indicator added on top.</p>
+      </div>
+    </section>
+
+    <!-- ── Chart Setup ─────────────────────────────────────────────────── -->
+    <section id="chart-setup">
+      <h2>Chart Setup</h2>
+      <p>Run both indicators on your primary trading chart. Phase 3 works on any timeframe
+        but is designed for <strong>5m, 15m, and 30m</strong>. The Bias Dashboard
+        auto-detects your chart TF and shows the next two higher timeframes.</p>
+
+      <table class="score-table">
+        <thead>
+          <tr><th>Indicator</th><th>File</th><th>Recommended TF</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>FuturesEdge AI — Phase 3 AI</strong></td>
+            <td><code>FuturesEdge_Phase3_AI.pine</code></td>
+            <td>5m, 15m, or 30m</td>
+          </tr>
+          <tr>
+            <td><strong>FuturesEdge — Bias Dashboard</strong></td>
+            <td><code>FuturesEdge_BiasDashboard.pine</code></td>
+            <td>Same chart — auto-adapts</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>What each TF gives you</h3>
+      <div class="cards">
+        <div class="card">
+          <h4>5m chart</h4>
+          <p>Bias Dashboard shows 5m / 15m / 30m. Most granular. Best for precise entry timing.
+          More signals, more noise — raise Min Confidence to 75%.</p>
+        </div>
+        <div class="card bull">
+          <h4>15m chart</h4>
+          <p>Bias Dashboard shows 15m / 30m / 1h. Balanced. Fewer but higher-quality signals.
+          Recommended starting point.</p>
+        </div>
+        <div class="card amber">
+          <h4>30m chart</h4>
+          <p>Bias Dashboard shows 30m / 1h / 4h. Slowest and fewest signals. Best for
+          understanding the larger context during the session.</p>
+        </div>
+      </div>
+
+      <h3>Panel positions</h3>
+      <p>Both indicators draw tables in the top-right corner by default. Move the
+        <strong>Bias Dashboard</strong> to <strong>Top Left</strong> in its settings
+        to separate them and keep both visible simultaneously.</p>
+
+      <table class="score-table">
+        <thead><tr><th>Panel</th><th>Default position</th><th>Indicator</th></tr></thead>
+        <tbody>
+          <tr><td>Bias Dashboard table</td><td>Top-right (move to Top Left)</td><td>Bias Dashboard</td></tr>
+          <tr><td>Phase 3 info table (REGIME / EMA / VWAP)</td><td>Top-right</td><td>Phase 3</td></tr>
+          <tr><td>Recent signals log</td><td>Bottom-right</td><td>Phase 3</td></tr>
+          <tr><td>IOF zone boxes + signal labels</td><td>On-chart</td><td>Phase 3</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ── Bias Dashboard ──────────────────────────────────────────────── -->
+    <section id="bias-overview">
+      <h2>Reading the Bias Dashboard</h2>
+      <p>The Bias Dashboard is your first check <em>before</em> you look at any setup.
+        It tells you whether the trend on your timeframe is backed by institutional
+        momentum on the higher timeframes. A Phase 3 setup that agrees with all three
+        columns is significantly higher probability than one that fights the higher TF.</p>
+
+      <p>The panel has four columns: a row label, your current TF, HTF1 (one step up),
+        and HTF2 (two steps up). Each column is independently scored.</p>
+    </section>
+
+    <section id="bias-states">
+      <h2>The Five Bias States</h2>
+      <p>Each column shows one of five states. Read the top row first — it's the headline
+        bias for that timeframe:</p>
+
+      <div class="bias-panel">
+        <table>
+          <thead>
+            <tr><th>State</th><th>Meaning</th><th>Action</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="bull-val">▲ BULLISH</span></td>
+              <td>EMA full stack aligned (9 &gt; 21 &gt; 50) <em>and</em> price above VWAP</td>
+              <td>Actively look for long setups</td>
+            </tr>
+            <tr>
+              <td><span class="bear-val">▼ BEARISH</span></td>
+              <td>EMA full stack aligned (9 &lt; 21 &lt; 50) <em>and</em> price below VWAP</td>
+              <td>Actively look for short setups</td>
+            </tr>
+            <tr>
+              <td><span class="bull-val">▲ Lean Bull</span></td>
+              <td>EMA stack bullish but price below VWAP, or VWAP bullish but EMAs mixed</td>
+              <td>Longs only, reduce size — bias incomplete</td>
+            </tr>
+            <tr>
+              <td><span class="bear-val">▼ Lean Bear</span></td>
+              <td>EMA stack bearish but price above VWAP, or vice versa</td>
+              <td>Shorts only, reduce size</td>
+            </tr>
+            <tr>
+              <td><span class="dim-val">◆ Above / Below VWAP</span></td>
+              <td>EMAs not stacked (no clear trend), only VWAP position gives any signal</td>
+              <td>Avoid directional trades; range plays only</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Confidence percentage</h3>
+      <p>Below the bias state each column shows a directional confidence percentage (0–100%).
+        This is how strongly the indicators are agreeing — not a prediction, a measurement
+        of current alignment strength.</p>
+
+      <table class="score-table">
+        <thead><tr><th>Confidence</th><th>Meaning</th><th>Position sizing</th></tr></thead>
+        <tbody>
+          <tr><td class="bull-col">80% +</td><td>Strong conviction — all factors aligned</td><td>Full size</td></tr>
+          <tr><td class="bull-col">60 – 79%</td><td>Moderate conviction — most factors aligned</td><td>Normal size</td></tr>
+          <tr><td class="bear-col">Below 60%</td><td>Weak or conflicted — at least one factor disagrees</td><td>Half size or skip</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="bias-align">
+      <h2>Timeframe Alignment — The Golden Rule</h2>
+      <p>The highest-probability trades occur when all three timeframe columns point the
+        same direction. This means institutional order flow is aligned across multiple
+        timeframes — the trend has depth, not just momentum.</p>
+
+      <div class="callout success">
+        <p><strong>Green light example (5m chart):</strong></p>
+        <p>5m: ▲ BULLISH 84% &nbsp;·&nbsp; 15m: ▲ BULLISH 77% &nbsp;·&nbsp; 30m: ▲ LEAN BULL 68%</p>
+        <p style="margin-top:8px">All three pointing up with strong scores. Take bullish Phase 3 setups at full size.</p>
+      </div>
+
+      <div class="callout warning">
+        <p><strong>Yellow light example:</strong></p>
+        <p>5m: ▲ BULLISH 79% &nbsp;·&nbsp; 15m: ▲ LEAN BULL 61% &nbsp;·&nbsp; 30m: ◆ Below VWAP 52%</p>
+        <p style="margin-top:8px">30m is neutral or opposing. Take longs at half size only. Tighten the stop.</p>
+      </div>
+
+      <div class="callout danger">
+        <p><strong>Red light example:</strong></p>
+        <p>5m: ▲ BULLISH 81% &nbsp;·&nbsp; 15m: ▼ BEARISH 74% &nbsp;·&nbsp; 30m: ▼ BEARISH 68%</p>
+        <p style="margin-top:8px">5m is fighting both higher timeframes. A bullish Phase 3 signal here is a counter-trend
+          trap. Hard pass regardless of the confidence score on the Phase 3 label.</p>
+      </div>
+
+      <div class="callout">
+        <p><strong>Rule of thumb:</strong> Require at least 2 of 3 columns to agree with your
+          setup direction. All 3 aligned = full conviction. 2 of 3 = proceed with caution.
+          Only 1 or a split = skip or wait for resolution.</p>
+      </div>
+    </section>
+
+    <section id="rsi-vol">
+      <h2>RSI and Volume Rows</h2>
+
+      <h3>RSI(14) — the exhaustion warning</h3>
+      <p>The dashboard shows RSI for each timeframe column. Normal values (30–70) just
+        confirm direction. Watch for the warning flags:</p>
+
+      <table class="score-table">
+        <thead><tr><th>Display</th><th>What it means</th><th>Action</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><span class="warn-val">⚠ OB 74</span></td>
+            <td>RSI overbought (&gt;70). Even in a bullish regime, price is stretched.
+            Buying here is buying exhaustion.</td>
+            <td>Reduce long size or wait for pullback to zone</td>
+          </tr>
+          <tr>
+            <td><span class="bull-col">⚠ OS 27</span></td>
+            <td>RSI oversold (&lt;30). A short setup here is selling into a bounce zone.</td>
+            <td>Reduce short size or wait for bounce to confirm continuation</td>
+          </tr>
+          <tr>
+            <td class="dim-col">62 (no flag)</td>
+            <td>Normal momentum. Mildly bullish (&gt;50). No exhaustion risk.</td>
+            <td>No adjustment needed</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Volume row (current TF only)</h3>
+      <p>Volume compares the last closed candle against its 20-bar average. This tells you
+        whether the move behind a Phase 3 signal has institutional backing.</p>
+
+      <table class="score-table">
+        <thead><tr><th>Display</th><th>Meaning</th><th>Action</th></tr></thead>
+        <tbody>
+          <tr><td><span class="bull-col">▲ HIGH ×2.1</span></td><td>Bullish candle with 2.1× average volume</td><td>Confirms conviction — execute</td></tr>
+          <tr><td class="dim-col">▲ norm ×1.1</td><td>Normal volume on up candle</td><td>Proceed normally</td></tr>
+          <tr><td><span class="bear-col">▲ low ×0.6</span></td><td>Bullish candle with weak volume</td><td>No institutional follow-through — reduce size or wait</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ── Phase 3 Overlays ────────────────────────────────────────────── -->
+    <section id="ema-stack">
+      <h2>Phase 3 — The EMA Stack</h2>
+      <p>The three EMAs (9, 21, 50) are the primary trend regime filter. Their relative
+        alignment tells you which direction the current timeframe is trending. Phase 3
+        uses a subtle background tint and fill between EMA 9 and 21 to make the regime
+        visible at a glance.</p>
+
+      <div class="two-col">
+        <div>
+          <h3 style="color: var(--bull);">Bullish regime</h3>
+          <p>EMA 9 &gt; EMA 21 &gt; EMA 50 with green fill between 9 and 21, and a faint
+            green background tint. Only take longs in this state.</p>
+        </div>
+        <div>
+          <h3 style="color: var(--bear);">Bearish regime</h3>
+          <p>EMA 9 &lt; EMA 21 &lt; EMA 50 with red fill, faint red tint. Only take
+            shorts in this state.</p>
+        </div>
+      </div>
+
+      <div class="callout warning">
+        <p><strong>Mixed / crossed EMAs</strong> (e.g. 9 &gt; 21 but 21 &lt; 50) indicate a range or
+          transitioning market. Zone rejections can still work in range conditions, but PDH
+          breakouts and trendline breaks have lower quality in this state.</p>
+      </div>
+
+      <h3>The Phase 3 info table (top-right)</h3>
+      <p>This small table updates live and shows the state that feeds the confidence scoring:</p>
+
+      <table class="score-table">
+        <thead><tr><th>Row</th><th>What it shows</th><th>Why it matters</th></tr></thead>
+        <tbody>
+          <tr><td><strong>REGIME</strong></td><td>▲ BULLISH / ▼ BEARISH / ◆ NEUTRAL</td><td>EMA stack direction on your current TF</td></tr>
+          <tr><td><strong>15m EMA</strong></td><td>▲ Bull / ▼ Bear / ◆ Neut</td><td>Always checks the 15m regardless of chart TF — extra HTF confirmation built in</td></tr>
+          <tr><td><strong>vs VWAP</strong></td><td>▲ Above / ▼ Below</td><td>VWAP position relative to last close</td></tr>
+          <tr><td><strong>EMA 9 / 21 / 50</strong></td><td>Price values</td><td>Reference for dynamic S/R</td></tr>
+          <tr><td><strong>ATR 14</strong></td><td>Current ATR value</td><td>Used for SL/TP estimation in signals</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="vwap">
+      <h2>VWAP and Bands</h2>
+      <p>The VWAP (cyan line) is the volume-weighted average price for the current session.
+        It resets at the RTH open (09:30 ET). Price above VWAP = buyers are in control;
+        below VWAP = sellers. The ±1σ and ±2σ bands show where price is statistically
+        stretched from value.</p>
+
+      <table class="score-table">
+        <thead><tr><th>Level</th><th>Significance</th></tr></thead>
+        <tbody>
+          <tr><td>VWAP line</td><td>Session midpoint — acts as dynamic support in uptrends, resistance in downtrends</td></tr>
+          <tr><td>±1σ bands</td><td>First extension — price rejects here in trending sessions; dashed circles on chart</td></tr>
+          <tr><td>±2σ bands</td><td>Second extension (crosses on chart) — price is stretched; mean-reversion risk</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout success">
+        <p><strong>VWAP confluence bonus:</strong> Zone rejections within 0.3 × ATR14 of the
+          VWAP line earn +8 confidence points automatically. When a zone rejection occurs
+          right at VWAP, it's a supply/demand zone <em>and</em> a session value level
+          rejecting simultaneously — meaningfully higher probability.</p>
+      </div>
+    </section>
+
+    <section id="iof-zones">
+      <h2>IOF Zones — The Colored Boxes</h2>
+      <p>Institutional Order Flow (IOF) zones are the shaded boxes drawn on the chart.
+        They represent price ranges where institutional activity was concentrated. When
+        price returns to these zones, they often act as support or resistance.</p>
+
+      <div class="cards">
+        <div class="card bull">
+          <h4>Bullish FVG (green box)</h4>
+          <p>A 3-candle fair value gap where candle 3's low is above candle 1's high. Institutional
+          buying moved price faster than selling could fill — the gap is unfilled demand.</p>
+        </div>
+        <div class="card bear">
+          <h4>Bearish FVG (red box)</h4>
+          <p>Inverse: candle 3's high is below candle 1's low. Unfilled supply. Price returning
+          to this zone is returning to an institutional selling area.</p>
+        </div>
+        <div class="card">
+          <h4>Bullish OB (blue box)</h4>
+          <p>The last bearish candle before a strong bullish impulse move (≥1.5× ATR). The
+          candle must have a body ≤50% of its total range. Represents institutional demand that
+          caused the impulse.</p>
+        </div>
+        <div class="card bear">
+          <h4>Bearish OB (dark red box)</h4>
+          <p>Last bullish candle before a bearish impulse. Same criteria inverted. Institutional
+          supply that caused the impulse downward.</p>
+        </div>
+      </div>
+
+      <h3>Box lifecycle</h3>
+      <p>Boxes always extend to the current bar — they resize with the chart at any zoom level.
+        They disappear when the zone is used up:</p>
+
+      <table class="score-table">
+        <thead><tr><th>Event</th><th>What it means</th></tr></thead>
+        <tbody>
+          <tr><td>Box is visible</td><td>Zone is active — price has not fully entered it, or entered but not closed through it</td></tr>
+          <tr><td>FVG box disappears</td><td>Price closed inside the FVG (filled) — demand/supply has been consumed</td></tr>
+          <tr><td>OB box disappears</td><td>Price closed through the OB bottom (bullish) or top (bearish) — mitigated</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout">
+        <p>An OB rejection (catching price at the OB rather than just any FVG) adds +5 confidence
+          points to a zone rejection signal. The Phase 3 script differentiates between OB and FVG
+          rejections in its scoring.</p>
+      </div>
+    </section>
+
+    <section id="pdh-pdl">
+      <h2>PDH / PDL Lines</h2>
+      <p>The gray dashed horizontal lines show the <strong>Prior Day High</strong> (PDH) and
+        <strong>Prior Day Low</strong> (PDL). These are the most-watched reference levels by
+        institutional traders and are labeled at the start of each new day.</p>
+
+      <table class="score-table">
+        <thead><tr><th>Price relative to PDH/PDL</th><th>Interpretation</th></tr></thead>
+        <tbody>
+          <tr><td class="bull-col">Clean close above PDH on volume</td><td>Bullish momentum — breakout continuation likely. Look for PDH as new support on pullback.</td></tr>
+          <tr><td class="bear-col">Clean close below PDL on volume</td><td>Bearish momentum — breakdown continuation likely.</td></tr>
+          <tr><td class="dim-col">Price choppy around PDH/PDL</td><td>Level is contested. No clean signal — wait for resolution.</td></tr>
+          <tr><td class="dim-col">Close back below PDH after breakout</td><td>False break — exit immediately if in a long.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ── The Four Setups ─────────────────────────────────────────────── -->
+    <section id="zone-rej">
+      <h2>Setup 1 — Zone Rejection</h2>
+      <span class="setup-badge s2">ZONE REJ ▲ / ▼</span>
+
+      <p><strong>What it is:</strong> Price enters a supply or demand zone (OB or FVG), produces
+        a significant wick (≥35% of the candle's total range), and closes back outside the zone
+        in the rejection direction. The wick shows institutions defended the zone; the close back
+        outside confirms it.</p>
+
+      <p>This is the primary signal type. Backtest result: <strong>72.7% win rate</strong> when
+        all scoring components align.</p>
+
+      <h3>Entry</h3>
+      <p>On the close of the rejection candle. Phase 3 fires on <code>barstate.isconfirmed</code>
+        (bar close) — you enter at the open of the following bar.</p>
+
+      <h3>Confirmation checklist</h3>
+      <ul class="checklist green">
+        <li>Bias Dashboard agrees with the signal direction (same color, ≥65%)</li>
+        <li>Phase 3 info table REGIME matches direction</li>
+        <li>Phase 3 info table 15m EMA matches direction</li>
+        <li>VWAP position matches (above VWAP for longs, below for shorts)</li>
+        <li>Volume is not <code>low ×0.x</code> on the rejection candle</li>
+        <li>RSI is not ⚠ OB against a long, or ⚠ OS against a short</li>
+        <li>Not within 09:30–10:00 ET or 15:45–16:00 ET (session open/close noise)</li>
+      </ul>
+
+      <h3>What kills the setup</h3>
+      <ul class="checklist red">
+        <li>EMA stack on the chart TF is counter-trend — Phase 3 penalizes this proportionally</li>
+        <li>Wick is marginal (below 35% of candle range) — the rejection is weak</li>
+        <li>Higher TF shows an open FVG or OB in the opposing direction — contested level</li>
+        <li>Price immediately wicks back into the zone on the next bar</li>
+      </ul>
+
+      <h3>Trade management</h3>
+      <table class="score-table">
+        <thead><tr><th>Parameter</th><th>Bullish</th><th>Bearish</th></tr></thead>
+        <tbody>
+          <tr><td>Stop loss</td><td>1× ATR below the zone low</td><td>1× ATR above the zone high</td></tr>
+          <tr><td>Take profit (MNQ/MES)</td><td colspan="2" style="text-align:center">2:1 R:R (2× ATR from entry)</td></tr>
+          <tr><td>Take profit (MGC)</td><td colspan="2" style="text-align:center">1:1 R:R (1× ATR from entry)</td></tr>
+          <tr><td>Take profit (MCL)</td><td colspan="2" style="text-align:center">1.5:1 R:R (1.5× ATR from entry)</td></tr>
+          <tr><td>Exit signal</td><td colspan="2" style="text-align:center">Close back inside the zone = invalidation, exit immediately</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="pdh-break">
+      <h2>Setup 2 — PDH / PDL Breakout</h2>
+      <span class="setup-badge s1">PDH BO ▲ / PDL BO ▼</span>
+
+      <p><strong>What it is:</strong> The first bar to close above the Prior Day High (bullish)
+        or below the Prior Day Low (bearish). This marks a momentum breakout through the most
+        significant institutional reference level from the prior session.</p>
+
+      <p><strong>Why it works with delayed data:</strong> Momentum from a PDH/PDL break typically
+        lasts 15–45 minutes. Even with 15-minute delayed seed data on the FuturesEdge server,
+        the signal is actionable — you're not trying to catch the exact bar, you're riding the
+        continuation.</p>
+
+      <h3>Entry</h3>
+      <p>On the close of the breakout bar. Confirm the bar has actually closed above PDH — a
+        wick above PDH that closes back below is not a breakout.</p>
+
+      <h3>Confirmation checklist</h3>
+      <ul class="checklist green">
+        <li>Session is RTH (09:30–21:00 UTC) — the script gates this automatically</li>
+        <li>EMA regime aligned with direction (bullish for PDH, bearish for PDL)</li>
+        <li>15m EMA also aligned with direction (+15 pts)</li>
+        <li>Price above VWAP at time of PDH break (+8 pts)</li>
+        <li>Volume expansion on the breakout candle (+10 pts)</li>
+        <li>Close is within 0.5× ATR of PDH (tight break, not extended)</li>
+      </ul>
+
+      <h3>What kills the setup</h3>
+      <ul class="checklist red">
+        <li>Counter-trend EMA stack — PDH break with bearish EMA stack is suspect</li>
+        <li>Close immediately back below PDH on the next bar — false break, exit</li>
+        <li>Near-open or near-close session noise (−10 pts automatically)</li>
+        <li>Breakout bar has low volume — no institutional backing</li>
+      </ul>
+
+      <h3>Trade management</h3>
+      <table class="score-table">
+        <thead><tr><th>Parameter</th><th>Value</th></tr></thead>
+        <tbody>
+          <tr><td>Stop loss</td><td>1× ATR below PDH for longs (PDH becomes new support)</td></tr>
+          <tr><td>Hard stop</td><td>Close back below PDH = exit — level failed</td></tr>
+          <tr><td>Take profit</td><td>2:1 for MNQ/MES; next significant swing high or PDH ± 2× ATR</td></tr>
+          <tr><td>Pullback re-entry</td><td>First retest of PDH as support after clean break — often better entry</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="tl-break">
+      <h2>Setup 3 — Trendline Break</h2>
+      <span class="setup-badge s3">TL BREAK ▲ / TL BREAK ▼</span>
+
+      <p><strong>What it is:</strong> The first bar to close on the opposite side of the
+        auto-drawn resistance trendline (bullish break — closes above) or support trendline
+        (bearish break — closes below). The trendlines connect the two most recent confirmed
+        swing points on your chart timeframe.</p>
+
+      <h3>Trendline quality</h3>
+      <p>Phase 3 draws trendlines from the two most recent swing highs (resistance) and swing
+        lows (support). A trendline with more touches before the break is more significant.
+        The script fires on any break of a 2-point trendline, but you should visually assess
+        how many times price respected it:</p>
+
+      <table class="score-table">
+        <thead><tr><th>Touches before break</th><th>Quality</th><th>Sizing</th></tr></thead>
+        <tbody>
+          <tr><td>2 (minimum)</td><td>Valid — but could be a coincidence</td><td>Half size</td></tr>
+          <tr><td>3</td><td>Good — price has respected the line multiple times</td><td>Normal size</td></tr>
+          <tr><td>4+</td><td>High quality — well-established level</td><td>Full size</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Confirmation checklist</h3>
+      <ul class="checklist green">
+        <li>Clean close through the trendline — not just a wick</li>
+        <li>Break distance &gt; 0.3× ATR (Phase 3 adds +10 pts vs +5 for marginal breaks)</li>
+        <li>Volume expansion confirms the break (+10 pts)</li>
+        <li>Bias Dashboard agrees with direction</li>
+        <li>VWAP position matches (above VWAP for bullish TL break adds +10 pts)</li>
+        <li>EMA stack aligned with break direction</li>
+      </ul>
+
+      <h3>Trade management</h3>
+      <table class="score-table">
+        <thead><tr><th>Parameter</th><th>Value</th></tr></thead>
+        <tbody>
+          <tr><td>Stop loss</td><td>Just back through the broken trendline (1× ATR or back inside)</td></tr>
+          <tr><td>Take profit</td><td>Next significant level — PDH/PDL, prior swing high/low, ±2σ VWAP band</td></tr>
+          <tr><td>Invalidation</td><td>Close back on the wrong side of the trendline = exit</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="bos">
+      <h2>Setup 4 — Break of Structure (BOS)</h2>
+      <span class="setup-badge sq">BOS ▲ / BOS ▼</span>
+
+      <p><strong>What it is:</strong> A close above the most recent confirmed swing high (BOS ▲)
+        or below the most recent confirmed swing low (BOS ▼). This signals a structural shift in
+        the market — a new higher high or lower low has been made, confirming the current trend
+        direction.</p>
+
+      <div class="callout warning">
+        <p><strong>BOS is a context signal, not a standalone trade entry.</strong> By the time
+          the BOS label fires (on bar close), the structural move has already happened — you've
+          missed the entry. Use BOS to update your directional bias, then wait for the first
+          pullback to a zone or VWAP for the actual entry.</p>
+      </div>
+
+      <h3>How to use BOS correctly</h3>
+      <ul class="checklist amber">
+        <li>BOS ▲ fires → update your bias to bullish for this TF → look for the next zone rejection off demand as your entry</li>
+        <li>BOS ▼ fires → update bias to bearish → look for zone rejection off supply</li>
+        <li>BOS also adds +15 confidence points to zone rejection signals detected in the following bars (handled by the FuturesEdge server)</li>
+        <li>Multiple BOS in the same direction without a pullback = overextended, wait</li>
+      </ul>
+    </section>
+
+    <!-- ── Confidence & Execution ──────────────────────────────────────── -->
+    <section id="confidence">
+      <h2>Reading the Confidence Score</h2>
+      <p>Every signal label shows its score: <span class="signal-label bull">ZONE REJ ▲<br>78%</span>
+        <span class="signal-label bear">ZONE REJ ▼<br>65%</span>
+        <span class="signal-label blue">PDH BO ▲<br>82%</span>
+        <span class="signal-label teal">TL BREAK ▲<br>71%</span>
+      </p>
+
+      <p>The minimum threshold (default 65%) is configurable in Phase 3 settings. Signals below
+        the threshold are detected but no label is drawn.</p>
+
+      <table class="score-table">
+        <thead><tr><th>Score</th><th>Meaning</th><th>Action</th></tr></thead>
+        <tbody>
+          <tr><td class="bull-col">90 – 100%</td><td>Near-perfect — everything aligned, high volume, clean setup</td><td>Full size, execute immediately</td></tr>
+          <tr><td class="bull-col">80 – 89%</td><td>High quality — most factors confirmed</td><td>Full size</td></tr>
+          <tr><td class="bull-col">70 – 79%</td><td>Good quality — something is slightly off (session noise, weak volume)</td><td>Normal size</td></tr>
+          <tr><td class="dim-col">65 – 69%</td><td>Minimum threshold — one or more scoring components missing</td><td>Half size or skip</td></tr>
+          <tr><td class="bear-col">Below 65%</td><td>Filtered — label not drawn</td><td>No trade</td></tr>
+        </tbody>
+      </table>
+
+      <h3>What each scoring component means for you</h3>
+      <table class="score-table">
+        <thead><tr><th>Component</th><th>Points</th><th>Interpretation</th></tr></thead>
+        <tbody>
+          <tr><td>EMA regime aligned (proportional to strength)</td><td class="pts">up to +15</td><td>Trend is behind the setup. Strongest component.</td></tr>
+          <tr><td>Counter-trend EMA penalty</td><td class="pts bear-col">up to −10</td><td>Trend is fighting the setup. A 78% signal in a counter-trend regime would be 88%+ with the trend.</td></tr>
+          <tr><td>15m EMA aligned</td><td class="pts">+15</td><td>Higher TF agrees. Missing this is a −15 penalty.</td></tr>
+          <tr><td>Volume expansion (≥1.5× avg)</td><td class="pts">+10 to +12</td><td>Institutional backing confirmed.</td></tr>
+          <tr><td>VWAP confluence (within 0.3× ATR)</td><td class="pts">+8 to +10</td><td>Zone and VWAP aligning — stacked support/resistance.</td></tr>
+          <tr><td>OB present (vs just FVG)</td><td class="pts">+5</td><td>Stronger zone type — OB origin is more reliable.</td></tr>
+          <tr><td>Wick/body quality</td><td class="pts">+5 to +10</td><td>Clean rejection candle. Marginal wicks score less.</td></tr>
+          <tr><td>Session noise (near open/close)</td><td class="pts bear-col">−10</td><td>First/last 30 min of RTH are volatile. Automatic penalty.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="flowchart">
+      <h2>Decision Flowchart</h2>
+      <p>Work through this sequence every time a Phase 3 label appears on the chart.</p>
+
+      <div class="flow">
+        <div class="flow-step">
+          <div class="flow-num">1</div>
+          <div class="flow-body">
+            <strong>Check Bias Dashboard direction</strong>
+            <span>All 3 TFs agree → green light. 2 of 3 → yellow (half size). 1 of 3 or split → red (no trade).</span>
+          </div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-num">2</div>
+          <div class="flow-body">
+            <strong>Does signal direction match Bias Dashboard?</strong>
+            <span>If yes, continue. If no, hard pass — regardless of the confidence score.</span>
+          </div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-num">3</div>
+          <div class="flow-body">
+            <strong>Check Phase 3 info table</strong>
+            <span>REGIME, 15m EMA, and VWAP position should all match the signal direction. Note any that don't.</span>
+          </div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-num">4</div>
+          <div class="flow-body">
+            <strong>Check RSI in Bias Dashboard</strong>
+            <span>⚠ OB against a long, or ⚠ OS against a short? Reduce size or wait for a pullback first.</span>
+          </div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-num">5</div>
+          <div class="flow-body">
+            <strong>Check volume row</strong>
+            <span>HIGH ×1.5+ → confirmed. norm → fine. low ×0.x → hesitate, watch next bar.</span>
+          </div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-num green">6</div>
+          <div class="flow-body">
+            <strong>Execute at bar open (entry after signal bar closes)</strong>
+            <span>SL = 1× ATR from entry. TP = instrument R:R (MNQ/MES: 2:1, MGC: 1:1, MCL: 1.5:1).</span>
+          </div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-num amber">7</div>
+          <div class="flow-body">
+            <strong>Read AI commentary (bottom-right panel or FuturesEdge dashboard)</strong>
+            <span>If Claude says "wick marginal, volume below average" — consider sizing down even if score passed threshold.</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="mistakes">
+      <h2>Common Mistakes to Avoid</h2>
+
+      <div class="callout danger">
+        <p><strong>Taking counter-trend signals.</strong> The Bias Dashboard showing ▼ BEARISH
+          on the 30m while Phase 3 prints ZONE REJ ▲ is a warning, not an opportunity. The
+          counter-trend EMA penalty reduces the score, but a signal can still pass 65%.
+          The Bias Dashboard is your veto — use it.</p>
+      </div>
+
+      <div class="callout warning">
+        <p><strong>Trading near RTH open (09:30–10:00 ET).</strong> The first 30 minutes are
+          high volatility, wide spreads, and frequent false signals. The Phase 3 script applies
+          −10 pts during this window automatically. Watch the first 30 minutes, don't trade them.</p>
+      </div>
+
+      <div class="callout warning">
+        <p><strong>Chasing PDH/PDL breakouts.</strong> Enter on the close of the breakout bar —
+          not 5 bars later when price has already moved 2× ATR. If you missed it, wait for the
+          first pullback to PDH/PDL (now support/resistance) and look for a zone rejection there.</p>
+      </div>
+
+      <div class="callout">
+        <p><strong>Ignoring the volume row.</strong> A ZONE REJ ▲ 84% on a <code>▲ low ×0.5</code>
+          volume candle is a low-conviction rejection. The wick happened but nobody followed through.
+          Wait for the next bar to confirm before entering.</p>
+      </div>
+
+      <div class="callout">
+        <p><strong>Treating BOS as a trade entry.</strong> BOS fires at bar close — the structural
+          move has already completed. Use it to update your bias and look for the next setup,
+          not as a direct entry signal.</p>
+      </div>
+    </section>
+
+    <!-- ── Webhooks & AI ────────────────────────────────────────────────── -->
+    <section id="webhook-setup">
+      <h2>Webhook Setup</h2>
+      <p>Phase 3 uses TradingView's <code>alert()</code> function to fire a structured JSON
+        payload to your FuturesEdge server on every confirmed setup. This is what feeds the
+        Claude AI commentary system.</p>
+
+      <h3>Step 1 — Add the server endpoint</h3>
+      <p>The webhook route <code>POST /api/tv-webhook</code> must be added to
+        <code>server/index.js</code>. The full code is in the
+        <a href="/docs.html" style="color: var(--accent);">Setup Guide</a> under
+        "Phase 3 — AI Commentary Webhook."</p>
+
+      <h3>Step 2 — Wire TradingView</h3>
+      <ol style="padding-left: 20px; font-size: 13px; line-height: 2;">
+        <li>Press <strong>Alt+A</strong> on your chart to open the Create Alert dialog</li>
+        <li>Set <strong>Condition</strong> to <code>FuturesEdge AI — Phase 3 AI</code></li>
+        <li>Set <strong>Trigger</strong> to <code>Any alert() function call</code>
+          — this single alert catches all six setup types</li>
+        <li>Under <strong>Notifications</strong> → enable <strong>Webhook URL</strong></li>
+        <li>Enter your server URL: <code>http://&lt;your-ip&gt;:3000/api/tv-webhook</code>
+          (must be your LAN/public IP — not localhost)</li>
+        <li>Leave the <strong>Message</strong> field blank — Phase 3 sends the full JSON payload automatically</li>
+        <li>Set <strong>Expiry</strong> to open-ended → click <strong>Create</strong></li>
+      </ol>
+
+      <div class="callout warning">
+        <p><strong>Important:</strong> Use <code>Any alert() function call</code> — NOT the named
+          <code>alertcondition()</code> alerts like "FE · Bullish Zone Rejection." The named conditions
+          send plain text. Only <code>alert()</code> sends the full JSON that the AI system needs.</p>
+      </div>
+    </section>
+
+    <section id="webhook-flow">
+      <h2>How the Webhook Works</h2>
+
+      <div class="wh-chain">
+        <div class="wh-node accent">
+          <div class="label">TradingView</div>
+          <div class="val">Phase 3 fires</div>
+        </div>
+        <div class="wh-arrow">→</div>
+        <div class="wh-node">
+          <div class="label">POST</div>
+          <div class="val">JSON payload</div>
+        </div>
+        <div class="wh-arrow">→</div>
+        <div class="wh-node">
+          <div class="label">FuturesEdge Server</div>
+          <div class="val">/api/tv-webhook</div>
+        </div>
+        <div class="wh-arrow">→</div>
+        <div class="wh-node amber">
+          <div class="label">Claude API</div>
+          <div class="val">Commentary</div>
+        </div>
+        <div class="wh-arrow">→</div>
+        <div class="wh-node bull">
+          <div class="label">Dashboard</div>
+          <div class="val">Alert feed</div>
+        </div>
+      </div>
+
+      <h3>What the payload contains</h3>
+      <p>Every webhook call includes the full market context Claude needs to generate useful commentary:</p>
+
+      <table class="score-table">
+        <thead><tr><th>Field</th><th>Value</th></tr></thead>
+        <tbody>
+          <tr><td><code>setup</code></td><td>zone_rejection, pdh_breakout, pdl_breakout, trendline_break</td></tr>
+          <tr><td><code>dir</code></td><td>bullish / bearish</td></tr>
+          <tr><td><code>conf</code></td><td>Confidence score (e.g. 82)</td></tr>
+          <tr><td><code>price</code>, <code>sl</code>, <code>tp</code></td><td>Entry, stop loss, take profit (ATR-based)</td></tr>
+          <tr><td><code>regime</code></td><td>bullish / bearish / neutral (EMA stack)</td></tr>
+          <tr><td><code>htf15</code></td><td>15m EMA direction</td></tr>
+          <tr><td><code>vwap</code></td><td>above / below</td></tr>
+          <tr><td><code>ema9</code>, <code>ema21</code>, <code>ema50</code></td><td>Current EMA values</td></tr>
+          <tr><td><code>pdh</code>, <code>pdl</code></td><td>Prior day high and low</td></tr>
+          <tr><td><code>sess</code></td><td>rth / extended</td></tr>
+          <tr><td><code>atr</code></td><td>Current ATR(14) value</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="ai-commentary">
+      <h2>Using AI Commentary</h2>
+      <p>When a Phase 3 webhook fires, the FuturesEdge server calls Claude with the full
+        market context. The response is a 3–5 sentence plain-language assessment that
+        appears in the alert feed on the dashboard.</p>
+
+      <h3>What the commentary tells you</h3>
+      <ul class="checklist green">
+        <li>What the setup is and why it triggered technically</li>
+        <li>Quality assessment — wick strength, volume, zone type</li>
+        <li>What would make the setup stronger (confirmation level)</li>
+        <li>What would invalidate it (where to place the stop / when to exit)</li>
+      </ul>
+
+      <div class="callout success">
+        <p><strong>How to use it:</strong> Treat AI commentary as a second opinion, not a
+          recommendation. If the score is 82% but Claude says "wick is marginal, volume below
+          average, 15m is mixed" — that's telling you the score is being carried by the regime
+          alignment, not the candle quality. Size down.</p>
+      </div>
+
+      <div class="callout danger">
+        <p><strong>What it is NOT:</strong> The AI commentary is not a guarantee, not a
+          signal to enter, and not a substitute for your own analysis. It surfaces context
+          that can be missed when watching live charts. The final decision is always yours.</p>
+      </div>
+
+      <h3>Recent signals panel (bottom-right)</h3>
+      <p>Phase 3 maintains a log of the last 5 signals directly on the TradingView chart in
+        a bottom-right panel. This shows the signal type, direction, and confidence score at
+        a glance so you can review recent activity without switching to the FuturesEdge
+        dashboard. The panel also shows your current webhook URL status and minimum confidence
+        threshold.</p>
+    </section>
+
+    <hr />
+
+    <section style="margin-bottom: 40px;">
+      <h2>Quick Reference</h2>
+
+      <h3>Signal labels</h3>
+      <div style="margin: 12px 0;">
+        <span class="signal-label bull">ZONE REJ ▲<br>78%</span>
+        <span class="signal-label bear">ZONE REJ ▼<br>71%</span>
+        <span class="signal-label blue">PDH BO ▲<br>82%</span>
+        <span class="signal-label bear">PDL BO ▼<br>76%</span>
+        <span class="signal-label teal">TL BREAK ▲<br>68%</span>
+        <span class="signal-label red">TL BREAK ▼<br>73%</span>
+      </div>
+
+      <h3 style="margin-top: 24px;">Instrument R:R targets</h3>
+      <table class="score-table">
+        <thead><tr><th>Instrument</th><th>R:R</th><th>TP formula</th></tr></thead>
+        <tbody>
+          <tr><td>MNQ, MES</td><td class="pts">2:1</td><td>Entry ± 2× ATR14</td></tr>
+          <tr><td>MGC</td><td class="pts">1:1</td><td>Entry ± 1× ATR14</td></tr>
+          <tr><td>MCL</td><td class="pts">1.5:1</td><td>Entry ± 1.5× ATR14</td></tr>
+        </tbody>
+      </table>
+
+      <h3 style="margin-top: 24px;">Minimum confidence guide</h3>
+      <table class="score-table">
+        <thead><tr><th>Use case</th><th>Recommended threshold</th></tr></thead>
+        <tbody>
+          <tr><td>Noisy session (near open/close, event day)</td><td>75 – 80%</td></tr>
+          <tr><td>Normal trading conditions</td><td>65 – 70%</td></tr>
+          <tr><td>Strong directional trend (all TFs aligned ≥80%)</td><td>65% (default)</td></tr>
+        </tbody>
+      </table>
+
+      <h3 style="margin-top: 24px;">RTH session reference (ET)</h3>
+      <table class="score-table">
+        <thead><tr><th>Time (ET)</th><th>Phase 3 behavior</th></tr></thead>
+        <tbody>
+          <tr><td>09:30 – 10:00</td><td class="bear-col">Session open noise → −10 pts on all signals</td></tr>
+          <tr><td>10:00 – 15:45</td><td class="bull-col">Normal scoring — full confidence values</td></tr>
+          <tr><td>15:45 – 16:00</td><td class="bear-col">Session close noise → −10 pts on all signals</td></tr>
+          <tr><td>Outside RTH</td><td class="dim-col">PDH/PDL breakout gated off; zone rejections still fire</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+  </main>
+</div>
+
+<!-- ── Sidebar active state on scroll ────────────────────────────────────── -->
+<script>
+  const sections = document.querySelectorAll('section[id]');
+  const links    = document.querySelectorAll('#sidebar a');
+
+  const observer = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        links.forEach(l => l.classList.remove('active'));
+        const active = document.querySelector('#sidebar a[href="#' + e.target.id + '"]');
+        if (active) active.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-20% 0px -70% 0px' });
+
+  sections.forEach(s => observer.observe(s));
+</script>
+
+</body>
+</html>

@@ -37,7 +37,15 @@
         <div class="tl-stat bear" id="stat-lost">— lost</div>
         <div class="tl-stat" id="stat-open">— open</div>
         <div class="tl-stat" id="stat-wr">—% WR</div>
-        <div class="tl-stat" id="stat-pnl">$— net P&L</div>
+        <div class="tl-stat" id="stat-pnl">$— gross P&L</div>
+        <div class="tl-stat bear" id="stat-fees" title="Total fees paid (imported)">$— fees</div>
+        <div class="tl-stat" id="stat-net-pnl" title="Gross P&L minus imported fees">$— net P&L</div>
+      </div>
+
+      <!-- Tab bar -->
+      <div id="tl-tabs">
+        <button class="tl-tab active" id="tab-trades" onclick="tlSwitchTab('trades')">📋 Trades</button>
+        <button class="tl-tab" id="tab-fees" onclick="tlSwitchTab('fees')">💸 Fees</button>
       </div>
 
       <!-- Filters + Add Manual button -->
@@ -68,7 +76,8 @@
           <input type="date" id="filter-date-to" title="To date">
           <button id="filter-clear" class="tl-btn-ghost">Clear</button>
         </div>
-        <button id="btn-import-csv" class="tl-btn-import">⬆ Import CSV</button>
+        <button id="btn-import-csv" class="tl-btn-import">⬆ Import Orders</button>
+        <button id="btn-import-fees" class="tl-btn-import" style="display:none">⬆ Import Fees</button>
         <button id="btn-add-trade" class="tl-btn-primary">+ Manual Trade</button>
       </div>
 
@@ -271,6 +280,61 @@
         </div>
       </div>
 
+      <!-- Fees Import modal -->
+      <div id="fees-import-modal" style="display:none">
+        <div class="im-backdrop"></div>
+        <div class="im-dialog">
+          <div class="im-header">
+            <span class="im-title">Import Fees (TradeDay CSV)</span>
+            <button class="im-close" id="fim-close">✕</button>
+          </div>
+          <div class="im-body">
+            <div class="im-step">
+              <label class="im-file-label" id="fim-file-label">
+                <span id="fim-file-text">📂 Choose CSV file…</span>
+                <input type="file" id="fim-file" accept=".csv" style="display:none">
+              </label>
+              <label class="im-acct-label">Link to Account
+                <select id="fim-account" style="min-width:180px">
+                  <option value="">— None —</option>
+                </select>
+              </label>
+            </div>
+            <div id="fim-preview"></div>
+          </div>
+          <div class="im-footer">
+            <span id="fim-status"></span>
+            <div class="im-footer-btns">
+              <button id="fim-confirm" class="tl-btn-primary" disabled>Import</button>
+              <button id="fim-cancel" class="tl-btn-ghost">Cancel</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Fees table (hidden until Fees tab active) -->
+      <div id="fees-table-wrap" style="display:none">
+        <div class="fees-summary-bar" id="fees-summary-bar"></div>
+        <table id="fees-table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Symbol</th>
+              <th>Account</th>
+              <th>Exchange</th>
+              <th>Clearing</th>
+              <th>NFA</th>
+              <th>Commission</th>
+              <th>Round-turn Total</th>
+            </tr>
+          </thead>
+          <tbody id="fees-tbody">
+            <tr><td colspan="8" class="tl-empty">No fees imported yet. Use ⬆ Import Fees to load a TradeDay CSV.</td></tr>
+          </tbody>
+          <tfoot id="fees-tfoot"></tfoot>
+        </table>
+      </div>
+
       <!-- Trade table -->
       <div id="tl-table-wrap">
         <table id="tl-table">
@@ -303,6 +367,7 @@
 
     </main>
   </div>
+  <script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
   <script src="/js/tradelog.js"></script>
 </body>
 </html>

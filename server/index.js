@@ -1038,11 +1038,267 @@ app.get('/api/calendar', async (req, res) => {
   }
 });
 
-// GET /api/options?symbol=MNQ — options chain metrics (OI walls, max pain, P/C ratio, ATM IV)
-app.get('/api/options', async (req, res) => {
+// GET /api/pine-script?symbol=MNQ
+// Returns a ready-to-paste Pine Script with current QQQ options levels baked in.
+// Paste directly into TradingView Pine Editor → Add to chart.
+app.get('/api/pine-script', async (req, res) => {
   try {
     const { symbol = 'MNQ' } = req.query;
-    const options = await getOptionsData(symbol);
+    const options = await getOptionsData(symbol, null);
+    if (!options) return res.status(503).send('// Options data unavailable — try again shortly\n');
+
+    const d  = options;
+    const dl = d.scaledDaily || {};
+    const lz = d.scaledLiquidityZones     || [];
+    const hp = d.scaledHedgePressureZones || [];
+    const pv = d.scaledPivotCandidates    || [];
+
+    const n  = v => v != null ? String(Math.round(v)) : 'na';
+    const f  = v => v != null ? v.toFixed(4) : 'na';
+    const ts = new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+
+    // Zone bias → Pine color/label (baked at generation time)
+    const LZ_COLOR = { call: 'color.blue', put: 'color.teal', balanced: 'color.yellow' };
+    const LZ_LABEL = { call: 'call', put: 'put', balanced: 'bal' };
+    const HP_COLOR = p => p === 'support' ? 'color.green' : 'color.red';
+
+    // Build individual float var declarations for zones (no arrays needed)
+    let lzVarDecls = '';
+    for (let i = 0; i < 5; i++) {
+      const z = lz[i];
+      lzVarDecls += z
+        ? `float lz${i}_lo = ${n(z.low)}  // ${z.bias}\nfloat lz${i}_hi = ${n(z.high)}\n`
+        : `float lz${i}_lo = na\nfloat lz${i}_hi = na\n`;
+    }
+    let hpVarDecls = '';
+    for (let i = 0; i < 3; i++) {
+      const z = hp[i];
+      hpVarDecls += `float hp${i} = ${z ? n(z.strike) : 'na'}  // ${z ? z.pressure : 'n/a'}\n`;
+    }
+    let pvVarDecls = '';
+    for (let i = 0; i < 3; i++) {
+      pvVarDecls += `float pv${i} = ${pv[i] ? n(pv[i].strike) : 'na'}\n`;
+    }
+
+    // plot() + fill() lines for liquidity zones (historical bars)
+    let lzPlotLines = '';
+    for (let i = 0; i < 5; i++) {
+      const z  = lz[i];
+      const c  = LZ_COLOR[z?.bias] || 'color.yellow';
+      const lb = LZ_LABEL[z?.bias] || '';
+      lzPlotLines +=
+        `p_lz${i}_lo = plot(show_lz and not na(lz${i}_lo) and lz${i}_lo != 0 ? lz${i}_lo : na, "LZ${i+1}${lb?' '+lb:''} lo", color=color.new(${c}, 70), linewidth=1)\n` +
+        `p_lz${i}_hi = plot(show_lz and not na(lz${i}_hi) and lz${i}_hi != 0 ? lz${i}_hi : na, "LZ${i+1}${lb?' '+lb:''} hi", color=color.new(${c}, 70), linewidth=1)\n` +
+        `fill(p_lz${i}_lo, p_lz${i}_hi, color=color.new(${c}, 88), title="LZ${i+1} zone")\n`;
+    }
+
+    // plot() lines for hedge pressure (color baked by direction)
+    let hpPlotLines = '';
+    for (let i = 0; i < 3; i++) {
+      const z = hp[i];
+      const c = HP_COLOR(z?.pressure);
+      const a = 20 + i * 15;
+      hpPlotLines += `plot(show_hp and not na(hp${i}) and hp${i} != 0 ? hp${i} : na, "HP${i+1}${z?' '+z.pressure:''}", color=color.new(${c}, ${a}), linewidth=${i===0?2:1}, style=plot.style_linebr)\n`;
+    }
+
+    // plot() lines for pivot candidates
+    let pvPlotLines = '';
+    for (let i = 0; i < 3; i++) {
+      pvPlotLines += `plot(show_pv and not na(pv${i}) and pv${i} != 0 ? pv${i} : na, "Pivot ${i+1}", color=color.new(color.orange, ${35+i*15}), linewidth=1, style=plot.style_linebr)\n`;
+    }
+
+    // barstate.islast: extend lines right + add labels
+    // Helper: `lbl(x, y, text, color)` → transparent-bg label extending right
+    const fixedExtLines = [
+      // [varName, show_flag, linecolor, linewidth, linestyle, label, textcolor]
+      [`oi1`,       `show_oi`,      `color.new(color.orange, 20)`,  2, `line.style_dashed`,  `"OI Wall 1 " + str.tostring(oi1, "#")`,       `color.orange`],
+      [`oi2`,       `show_oi`,      `color.new(color.orange, 45)`,  1, `line.style_dashed`,  `"OI Wall 2 " + str.tostring(oi2, "#")`,       `color.new(color.orange, 30)`],
+      [`oi3`,       `show_oi`,      `color.new(color.orange, 60)`,  1, `line.style_dashed`,  `"OI Wall 3 " + str.tostring(oi3, "#")`,       `color.new(color.orange, 45)`],
+      [`max_pain`,  `show_maxpain`, `color.new(color.fuchsia, 20)`, 1, `line.style_dotted`,  `"Max Pain " + str.tostring(max_pain, "#")`,   `color.fuchsia`],
+      [`gex_flip`,  `show_gexflip`, `color.new(color.aqua, 15)`,    2, `line.style_dashed`,  `"γ Flip " + str.tostring(gex_flip, "#")`,     `color.aqua`],
+      [`call_wall`, `show_walls`,   `color.new(color.teal, 30)`,    1, `line.style_dotted`,  `"Call Wall " + str.tostring(call_wall, "#")`, `color.teal`],
+      [`put_wall`,  `show_walls`,   `color.new(color.red, 30)`,     1, `line.style_dotted`,  `"Put Wall " + str.tostring(put_wall, "#")`,   `color.red`],
+      [`qqq_pdo`,   `show_daily`,   `color.new(color.purple, 25)`,  1, `line.style_dotted`,  `"QQQ PDO " + str.tostring(qqq_pdo, "#")`,    `color.purple`],
+      [`qqq_pdc`,   `show_daily`,   `color.new(color.yellow, 20)`,  1, `line.style_dotted`,  `"QQQ PDC " + str.tostring(qqq_pdc, "#")`,    `color.yellow`],
+      [`qqq_do`,    `show_daily`,   `color.new(color.silver, 30)`,  1, `line.style_dotted`,  `"QQQ DO " + str.tostring(qqq_do, "#")`,      `color.silver`],
+    ];
+    let extFixed = fixedExtLines.map(([v, flag, lc, lw, ls, lbl, tc]) =>
+      `    if ${flag} and ${v} != 0 and not na(${v})\n` +
+      `        line.new(bar_index, ${v}, bar_index + 1, ${v}, extend=extend.right, color=${lc}, width=${lw}, style=${ls})\n` +
+      `        label.new(bar_index + 2, ${v}, ${lbl}, style=label.style_label_left, color=color.new(color.black, 100), textcolor=${tc}, size=size.tiny)`
+    ).join('\n');
+
+    let extLz = '';
+    for (let i = 0; i < 5; i++) {
+      const z = lz[i]; if (!z) continue;
+      const c  = LZ_COLOR[z.bias] || 'color.yellow';
+      const lb = `LZ ${LZ_LABEL[z.bias] || ''}`;
+      extLz +=
+        `    if show_lz and not na(lz${i}_lo) and lz${i}_lo != 0\n` +
+        `        box.new(bar_index, lz${i}_hi, bar_index + 1, lz${i}_lo, extend=extend.right, bgcolor=color.new(${c}, 88), border_color=color.new(${c}, 55), border_width=1)\n` +
+        `        label.new(bar_index + 2, (lz${i}_lo + lz${i}_hi) / 2, "${lb} ${Math.round((z.low+z.high)/2)}", style=label.style_label_left, color=color.new(color.black, 100), textcolor=color.new(${c}, 30), size=size.tiny)\n`;
+    }
+
+    let extHp = '';
+    for (let i = 0; i < 3; i++) {
+      const z = hp[i]; if (!z) continue;
+      const c  = HP_COLOR(z.pressure);
+      const a  = 20 + i * 15;
+      const lw = i === 0 ? 2 : 1;
+      extHp +=
+        `    if show_hp and not na(hp${i}) and hp${i} != 0\n` +
+        `        line.new(bar_index, hp${i}, bar_index + 1, hp${i}, extend=extend.right, color=color.new(${c}, ${a}), width=${lw}, style=line.style_dashed)\n` +
+        `        label.new(bar_index + 2, hp${i}, "${z.pressure === 'support' ? 'HP ▲ ' : 'HP ▼ '}" + str.tostring(hp${i}, "#"), style=label.style_label_left, color=color.new(color.black, 100), textcolor=color.new(${c}, ${a}), size=size.tiny)\n`;
+    }
+
+    let extPv = '';
+    for (let i = 0; i < 3; i++) {
+      const z = pv[i]; if (!z) continue;
+      const a = 35 + i * 15;
+      extPv +=
+        `    if show_pv and not na(pv${i}) and pv${i} != 0\n` +
+        `        line.new(bar_index, pv${i}, bar_index + 1, pv${i}, extend=extend.right, color=color.new(color.orange, ${a}), width=1, style=line.style_dotted)\n` +
+        `        label.new(bar_index + 2, pv${i}, "Pivot " + str.tostring(pv${i}, "#"), style=label.style_label_left, color=color.new(color.black, 100), textcolor=color.new(color.orange, 20), size=size.tiny)\n`;
+    }
+
+    const pine = `//@version=6
+// ──────────────────────────────────────────────────────────────────────────────
+// FuturesEdge AI — QQQ Options Levels
+// Generated: ${ts}
+// Symbol:    ${symbol}  |  Source: QQQ (via CBOE delayed quotes)
+// Paste into TradingView Pine Editor on ${symbol === 'MNQ' ? 'NQ1! or MNQ1!' : symbol === 'MES' ? 'ES1! or MES1!' : symbol}
+// Refresh: re-run /api/pine-script on your FuturesEdge server and repaste.
+// Levels are drawn as plot() series — they integrate with the chart price scale.
+// ──────────────────────────────────────────────────────────────────────────────
+indicator("FuturesEdge QQQ Levels", overlay=true)
+
+// ── Groups ─────────────────────────────────────────────────────────────────────
+var g1 = "Options Levels"
+var g2 = "Liquidity Zones"
+var g3 = "Hedge Pressure"
+var g4 = "Pivot Candidates"
+var g5 = "QQQ Daily Levels"
+var g6 = "Info Table"
+
+show_oi      = input.bool(true,  "OI Walls",         group=g1)
+show_maxpain = input.bool(true,  "Max Pain",          group=g1)
+show_gexflip = input.bool(true,  "GEX Flip",          group=g1)
+show_walls   = input.bool(true,  "Call / Put Walls",  group=g1)
+show_lz      = input.bool(true,  "Liquidity Zones",   group=g2)
+show_hp      = input.bool(true,  "Hedge Pressure",    group=g3)
+show_pv      = input.bool(true,  "Pivot Candidates",  group=g4)
+show_daily   = input.bool(true,  "QQQ Daily Levels",  group=g5)
+show_table   = input.bool(true,  "Show Info Table",   group=g6)
+tbl_pos      = input.string("top_right", "Table position", options=["top_right","top_left","bottom_right","bottom_left"], group=g6)
+
+// ── Baked-in levels (regenerate via /api/pine-script) ─────────────────────────
+float oi1       = ${n(d.scaledOiWalls?.[0])}
+float oi2       = ${n(d.scaledOiWalls?.[1])}
+float oi3       = ${n(d.scaledOiWalls?.[2])}
+float max_pain  = ${n(d.scaledMaxPain)}
+float gex_flip  = ${n(d.scaledGexFlip)}
+float call_wall = ${n(d.scaledCallWall)}
+float put_wall  = ${n(d.scaledPutWall)}
+float qqq_pdo   = ${n(dl.prevDayOpen)}
+float qqq_pdc   = ${n(dl.prevDayClose)}
+float qqq_do    = ${n(dl.curDayOpen)}
+
+// Metrics
+float  pc_ratio   = ${f(d.pcRatio)}
+float  atm_iv_pct = ${d.atmIV != null ? (d.atmIV * 100).toFixed(2) : '0.00'}
+int    dex_score  = ${d.dexScore ?? 0}
+string dex_bias   = "${d.dexBias ?? 'neutral'}"
+int    resilience = ${d.resilience ?? 50}
+string res_label  = "${d.resilienceLabel ?? 'neutral'}"
+
+// Zone levels (individual vars — no arrays)
+${lzVarDecls}
+${hpVarDecls}
+${pvVarDecls}
+// ── Plots — integrated with chart price scale & data window ────────────────────
+// OI Walls
+plot(show_oi and oi1 != 0 ? oi1 : na, "OI Wall 1", color=color.new(color.orange, 20), linewidth=2, style=plot.style_linebr)
+plot(show_oi and oi2 != 0 ? oi2 : na, "OI Wall 2", color=color.new(color.orange, 45), linewidth=1, style=plot.style_linebr)
+plot(show_oi and oi3 != 0 ? oi3 : na, "OI Wall 3", color=color.new(color.orange, 60), linewidth=1, style=plot.style_linebr)
+
+// Key options levels
+plot(show_maxpain and max_pain != 0 ? max_pain : na, "Max Pain",  color=color.new(color.fuchsia, 20), linewidth=1, style=plot.style_linebr)
+plot(show_gexflip and gex_flip != 0 ? gex_flip : na, "GEX Flip", color=color.new(color.aqua,    15), linewidth=2, style=plot.style_linebr)
+plot(show_walls and call_wall != 0 ? call_wall : na, "Call Wall", color=color.new(color.teal,    30), linewidth=1, style=plot.style_linebr)
+plot(show_walls and put_wall  != 0 ? put_wall  : na, "Put Wall",  color=color.new(color.red,     30), linewidth=1, style=plot.style_linebr)
+
+// QQQ daily reference levels
+plot(show_daily and qqq_pdo != 0 ? qqq_pdo : na, "QQQ Prev Day Open",  color=color.new(color.purple, 25), linewidth=1, style=plot.style_linebr)
+plot(show_daily and qqq_pdc != 0 ? qqq_pdc : na, "QQQ Prev Day Close", color=color.new(color.yellow, 20), linewidth=1, style=plot.style_linebr)
+plot(show_daily and qqq_do  != 0 ? qqq_do  : na, "QQQ Day Open",       color=color.new(color.silver, 30), linewidth=1, style=plot.style_linebr)
+
+// Liquidity zones — filled horizontal bands (plot + fill)
+${lzPlotLines}
+// Hedge pressure lines
+${hpPlotLines}
+// Pivot candidates
+${pvPlotLines}
+// ── Extend lines right + labels (last bar only) ────────────────────────────────
+if barstate.islast
+${extFixed}
+${extLz}
+${extHp}
+${extPv}
+// ── Info Table ─────────────────────────────────────────────────────────────────
+if barstate.islast and show_table
+    tpos = tbl_pos == "top_right"    ? position.top_right    :
+           tbl_pos == "top_left"     ? position.top_left     :
+           tbl_pos == "bottom_right" ? position.bottom_right : position.bottom_left
+    var tbl = table.new(tpos, 2, 8, bgcolor=color.new(color.black, 70), border_color=color.new(color.gray, 60), border_width=1, frame_color=color.new(color.gray, 50), frame_width=1)
+    hdr     = color.new(color.gray, 50)
+    def_txt = color.new(color.white, 10)
+
+    table.cell(tbl, 0, 0, "FuturesEdge QQQ", bgcolor=color.new(color.blue, 60), text_color=color.white, text_size=size.small, tooltip="Generated ${ts}")
+    table.cell(tbl, 1, 0, "${symbol}", bgcolor=color.new(color.blue, 60), text_color=color.white, text_size=size.small)
+
+    table.cell(tbl, 0, 1, "P/C Ratio", bgcolor=hdr, text_color=def_txt, text_size=size.tiny)
+    pc_col = pc_ratio > 1.3 ? color.red : pc_ratio < 0.7 ? color.green : def_txt
+    table.cell(tbl, 1, 1, str.tostring(pc_ratio, "#.##") + (pc_ratio > 1.3 ? " ↑Bear" : pc_ratio < 0.7 ? " ↓Bull" : " Neut"), bgcolor=hdr, text_color=pc_col, text_size=size.tiny)
+
+    table.cell(tbl, 0, 2, "ATM IV", bgcolor=hdr, text_color=def_txt, text_size=size.tiny)
+    table.cell(tbl, 1, 2, str.tostring(atm_iv_pct, "#.#") + "%", bgcolor=hdr, text_color=def_txt, text_size=size.tiny)
+
+    table.cell(tbl, 0, 3, "DEX", bgcolor=hdr, text_color=def_txt, text_size=size.tiny)
+    dex_col = dex_bias == "bullish" ? color.green : dex_bias == "bearish" ? color.red : def_txt
+    table.cell(tbl, 1, 3, (dex_score >= 0 ? "+" : "") + str.tostring(dex_score) + " " + dex_bias, bgcolor=hdr, text_color=dex_col, text_size=size.tiny)
+
+    table.cell(tbl, 0, 4, "Resilience", bgcolor=hdr, text_color=def_txt, text_size=size.tiny)
+    res_col = resilience >= 65 ? color.green : resilience < 40 ? color.red : color.orange
+    table.cell(tbl, 1, 4, str.tostring(resilience) + " " + res_label, bgcolor=hdr, text_color=res_col, text_size=size.tiny)
+
+    table.cell(tbl, 0, 5, "Max Pain", bgcolor=hdr, text_color=def_txt, text_size=size.tiny)
+    table.cell(tbl, 1, 5, str.tostring(max_pain, "#"), bgcolor=hdr, text_color=color.fuchsia, text_size=size.tiny)
+
+    table.cell(tbl, 0, 6, "γ Flip", bgcolor=hdr, text_color=def_txt, text_size=size.tiny)
+    table.cell(tbl, 1, 6, str.tostring(gex_flip, "#"), bgcolor=hdr, text_color=color.aqua, text_size=size.tiny)
+
+    table.cell(tbl, 0, 7, "Updated", bgcolor=hdr, text_color=color.new(color.gray, 30), text_size=size.tiny)
+    table.cell(tbl, 1, 7, "${ts}", bgcolor=hdr, text_color=color.new(color.gray, 30), text_size=size.tiny)
+`;
+
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="futuresedge_qqq_${symbol.toLowerCase()}_${new Date().toISOString().slice(0,10)}.pine"`);
+    res.send(pine);
+  } catch (err) {
+    console.error('[api] /pine-script error:', err.message);
+    res.status(500).send(`// Error generating Pine Script: ${err.message}\n`);
+  }
+});
+
+// GET /api/options?symbol=MNQ&futuresPrice=21000
+// Options chain metrics (OI walls, max pain, P/C ratio, ATM IV).
+// MNQ/MES use QQQ/SPY as proxy (better Yahoo Finance options data than NQ=F/ES=F).
+// When futuresPrice is provided, returns scaled* fields in futures price space.
+app.get('/api/options', async (req, res) => {
+  try {
+    const { symbol = 'MNQ', futuresPrice } = req.query;
+    const fp = futuresPrice ? parseFloat(futuresPrice) : null;
+    const options = await getOptionsData(symbol, fp);
     res.json({ symbol, options });
   } catch (err) {
     console.error('[api] /options error:', err.message);
@@ -1093,7 +1349,7 @@ app.get('/api/gamma', async (req, res) => {
 app.get('/api/correlation', (req, res) => {
   try {
     const allCandles = {};
-    for (const sym of [...SCAN_SYMBOLS, 'DXY', 'VIX', 'SIL']) {
+    for (const sym of [...SCAN_SYMBOLS, 'DXY', 'VIX']) {
       try { allCandles[sym] = getCandles(sym, '5m'); } catch { allCandles[sym] = []; }
     }
     const result = computeCorrelationMatrix(allCandles);
@@ -1614,7 +1870,7 @@ function _isZeroDTE() {
 // In seed mode it runs once at startup and is re-runnable via GET /api/scan.
 // ---------------------------------------------------------------------------
 
-const SCAN_SYMBOLS    = ['MNQ', 'MGC', 'MES', 'MCL', 'BTC', 'ETH', 'XRP'];
+const SCAN_SYMBOLS    = ['MNQ', 'MGC', 'MES', 'MCL', 'BTC', 'ETH', 'XRP', 'XLM', 'SIL'];
 // 1m/2m/3m removed: with 15-min delayed data they are stale by the time they display.
 // 5m removed: ~3 candles stale with delayed seed data — not actionable.
 // 15m/30m/1h/2h/4h give actionable signals even accounting for the data lag.
@@ -1626,6 +1882,18 @@ const SCAN_TIMEFRAMES = ['15m', '30m', '1h', '2h', '4h'];
 async function runScan() {
   console.log('[scan] Starting…');
   let newCount = 0;
+
+  // Compute correlation matrix once per scan (used by all symbols for scoring)
+  let corrMatrix = null;
+  try {
+    const corrCandles = {};
+    for (const sym of [...SCAN_SYMBOLS, 'DXY', 'VIX']) {
+      try { corrCandles[sym] = getCandles(sym, '5m'); } catch { corrCandles[sym] = []; }
+    }
+    corrMatrix = computeCorrelationMatrix(corrCandles);
+  } catch (err) {
+    console.warn('[scan] correlation matrix failed:', err.message);
+  }
 
   // Fetch calendar events once per scan (cached in calendar.js for 1h)
   let calendarCache = {};
@@ -1660,17 +1928,23 @@ async function runScan() {
         const trendlines = detectTrendlines(candles, ind.atrCurrent);
         const setups     = detectSetups(candles, ind, regime, {
           rrRatio: settings.risk.rrRatio || 1.0, symbol, trendlines, calendarEvents,
+          correlationMatrix: corrMatrix,
         });
 
         for (const setup of setups) {
           // Multi-TF zone stack: check if the setup's key level has a confirming
-          // IOF zone on a higher timeframe. Adds up to +20 confidence + badge.
+          // IOF zone on a higher timeframe. MNQ/MES: +15 pts. MGC/MCL: −15 pts (inverted).
           const stack = checkTFZoneStack(setup, symbol, tf, getCandles, computeIndicators, settings);
           if (stack.bonus > 0) {
             setup.confidence     = Math.min(100, setup.confidence + stack.bonus);
             setup.tfStack        = stack;
             setup.scoreBreakdown = { ...setup.scoreBreakdown, tfStack: stack.bonus };
             setup.rationale     += ` · ${stack.tfs.join('/')} stack`;
+          } else if (stack.bonus < 0 && stack.inverted) {
+            setup.confidence     = Math.max(0, setup.confidence + stack.bonus);
+            setup.tfStack        = stack;
+            setup.scoreBreakdown = { ...setup.scoreBreakdown, tfStack: stack.bonus };
+            setup.rationale     += ` · HTF contested`;
           }
           // 0DTE gate: Mon/Wed/Fri gamma pinning distorts OR breakouts and zone
           // rejections for equity index futures — reduce confidence by 10 pts.

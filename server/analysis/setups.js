@@ -11,7 +11,7 @@
 
 const { iofConfluenceScore } = require('./iof');
 
-const CRYPTO_SYMBOLS = new Set(['BTC', 'ETH', 'XRP']);
+const CRYPTO_SYMBOLS = new Set(['BTC', 'ETH', 'XRP', 'XLM']);
 
 const SCAN_WINDOW           = 100; // how many recent candles to examine
 const TRENDLINE_SCAN_WINDOW = 10;  // only look at last N candles for fresh trendline breaks
@@ -28,7 +28,7 @@ const BOS_QUAL_BONUS = 15;          // confidence pts added to the qualifying zo
 //   MGC → 1:1 (tighter ATR range; ★ $2,856 PF 4.02 on 30d backtest)
 //   MES → 2:1 (equity index micro, same breakout behavior as MNQ — pending backtest)
 //   MCL → 1.5:1 (crude oil, wider ATR than gold — pending backtest)
-const PDH_RR = { MNQ: 2.0, MGC: 1.0, MES: 2.0, MCL: 1.5, BTC: 2.0, ETH: 2.0, XRP: 2.0 };
+const PDH_RR = { MNQ: 2.0, MGC: 1.0, MES: 2.0, MCL: 1.5, BTC: 2.0, ETH: 2.0, XRP: 2.0, XLM: 2.0, SIL: 1.5 };
 
 /**
  * Detect trade setups in the candle history.
@@ -57,24 +57,32 @@ function detectSetups(candles, indicators, regime, opts = {}) {
   const scanStart   = Math.max(0, candles.length - SCAN_WINDOW);
   const scanCandles = candles.slice(scanStart);
 
-  const pdhSetups  = _pdhBreakout(scanCandles, candles, pdh, pdl, atrCurrent, regime, fvgs, orderBlocks, symbol);
+  // Build enrichment context passed to scoring functions
+  const vwapValue  = indicators.vwap?.length ? indicators.vwap[indicators.vwap.length - 1].value : null;
+  const pocValue   = indicators.volumeProfile?.poc ?? null;
+  const isCrypto   = CRYPTO_SYMBOLS.has(symbol);
+  const volume20MA = _volumeMA(scanCandles, 20);
+  const corrContext = opts.correlationMatrix ? _buildCorrContext(symbol, opts.correlationMatrix) : null;
+  const extras     = { vwapValue, pocValue, isCrypto, symbol, volume20MA, corrContext };
+
+  const pdhSetups  = _pdhBreakout(scanCandles, candles, pdh, pdl, atrCurrent, regime, fvgs, orderBlocks, symbol, extras);
 
   // Detect BOS/CHoCH internally — used as zone qualifiers, NOT returned as standalone trades.
   const bosSetups  = _bosChoch(scanCandles, candles, swingHighs, swingLows, atrCurrent, regime, fvgs, orderBlocks, rrRatio);
 
   // Zone rejections — primary signal.
-  const rawZones   = _zoneRejection(scanCandles, candles, swingHighs, swingLows, atrCurrent, regime, fvgs, orderBlocks, rrRatio);
+  const rawZones   = _zoneRejection(scanCandles, candles, swingHighs, swingLows, atrCurrent, regime, fvgs, orderBlocks, rrRatio, extras);
   const zoneSetups = _applyBosQualifier(rawZones, bosSetups)
     .filter(z => _regimeGate(z, regime));
 
   // Trendline breaks.
   const tlSetups = trendlines
-    ? _trendlineBreak(scanCandles, candles, trendlines, atrCurrent, regime, fvgs, orderBlocks, rrRatio)
+    ? _trendlineBreak(scanCandles, candles, trendlines, atrCurrent, regime, fvgs, orderBlocks, rrRatio, extras)
     : [];
 
   // Opening Range breakouts — only for non-crypto (no OR concept for 24/7 markets).
-  const orSetups = (!CRYPTO_SYMBOLS.has(symbol) && openingRange?.formed)
-    ? _orBreakout(scanCandles, candles, openingRange, atrCurrent, regime, fvgs, orderBlocks, rrRatio)
+  const orSetups = (!isCrypto && openingRange?.formed)
+    ? _orBreakout(scanCandles, candles, openingRange, atrCurrent, regime, fvgs, orderBlocks, rrRatio, extras)
     : [];
 
   // Merge: PDH always included, remaining slots by confidence.
@@ -248,7 +256,7 @@ function _applyBosQualifier(zones, bosSetups) {
 // Setup 2: Supply / Demand Zone Rejection
 // ---------------------------------------------------------------------------
 
-function _zoneRejection(scanCandles, allCandles, allSwingHighs, allSwingLows, atrCurrent, regime, fvgs, orderBlocks, rrRatio) {
+function _zoneRejection(scanCandles, allCandles, allSwingHighs, allSwingLows, atrCurrent, regime, fvgs, orderBlocks, rrRatio, extras = {}) {
   const found  = [];
   const seen   = new Set();
   const BUFFER = atrCurrent * 0.2;
@@ -276,7 +284,10 @@ function _zoneRejection(scanCandles, allCandles, allSwingHighs, allSwingLows, at
         const sl       = sh.value + atrCurrent * 0.30;
         const { tp }   = _tp(entry, sl, 'bearish', rrRatio);
         const iofBonus = iofConfluenceScore(entry, 'bearish', fvgs, orderBlocks, atrCurrent);
-        const { score: conf, breakdown: scoreBreakdown } = _zoneConf({ wickRatio, atrCurrent, totalRange, regime, direction: 'bearish', iofBonus });
+        const { score: conf, breakdown: scoreBreakdown } = _zoneConf({
+          wickRatio, atrCurrent, totalRange, regime, direction: 'bearish', iofBonus,
+          candleTime: c.time, entryPrice: c.close, currentVolume: c.volume || 0, ...extras,
+        });
         const { outcome, outcomeTime } = _evaluateOutcome(allCandles, c.time, { direction: 'bearish', sl, tp });
 
         found.push({
@@ -308,7 +319,10 @@ function _zoneRejection(scanCandles, allCandles, allSwingHighs, allSwingLows, at
         const sl       = sl_node.value - atrCurrent * 0.30;
         const { tp }   = _tp(entry, sl, 'bullish', rrRatio);
         const iofBonus = iofConfluenceScore(entry, 'bullish', fvgs, orderBlocks, atrCurrent);
-        const { score: conf, breakdown: scoreBreakdown } = _zoneConf({ wickRatio, atrCurrent, totalRange, regime, direction: 'bullish', iofBonus });
+        const { score: conf, breakdown: scoreBreakdown } = _zoneConf({
+          wickRatio, atrCurrent, totalRange, regime, direction: 'bullish', iofBonus,
+          candleTime: c.time, entryPrice: c.close, currentVolume: c.volume || 0, ...extras,
+        });
         const { outcome, outcomeTime } = _evaluateOutcome(allCandles, c.time, { direction: 'bullish', sl, tp });
 
         found.push({
@@ -474,7 +488,9 @@ function _sweepConf({ sweepDepth, bodySize, totalRange, atrCurrent, regime, dire
   return { score: Math.round(Math.max(0, Math.min(100, score))), breakdown: bd };
 }
 
-function _zoneConf({ wickRatio, atrCurrent, totalRange, regime, direction, iofBonus }) {
+function _zoneConf({ wickRatio, atrCurrent, totalRange, regime, direction, iofBonus,
+                     candleTime, entryPrice, currentVolume, volume20MA,
+                     vwapValue, pocValue, isCrypto, corrContext, symbol }) {
   let score = 30;
   const bd = { base: 30, wick: 0, size: 0, regime: 0, align: 0, iof: iofBonus || 0, bos: 0 };
 
@@ -482,9 +498,41 @@ function _zoneConf({ wickRatio, atrCurrent, totalRange, regime, direction, iofBo
   score += wick; bd.wick = wick;
 
   if (atrCurrent > 0 && totalRange >= atrCurrent * 0.5) { score += 10; bd.size = 10; }
-  if (regime?.direction === direction) { score += 15; bd.regime = 15; }
-  if (regime?.alignment)               { score += 10; bd.align  = 10; }
+
+  // Regime alignment — scaled by regime strength (weak regime = smaller bonus)
+  if (regime?.direction === direction) {
+    const regBonus = Math.round(((regime.strength ?? 100) / 100) * 15);
+    score += regBonus; bd.regime = regBonus;
+  }
+  if (regime?.alignment) { score += 10; bd.align = 10; }
+
   score += bd.iof;
+
+  // VWAP proximity: rejection near VWAP = institutional fair-value anchor → stronger hold
+  if (vwapValue && entryPrice && atrCurrent > 0) {
+    if (Math.abs(entryPrice - vwapValue) / atrCurrent <= 0.3) { score += 8; bd.vwap = 8; }
+  }
+
+  // Volume expansion: high-volume rejection = institutional participation
+  if (volume20MA > 0 && currentVolume > volume20MA * 1.5) { score += 12; bd.vol = 12; }
+
+  // Session POC confluence: rejection at volume-weighted fair value = structural support/resistance
+  if (pocValue && entryPrice && atrCurrent > 0) {
+    if (Math.abs(entryPrice - pocValue) / atrCurrent <= 0.3) { score += 6; bd.poc = 6; }
+  }
+
+  // Session transition suppression: elevated noise near RTH open (13:00–13:45 UTC) and close (20:45–21:30 UTC)
+  if (!isCrypto && candleTime) {
+    const h = _utcHour(candleTime);
+    if ((h >= 13.0 && h <= 13.75) || (h >= 20.75 && h <= 21.5)) { score -= 10; bd.session = -10; }
+  }
+
+  // Correlation-driven adjustments
+  if (corrContext) {
+    const corrDelta = _corrAdjust(symbol, direction, corrContext);
+    if (corrDelta !== 0) { score += corrDelta; bd.corr = corrDelta; }
+  }
+
   return { score: Math.round(Math.max(0, Math.min(100, score))), breakdown: bd };
 }
 
@@ -513,7 +561,7 @@ function _structureConf({ breakSize, isCHoCH, regime, direction, iofBonus }) {
 // both EST and EDT), so we don't act on pre-market or after-hours prints.
 // ---------------------------------------------------------------------------
 
-function _pdhBreakout(scanCandles, allCandles, pdh, pdl, atrCurrent, regime, fvgs, orderBlocks, symbol) {
+function _pdhBreakout(scanCandles, allCandles, pdh, pdl, atrCurrent, regime, fvgs, orderBlocks, symbol, extras = {}) {
   if (!pdh || !pdl) return [];
 
   const found = [];
@@ -540,7 +588,10 @@ function _pdhBreakout(scanCandles, allCandles, pdh, pdl, atrCurrent, regime, fvg
         const { tp }      = _tp(entry, sl, 'bullish', rrPDH);
         const closeOver   = (entry - pdh) / atrCurrent; // how far above PDH
         const iofBonus    = iofConfluenceScore(entry, 'bullish', fvgs, orderBlocks, atrCurrent);
-        const { score: conf, breakdown: scoreBreakdown } = _pdhConf({ closeOver, atrCurrent, regime, direction: 'bullish', iofBonus });
+        const { score: conf, breakdown: scoreBreakdown } = _pdhConf({
+          closeOver, atrCurrent, regime, direction: 'bullish', iofBonus,
+          candleTime: c.time, entryPrice: c.close, currentVolume: c.volume || 0, ...extras,
+        });
         const { outcome, outcomeTime } = _evaluateOutcome(allCandles, c.time, { direction: 'bullish', sl, tp });
 
         found.push({
@@ -567,7 +618,10 @@ function _pdhBreakout(scanCandles, allCandles, pdh, pdl, atrCurrent, regime, fvg
         const { tp }      = _tp(entry, sl, 'bearish', rrPDH);
         const closeUnder  = (pdl - entry) / atrCurrent;
         const iofBonus    = iofConfluenceScore(entry, 'bearish', fvgs, orderBlocks, atrCurrent);
-        const { score: conf, breakdown: scoreBreakdown } = _pdhConf({ closeOver: closeUnder, atrCurrent, regime, direction: 'bearish', iofBonus });
+        const { score: conf, breakdown: scoreBreakdown } = _pdhConf({
+          closeOver: closeUnder, atrCurrent, regime, direction: 'bearish', iofBonus,
+          candleTime: c.time, entryPrice: c.close, currentVolume: c.volume || 0, ...extras,
+        });
         const { outcome, outcomeTime } = _evaluateOutcome(allCandles, c.time, { direction: 'bearish', sl, tp });
 
         found.push({
@@ -587,7 +641,9 @@ function _pdhBreakout(scanCandles, allCandles, pdh, pdl, atrCurrent, regime, fvg
   return found;
 }
 
-function _pdhConf({ closeOver, atrCurrent, regime, direction, iofBonus }) {
+function _pdhConf({ closeOver, atrCurrent, regime, direction, iofBonus,
+                    candleTime, entryPrice, currentVolume, volume20MA,
+                    vwapValue, isCrypto, corrContext, symbol }) {
   let score = 45;
   const bd = { base: 45, break: 0, regime: 0, align: 0, iof: iofBonus || 0 };
 
@@ -595,9 +651,35 @@ function _pdhConf({ closeOver, atrCurrent, regime, direction, iofBonus }) {
   if      (closeOver > 0.5)  { score += 15; bd.break = 15; }
   else if (closeOver > 0.2)  { score += 8;  bd.break = 8; }
 
-  if (regime?.direction === direction) { score += 15; bd.regime = 15; }
-  if (regime?.alignment)               { score += 10; bd.align  = 10; }
+  // Regime alignment — scaled by regime strength
+  if (regime?.direction === direction) {
+    const regBonus = Math.round(((regime.strength ?? 100) / 100) * 15);
+    score += regBonus; bd.regime = regBonus;
+  }
+  if (regime?.alignment) { score += 10; bd.align = 10; }
+
   score += bd.iof;
+
+  // VWAP proximity: breakout through PDH/PDL while near VWAP = strong momentum
+  if (vwapValue && entryPrice && atrCurrent > 0) {
+    if (Math.abs(entryPrice - vwapValue) / atrCurrent <= 0.3) { score += 8; bd.vwap = 8; }
+  }
+
+  // Volume expansion on breakout candle confirms institutional participation
+  if (volume20MA > 0 && currentVolume > volume20MA * 1.5) { score += 10; bd.vol = 10; }
+
+  // Session transition suppression
+  if (!isCrypto && candleTime) {
+    const h = _utcHour(candleTime);
+    if ((h >= 13.0 && h <= 13.75) || (h >= 20.75 && h <= 21.5)) { score -= 10; bd.session = -10; }
+  }
+
+  // Correlation adjustments
+  if (corrContext) {
+    const corrDelta = _corrAdjust(symbol, direction, corrContext);
+    if (corrDelta !== 0) { score += corrDelta; bd.corr = corrDelta; }
+  }
+
   return { score: Math.round(Math.max(0, Math.min(100, score))), breakdown: bd };
 }
 
@@ -632,7 +714,7 @@ function _regimeGate(setup, regime) {
 // Works well with delayed data because momentum from a clean trendline break
 // persists well beyond the 15-min data lag.
 
-function _trendlineBreak(scanCandles, allCandles, trendlines, atrCurrent, regime, fvgs, orderBlocks, rrRatio) {
+function _trendlineBreak(scanCandles, allCandles, trendlines, atrCurrent, regime, fvgs, orderBlocks, rrRatio, extras = {}) {
   const { support, resistance } = trendlines;
   const found = [];
   const seen  = new Set();
@@ -665,6 +747,7 @@ function _trendlineBreak(scanCandles, allCandles, trendlines, atrCurrent, regime
             const iofBonus  = iofConfluenceScore(entry, 'bullish', fvgs, orderBlocks, atrCurrent);
             const { score: conf, breakdown: scoreBreakdown } = _trendlineConf({
               breakSize, touches: resistance.touches, regime, direction: 'bullish', iofBonus,
+              candleTime: c.time, ...extras,
             });
             const { outcome, outcomeTime } = _evaluateOutcome(allCandles, c.time, { direction: 'bullish', sl, tp });
 
@@ -704,6 +787,7 @@ function _trendlineBreak(scanCandles, allCandles, trendlines, atrCurrent, regime
             const iofBonus  = iofConfluenceScore(entry, 'bearish', fvgs, orderBlocks, atrCurrent);
             const { score: conf, breakdown: scoreBreakdown } = _trendlineConf({
               breakSize, touches: support.touches, regime, direction: 'bearish', iofBonus,
+              candleTime: c.time, ...extras,
             });
             const { outcome, outcomeTime } = _evaluateOutcome(allCandles, c.time, { direction: 'bearish', sl, tp });
 
@@ -727,21 +811,38 @@ function _trendlineBreak(scanCandles, allCandles, trendlines, atrCurrent, regime
   return found;
 }
 
-function _trendlineConf({ breakSize, touches, regime, direction, iofBonus }) {
+function _trendlineConf({ breakSize, touches, regime, direction, iofBonus,
+                          candleTime, isCrypto, corrContext, symbol }) {
   let score = 45;
   const bd  = { base: 45, break: 0, touches: 0, regime: 0, align: 0, iof: iofBonus || 0 };
 
-  // Reward a decisive break (not just a tick across the line)
   const brk = Math.min(10, Math.round(breakSize * 15));
   score += brk; bd.break = brk;
 
-  // More confirmed touches = more significant trendline = more meaningful break
   if      (touches >= 5) { score += 10; bd.touches = 10; }
   else if (touches >= 3) { score += 5;  bd.touches = 5;  }
 
-  if (regime?.direction === direction) { score += 15; bd.regime = 15; }
-  if (regime?.alignment)               { score += 10; bd.align  = 10; }
+  // Regime strength scaling
+  if (regime?.direction === direction) {
+    const regBonus = Math.round(((regime.strength ?? 100) / 100) * 15);
+    score += regBonus; bd.regime = regBonus;
+  }
+  if (regime?.alignment) { score += 10; bd.align = 10; }
+
   score += bd.iof;
+
+  // Session transition suppression
+  if (!isCrypto && candleTime) {
+    const h = _utcHour(candleTime);
+    if ((h >= 13.0 && h <= 13.75) || (h >= 20.75 && h <= 21.5)) { score -= 10; bd.session = -10; }
+  }
+
+  // Correlation adjustments
+  if (corrContext) {
+    const corrDelta = _corrAdjust(symbol, direction, corrContext);
+    if (corrDelta !== 0) { score += corrDelta; bd.corr = corrDelta; }
+  }
+
   return { score: Math.round(Math.max(0, Math.min(100, score))), breakdown: bd };
 }
 
@@ -755,7 +856,7 @@ function _trendlineConf({ breakSize, touches, regime, direction, iofBonus }) {
 const OR_POST_START_UTC = 14.0;  // 10:00 ET — OR window closed
 const OR_RTH_END_UTC    = 20.5;  // 16:30 ET — stop scanning late session
 
-function _orBreakout(scanCandles, allCandles, openingRange, atrCurrent, regime, fvgs, orderBlocks, rrRatio) {
+function _orBreakout(scanCandles, allCandles, openingRange, atrCurrent, regime, fvgs, orderBlocks, rrRatio, extras = {}) {
   if (!openingRange || !openingRange.formed) return [];
   const { high: orHigh, low: orLow } = openingRange;
   if (!orHigh || !orLow || orHigh <= orLow) return [];
@@ -776,7 +877,7 @@ function _orBreakout(scanCandles, allCandles, openingRange, atrCurrent, regime, 
       const tp       = entry + risk * 2; // OR breaks tend to run 2:1
       const iofBonus = iofConfluenceScore(entry, 'bullish', fvgs, orderBlocks, atrCurrent);
       const breakMag = (c.close - orHigh) / atrCurrent;
-      const { score: conf, breakdown: scoreBreakdown } = _orConf({ breakMag, regime, direction: 'bullish', iofBonus });
+      const { score: conf, breakdown: scoreBreakdown } = _orConf({ breakMag, regime, direction: 'bullish', iofBonus, candleTime: c.time, ...extras });
       const { outcome, outcomeTime } = _evaluateOutcome(allCandles, c.time, { direction: 'bullish', sl, tp });
 
       found.push({
@@ -800,7 +901,7 @@ function _orBreakout(scanCandles, allCandles, openingRange, atrCurrent, regime, 
       const tp       = entry - risk * 2;
       const iofBonus = iofConfluenceScore(entry, 'bearish', fvgs, orderBlocks, atrCurrent);
       const breakMag = (orLow - c.close) / atrCurrent;
-      const { score: conf, breakdown: scoreBreakdown } = _orConf({ breakMag, regime, direction: 'bearish', iofBonus });
+      const { score: conf, breakdown: scoreBreakdown } = _orConf({ breakMag, regime, direction: 'bearish', iofBonus, candleTime: c.time, ...extras });
       const { outcome, outcomeTime } = _evaluateOutcome(allCandles, c.time, { direction: 'bearish', sl, tp });
 
       found.push({
@@ -819,23 +920,113 @@ function _orBreakout(scanCandles, allCandles, openingRange, atrCurrent, regime, 
   return found;
 }
 
-function _orConf({ breakMag, regime, direction, iofBonus }) {
+function _orConf({ breakMag, regime, direction, iofBonus,
+                   candleTime, isCrypto, corrContext, symbol }) {
   let score = 35;
   const bd  = { base: 35, break: 0, regime: 0, align: 0, iof: iofBonus || 0 };
 
-  // Break magnitude vs ATR
   const brk = Math.min(20, Math.round(breakMag * 20));
   score += brk; bd.break = brk;
 
-  if (regime?.direction === direction) { score += 15; bd.regime = 15; }
-  if (regime?.alignment)               { score += 10; bd.align  = 10; }
+  // Regime strength scaling
+  if (regime?.direction === direction) {
+    const regBonus = Math.round(((regime.strength ?? 100) / 100) * 15);
+    score += regBonus; bd.regime = regBonus;
+  }
+  if (regime?.alignment) { score += 10; bd.align = 10; }
+
   score += bd.iof;
+
+  // Session transition suppression
+  if (!isCrypto && candleTime) {
+    const h = _utcHour(candleTime);
+    if ((h >= 13.0 && h <= 13.75) || (h >= 20.75 && h <= 21.5)) { score -= 10; bd.session = -10; }
+  }
+
+  // Correlation adjustments
+  if (corrContext) {
+    const corrDelta = _corrAdjust(symbol, direction, corrContext);
+    if (corrDelta !== 0) { score += corrDelta; bd.corr = corrDelta; }
+  }
+
   return { score: Math.round(Math.max(0, Math.min(100, score))), breakdown: bd };
 }
 
 function _utcHour(unixSec) {
   const d = new Date(unixSec * 1000);
   return d.getUTCHours() + d.getUTCMinutes() / 60;
+}
+
+// ---------------------------------------------------------------------------
+// Correlation-driven scoring helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a correlation context object from the matrix for a given symbol.
+ * Extracts the relationships most relevant to scoring: MNQ/MES divergence,
+ * BTC/ETH crypto alignment, DXY and VIX vs the symbol.
+ */
+function _buildCorrContext(symbol, corrMatrix) {
+  if (!corrMatrix?.matrix) return null;
+  const mat = corrMatrix.matrix;
+  const row = mat[symbol] || {};
+  return {
+    mnqMesCor: mat['MNQ']?.['MES'] ?? null,   // equity index coherence
+    btcEthCor: mat['BTC']?.['ETH'] ?? null,   // crypto market coherence
+    dxySymCor: row['DXY'] ?? null,             // dollar vs this symbol
+    vixSymCor: row['VIX'] ?? null,             // fear index vs this symbol
+  };
+}
+
+/**
+ * Compute a confidence delta (+/-) based on intermarket correlation signals.
+ *
+ * Rules:
+ *   Equity indices (MNQ, MES, SIL):
+ *     – MNQ/MES correlation < 0.60 = stress/divergence → −15 pts
+ *     – VIX positively correlated with symbol > 0.20 = unusual fear → −10 pts
+ *     – DXY strongly aligned with equity > 0.30 = risk confusion → −8 pts
+ *   Crypto (BTC, ETH, XRP, XLM):
+ *     – BTC/ETH correlation < 0.70 = crypto market fracturing → −10 pts
+ *     – DXY strongly negatively correlated (< −0.70) = dollar headwind:
+ *         bull setups −8 pts; bear setups +5 pts
+ *   Commodities (MGC, MCL):
+ *     – DXY unusually positive (> 0.30) = dollar/commodity alignment confusion → −8 pts
+ */
+function _corrAdjust(symbol, direction, corr) {
+  if (!corr) return 0;
+  let delta = 0;
+
+  if (symbol === 'MNQ' || symbol === 'MES' || symbol === 'SIL') {
+    if (corr.mnqMesCor !== null && corr.mnqMesCor < 0.60) delta -= 15;
+    if (corr.vixSymCor !== null && corr.vixSymCor > 0.20)  delta -= 10;
+    if (corr.dxySymCor !== null && corr.dxySymCor > 0.30)  delta -= 8;
+  }
+
+  if (CRYPTO_SYMBOLS.has(symbol)) {
+    if (corr.btcEthCor !== null && corr.btcEthCor < 0.70) delta -= 10;
+    if (corr.dxySymCor !== null && corr.dxySymCor < -0.70) {
+      delta += direction === 'bearish' ? 5 : -8;
+    }
+  }
+
+  if (symbol === 'MGC' || symbol === 'MCL') {
+    if (corr.dxySymCor !== null && corr.dxySymCor > 0.30) delta -= 8;
+  }
+
+  return delta;
+}
+
+/**
+ * Compute 20-period volume moving average from recent candles.
+ * Returns null when insufficient data or all volumes are zero (Yahoo Finance quirk).
+ */
+function _volumeMA(candles, period = 20) {
+  const vols = candles.map(c => c.volume || 0).filter(v => v > 0);
+  if (vols.length < period) return null;
+  const recent = vols.slice(-period);
+  const avg = recent.reduce((s, v) => s + v, 0) / recent.length;
+  return avg > 0 ? avg : null;
 }
 
 // ---------------------------------------------------------------------------

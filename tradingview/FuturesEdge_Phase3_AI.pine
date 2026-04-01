@@ -1,6 +1,13 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-// FuturesEdge AI — Phase 3: AI Webhook Integration
+// FuturesEdge AI — Phase 3: AI Webhook Integration (v2.1)
 // ═══════════════════════════════════════════════════════════════════════════════
+// v2.1 improvements (matches server engine + Phase 2 v2.1):
+//   · Regime strength-scaled bonus — EMA spread / ATR proxy
+//   · VWAP proximity confluence: +8 pts on zone rejections near VWAP
+//   · Volume expansion: +12 pts (zones) / +10 pts (PDH/TL) when vol > 1.5 × 20-bar avg
+//   · Session transition suppression: −10 pts near RTH open/close
+//   · IOF boxes labelled: FVG ▲/▼, OB ▲/▼ — status updates on fill/mitigation
+//   · OB body-to-range filter tightened to ≤ 50% (matches server iof.js)
 // Includes everything from Phase 2 plus:
 //   · Structured JSON webhook messages for every alert
 //   · ATR-based SL/TP estimates embedded in the payload
@@ -113,6 +120,15 @@ bear15m   = ema9_15m < ema21_15m and ema21_15m < ema50_15m
 swingH = ta.pivothigh(high, swingLookback, swingLookback)
 swingL = ta.pivotlow(low,   swingLookback, swingLookback)
 
+// ── v2.1: regime strength proxy + volume + session noise ─────────────────────
+emaSpread    = math.abs(ema9 - ema50)
+regStrength  = math.min(1.0, emaSpread / (2.0 * atr14))
+vol20        = ta.sma(volume, 20)
+volExpansion = vol20 > 0 and volume > vol20 * 1.5
+isNearOpen   = not na(time("", "0915-1015", "America/New_York"))
+isNearClose  = not na(time("", "1545-1615", "America/New_York"))
+sessionNoise = isRTH and (isNearOpen or isNearClose)
+
 // ───────────────────────────────────────────────────────────────────────────────
 // PHASE 1 OVERLAYS (same as Phase 2)
 // ───────────────────────────────────────────────────────────────────────────────
@@ -184,121 +200,192 @@ if showTrendlines
             supportLine := line.new(slb2, sl2, slb1, sl1, extend=extend.right,
                                     color=tlSupportColor, width=1, style=line.style_dashed)
 
-// ─── IOF Zone arrays (visual + detection) ────────────────────────────────────
+// ─── IOF Zone arrays ──────────────────────────────────────────────────────────
+// Visual cache: rebuilt on every barstate.islast tick using xloc.bar_time.
+// Boxes always extend to the current bar — correct on any zoom/scroll level.
+// Data arrays: detection only; no box objects created at bar-close time.
 
-var box[]   fvgBullBoxes = array.new<box>()
+var box[]   fvgBullBoxes = array.new<box>()   // visual cache — rebuilt each islast
+var box[]   fvgBearBoxes = array.new<box>()
+var box[]   obBullBoxes  = array.new<box>()
+var box[]   obBearBoxes  = array.new<box>()
+
 var float[] fvgBullTop   = array.new<float>()
 var float[] fvgBullBot   = array.new<float>()
+var int[]   fvgBullStart = array.new<int>()   // open-time (ms) of left bar
 var bool[]  fvgBullFill  = array.new<bool>()
-var box[]   fvgBearBoxes = array.new<box>()
 var float[] fvgBearTop   = array.new<float>()
 var float[] fvgBearBot   = array.new<float>()
+var int[]   fvgBearStart = array.new<int>()
 var bool[]  fvgBearFill  = array.new<bool>()
-var box[]   obBullBoxes  = array.new<box>()
 var float[] obBullTop    = array.new<float>()
 var float[] obBullBot    = array.new<float>()
+var int[]   obBullStart  = array.new<int>()
 var bool[]  obBullMit    = array.new<bool>()
-var box[]   obBearBoxes  = array.new<box>()
 var float[] obBearTop    = array.new<float>()
 var float[] obBearBot    = array.new<float>()
+var int[]   obBearStart  = array.new<int>()
 var bool[]  obBearMit    = array.new<bool>()
 
 if barstate.isconfirmed
     isImpulse = math.abs(close - open) > obImpulseMult * atr14
 
+    // ── FVG detection ─────────────────────────────────────────────────────────
     if showFVG
         if low > high[2]
-            b = box.new(bar_index - 2, high[2], bar_index + fvgExtendBars, low,
-                        bgcolor=fvgBullColor, border_color=color.new(#26a69a, 50), border_width=1)
-            array.push(fvgBullBoxes, b)
-            array.push(fvgBullTop, low)
-            array.push(fvgBullBot, high[2])
-            array.push(fvgBullFill, false)
+            array.push(fvgBullTop,   low)
+            array.push(fvgBullBot,   high[2])
+            array.push(fvgBullStart, time[2])
+            array.push(fvgBullFill,  false)
         if high < low[2]
-            b = box.new(bar_index - 2, high, bar_index + fvgExtendBars, low[2],
-                        bgcolor=fvgBearColor, border_color=color.new(#ef5350, 50), border_width=1)
-            array.push(fvgBearBoxes, b)
-            array.push(fvgBearTop, low[2])
-            array.push(fvgBearBot, high)
-            array.push(fvgBearFill, false)
-        for i = array.size(fvgBullBoxes) - 1 to 0
-            if not array.get(fvgBullFill, i)
-                bT = array.get(fvgBullTop, i)
-                bB = array.get(fvgBullBot, i)
-                if close <= bT and close >= bB
-                    array.set(fvgBullFill, i, true)
-                    b = array.get(fvgBullBoxes, i)
-                    box.set_bgcolor(b, color.new(#26a69a, 93))
-                    box.set_right(b, bar_index)
-        for i = array.size(fvgBearBoxes) - 1 to 0
-            if not array.get(fvgBearFill, i)
-                bT = array.get(fvgBearTop, i)
-                bB = array.get(fvgBearBot, i)
-                if close >= bB and close <= bT
-                    array.set(fvgBearFill, i, true)
-                    b = array.get(fvgBearBoxes, i)
-                    box.set_bgcolor(b, color.new(#ef5350, 93))
-                    box.set_right(b, bar_index)
+            array.push(fvgBearTop,   low[2])
+            array.push(fvgBearBot,   high)
+            array.push(fvgBearStart, time[2])
+            array.push(fvgBearFill,  false)
+        if array.size(fvgBullTop) > 0
+            for i = array.size(fvgBullTop) - 1 to 0
+                if not array.get(fvgBullFill, i)
+                    bT = array.get(fvgBullTop, i)
+                    bB = array.get(fvgBullBot, i)
+                    if close <= bT and close >= bB
+                        array.set(fvgBullFill, i, true)
+        if array.size(fvgBearTop) > 0
+            for i = array.size(fvgBearTop) - 1 to 0
+                if not array.get(fvgBearFill, i)
+                    bT = array.get(fvgBearTop, i)
+                    bB = array.get(fvgBearBot, i)
+                    if close >= bB and close <= bT
+                        array.set(fvgBearFill, i, true)
 
+    // ── OB detection — body/range ≤ 50% (matches server iof.js) ─────────────
     if showOB
         if isImpulse and close > open and close[1] < open[1]
             bH = math.max(open[1], close[1])
             bL = math.min(open[1], close[1])
             rng = high[1] - low[1]
-            if rng > 0 and (bH - bL) / rng <= 0.75
-                b = box.new(bar_index - 1, bL, bar_index + obExtendBars, bH,
-                            bgcolor=obBullColor, border_color=color.new(#1976d2, 30), border_width=1)
-                array.push(obBullBoxes, b)
-                array.push(obBullTop, bH)
-                array.push(obBullBot, bL)
-                array.push(obBullMit, false)
+            if rng > 0 and (bH - bL) / rng <= 0.50
+                array.push(obBullTop,   bH)
+                array.push(obBullBot,   bL)
+                array.push(obBullStart, time[1])
+                array.push(obBullMit,   false)
         if isImpulse and close < open and close[1] > open[1]
             bH = math.max(open[1], close[1])
             bL = math.min(open[1], close[1])
             rng = high[1] - low[1]
-            if rng > 0 and (bH - bL) / rng <= 0.75
-                b = box.new(bar_index - 1, bL, bar_index + obExtendBars, bH,
-                            bgcolor=obBearColor, border_color=color.new(#c62828, 30), border_width=1)
-                array.push(obBearBoxes, b)
-                array.push(obBearTop, bH)
-                array.push(obBearBot, bL)
-                array.push(obBearMit, false)
-        for i = array.size(obBullBoxes) - 1 to 0
-            if not array.get(obBullMit, i) and close < array.get(obBullBot, i)
-                array.set(obBullMit, i, true)
-                b = array.get(obBullBoxes, i)
-                box.set_bgcolor(b, color.new(color.gray, 88))
-                box.set_border_color(b, color.new(color.gray, 70))
-        for i = array.size(obBearBoxes) - 1 to 0
-            if not array.get(obBearMit, i) and close > array.get(obBearTop, i)
-                array.set(obBearMit, i, true)
-                b = array.get(obBearBoxes, i)
-                box.set_bgcolor(b, color.new(color.gray, 88))
-                box.set_border_color(b, color.new(color.gray, 70))
+            if rng > 0 and (bH - bL) / rng <= 0.50
+                array.push(obBearTop,   bH)
+                array.push(obBearBot,   bL)
+                array.push(obBearStart, time[1])
+                array.push(obBearMit,   false)
+        if array.size(obBullTop) > 0
+            for i = array.size(obBullTop) - 1 to 0
+                if not array.get(obBullMit, i) and close < array.get(obBullBot, i)
+                    array.set(obBullMit, i, true)
+        if array.size(obBearTop) > 0
+            for i = array.size(obBearTop) - 1 to 0
+                if not array.get(obBearMit, i) and close > array.get(obBearTop, i)
+                    array.set(obBearMit, i, true)
 
-    while array.size(fvgBullBoxes) > 30
-        box.delete(array.shift(fvgBullBoxes))
+    while array.size(fvgBullTop) > 30
         array.shift(fvgBullTop)
         array.shift(fvgBullBot)
+        array.shift(fvgBullStart)
         array.shift(fvgBullFill)
 
-    while array.size(fvgBearBoxes) > 30
-        box.delete(array.shift(fvgBearBoxes))
+    while array.size(fvgBearTop) > 30
         array.shift(fvgBearTop)
         array.shift(fvgBearBot)
+        array.shift(fvgBearStart)
         array.shift(fvgBearFill)
 
-    while array.size(obBullBoxes) > 20
-        box.delete(array.shift(obBullBoxes))
+    while array.size(obBullTop) > 20
         array.shift(obBullTop)
         array.shift(obBullBot)
+        array.shift(obBullStart)
         array.shift(obBullMit)
 
-    while array.size(obBearBoxes) > 20
-        box.delete(array.shift(obBearBoxes))
+    while array.size(obBearTop) > 20
         array.shift(obBearTop)
         array.shift(obBearBot)
+        array.shift(obBearStart)
         array.shift(obBearMit)
+
+// ── Redraw IOF boxes on every tick — active zones always extend to current bar ─
+// Boxes use xloc.bar_time so they anchor to timestamps and resize correctly
+// at any zoom/scroll level. Visual cache is cleared and rebuilt each islast tick.
+
+if barstate.islast
+    curTime = time  // open-time of current bar — right edge for all active zones
+
+    // Delete all cached box objects
+    if array.size(fvgBullBoxes) > 0
+        for i = 0 to array.size(fvgBullBoxes) - 1
+            box.delete(array.get(fvgBullBoxes, i))
+    array.clear(fvgBullBoxes)
+    if array.size(fvgBearBoxes) > 0
+        for i = 0 to array.size(fvgBearBoxes) - 1
+            box.delete(array.get(fvgBearBoxes, i))
+    array.clear(fvgBearBoxes)
+    if array.size(obBullBoxes) > 0
+        for i = 0 to array.size(obBullBoxes) - 1
+            box.delete(array.get(obBullBoxes, i))
+    array.clear(obBullBoxes)
+    if array.size(obBearBoxes) > 0
+        for i = 0 to array.size(obBearBoxes) - 1
+            box.delete(array.get(obBearBoxes, i))
+    array.clear(obBearBoxes)
+
+    // Draw active FVG zones (unfilled only)
+    if showFVG and array.size(fvgBullTop) > 0
+        for i = 0 to array.size(fvgBullTop) - 1
+            if not array.get(fvgBullFill, i)
+                array.push(fvgBullBoxes,
+                           box.new(array.get(fvgBullStart, i), array.get(fvgBullTop, i),
+                                   curTime, array.get(fvgBullBot, i),
+                                   xloc=xloc.bar_time,
+                                   bgcolor=fvgBullColor,
+                                   border_color=color.new(#26a69a, 50), border_width=1,
+                                   text="FVG ▲", text_size=size.tiny,
+                                   text_color=color.new(#26a69a, 20),
+                                   text_halign=text.align_left, text_valign=text.align_top))
+    if showFVG and array.size(fvgBearTop) > 0
+        for i = 0 to array.size(fvgBearTop) - 1
+            if not array.get(fvgBearFill, i)
+                array.push(fvgBearBoxes,
+                           box.new(array.get(fvgBearStart, i), array.get(fvgBearTop, i),
+                                   curTime, array.get(fvgBearBot, i),
+                                   xloc=xloc.bar_time,
+                                   bgcolor=fvgBearColor,
+                                   border_color=color.new(#ef5350, 50), border_width=1,
+                                   text="FVG ▼", text_size=size.tiny,
+                                   text_color=color.new(#ef5350, 20),
+                                   text_halign=text.align_left, text_valign=text.align_top))
+
+    // Draw active OB zones (unmitigated only)
+    if showOB and array.size(obBullTop) > 0
+        for i = 0 to array.size(obBullTop) - 1
+            if not array.get(obBullMit, i)
+                array.push(obBullBoxes,
+                           box.new(array.get(obBullStart, i), array.get(obBullTop, i),
+                                   curTime, array.get(obBullBot, i),
+                                   xloc=xloc.bar_time,
+                                   bgcolor=obBullColor,
+                                   border_color=color.new(#1976d2, 30), border_width=1,
+                                   text="OB ▲", text_size=size.tiny,
+                                   text_color=color.new(#1976d2, 20),
+                                   text_halign=text.align_left, text_valign=text.align_top))
+    if showOB and array.size(obBearTop) > 0
+        for i = 0 to array.size(obBearTop) - 1
+            if not array.get(obBearMit, i)
+                array.push(obBearBoxes,
+                           box.new(array.get(obBearStart, i), array.get(obBearTop, i),
+                                   curTime, array.get(obBearBot, i),
+                                   xloc=xloc.bar_time,
+                                   bgcolor=obBearColor,
+                                   border_color=color.new(#c62828, 30), border_width=1,
+                                   text="OB ▼", text_size=size.tiny,
+                                   text_color=color.new(#c62828, 20),
+                                   text_halign=text.align_left, text_valign=text.align_top))
 
 bgcolor(showRegimeBg and bullishStack ? color.new(color.green, 96) :
         showRegimeBg and bearishStack ? color.new(color.red,   96) : na)
@@ -311,35 +398,37 @@ bgcolor(showSession and isRTH ? color.new(color.blue, 97) : na)
 bullZoneRejection(topArr, botArr, fillArr) =>
     rejected = false
     zLevel   = float(na)
-    for i = array.size(topArr) - 1 to 0
-        if not array.get(fillArr, i)
-            zTop = array.get(topArr, i)
-            zBot = array.get(botArr, i)
-            if low <= zTop and low >= zBot
-                totalRng  = high - low
-                wickSize  = zTop - low
-                wickRatio = totalRng > 0 ? wickSize / totalRng : 0.0
-                if close > zTop and wickRatio >= wickRatioMin
-                    rejected := true
-                    zLevel   := (zTop + zBot) / 2
-                    break
+    if array.size(topArr) > 0
+        for i = array.size(topArr) - 1 to 0
+            if not array.get(fillArr, i)
+                zTop = array.get(topArr, i)
+                zBot = array.get(botArr, i)
+                if low <= zTop and low >= zBot
+                    totalRng  = high - low
+                    wickSize  = zTop - low
+                    wickRatio = totalRng > 0 ? wickSize / totalRng : 0.0
+                    if close > zTop and wickRatio >= wickRatioMin
+                        rejected := true
+                        zLevel   := (zTop + zBot) / 2
+                        break
     [rejected, zLevel]
 
 bearZoneRejection(topArr, botArr, fillArr) =>
     rejected = false
     zLevel   = float(na)
-    for i = array.size(topArr) - 1 to 0
-        if not array.get(fillArr, i)
-            zTop = array.get(topArr, i)
-            zBot = array.get(botArr, i)
-            if high >= zBot and high <= zTop
-                totalRng  = high - low
-                wickSize  = high - zBot
-                wickRatio = totalRng > 0 ? wickSize / totalRng : 0.0
-                if close < zBot and wickRatio >= wickRatioMin
-                    rejected := true
-                    zLevel   := (zTop + zBot) / 2
-                    break
+    if array.size(topArr) > 0
+        for i = array.size(topArr) - 1 to 0
+            if not array.get(fillArr, i)
+                zTop = array.get(topArr, i)
+                zBot = array.get(botArr, i)
+                if high >= zBot and high <= zTop
+                    totalRng  = high - low
+                    wickSize  = high - zBot
+                    wickRatio = totalRng > 0 ? wickSize / totalRng : 0.0
+                    if close < zBot and wickRatio >= wickRatioMin
+                        rejected := true
+                        zLevel   := (zTop + zBot) / 2
+                        break
     [rejected, zLevel]
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -368,41 +457,67 @@ totalRng = high == low ? 0.0001 : (high - low)
 
 bullZoneConf = math.min(100, math.max(0,
     40 +
-    (bullishStack ? 15 : bearishStack ? -20 : 0) +
+    (bullishStack ? math.round(regStrength * 15) : bearishStack ? math.round(-regStrength * 15) : 0) +
     (bull15m ? 15 : bear15m ? -10 : 5) +
     (bullOBRej ? 5 : 0) +
     ((close - low) / totalRng > 0.7 ? 10 : (close - low) / totalRng > 0.5 ? 5 : 0) +
-    (math.abs(close - open) / totalRng < 0.4 ? 5 : 0)))
+    (math.abs(close - open) / totalRng < 0.4 ? 5 : 0) +
+    (math.abs(close - vwapVal) <= 0.3 * atr14 ? 8 : 0) +
+    (volExpansion ? 12 : 0) +
+    (sessionNoise ? -10 : 0)))
 
 bearZoneConf = math.min(100, math.max(0,
     40 +
-    (bearishStack ? 15 : bullishStack ? -20 : 0) +
+    (bearishStack ? math.round(regStrength * 15) : bullishStack ? math.round(-regStrength * 15) : 0) +
     (bear15m ? 15 : bull15m ? -10 : 5) +
     (bearOBRej ? 5 : 0) +
     ((high - close) / totalRng > 0.7 ? 10 : (high - close) / totalRng > 0.5 ? 5 : 0) +
-    (math.abs(close - open) / totalRng < 0.4 ? 5 : 0)))
+    (math.abs(close - open) / totalRng < 0.4 ? 5 : 0) +
+    (math.abs(close - vwapVal) <= 0.3 * atr14 ? 8 : 0) +
+    (volExpansion ? 12 : 0) +
+    (sessionNoise ? -10 : 0)))
 
 pdhBreak = barstate.isconfirmed and close > prevDayHigh and close[1] <= prevDayHigh
 pdlBreak = barstate.isconfirmed and close < prevDayLow  and close[1] >= prevDayLow
 
 pdhConf = math.min(100, math.max(0,
-    45 + (bullishStack ? 15 : bearishStack ? -10 : 5) + (bull15m ? 15 : bear15m ? -5 : 5) +
-    (close > vwapVal ? 5 : 0) + (math.abs(close - prevDayHigh) < 0.5 * atr14 ? 5 : 0)))
+    45 +
+    (bullishStack ? math.round(regStrength * 15) : bearishStack ? math.round(-regStrength * 10) : 5) +
+    (bull15m ? 15 : bear15m ? -5 : 5) +
+    (close > vwapVal ? 8 : 0) +
+    (math.abs(close - prevDayHigh) < 0.5 * atr14 ? 5 : 0) +
+    (volExpansion ? 10 : 0) +
+    (sessionNoise ? -10 : 0)))
 
 pdlConf = math.min(100, math.max(0,
-    45 + (bearishStack ? 15 : bullishStack ? -10 : 5) + (bear15m ? 15 : bull15m ? -5 : 5) +
-    (close < vwapVal ? 5 : 0) + (math.abs(prevDayLow - close) < 0.5 * atr14 ? 5 : 0)))
+    45 +
+    (bearishStack ? math.round(regStrength * 15) : bullishStack ? math.round(-regStrength * 10) : 5) +
+    (bear15m ? 15 : bull15m ? -5 : 5) +
+    (close < vwapVal ? 8 : 0) +
+    (math.abs(prevDayLow - close) < 0.5 * atr14 ? 5 : 0) +
+    (volExpansion ? 10 : 0) +
+    (sessionNoise ? -10 : 0)))
 
 tlBullBreak = barstate.isconfirmed and not na(resistVal) and close[1] < resistVal[1] and close > resistVal
 tlBearBreak = barstate.isconfirmed and not na(supportVal) and close[1] > supportVal[1] and close < supportVal
 
 tlBullConf = math.min(100, math.max(0,
-    40 + (bullishStack ? 15 : bearishStack ? -10 : 5) + (bull15m ? 15 : 5) +
-    (close > vwapVal ? 10 : 0) + (math.abs(close - resistVal) > 0.3 * atr14 ? 10 : 5)))
+    40 +
+    (bullishStack ? math.round(regStrength * 15) : bearishStack ? math.round(-regStrength * 10) : 5) +
+    (bull15m ? 15 : 5) +
+    (close > vwapVal ? 10 : 0) +
+    (math.abs(close - resistVal) > 0.3 * atr14 ? 10 : 5) +
+    (volExpansion ? 10 : 0) +
+    (sessionNoise ? -10 : 0)))
 
 tlBearConf = math.min(100, math.max(0,
-    40 + (bearishStack ? 15 : bullishStack ? -10 : 5) + (bear15m ? 15 : 5) +
-    (close < vwapVal ? 10 : 0) + (math.abs(supportVal - close) > 0.3 * atr14 ? 10 : 5)))
+    40 +
+    (bearishStack ? math.round(regStrength * 15) : bullishStack ? math.round(-regStrength * 10) : 5) +
+    (bear15m ? 15 : 5) +
+    (close < vwapVal ? 10 : 0) +
+    (math.abs(supportVal - close) > 0.3 * atr14 ? 10 : 5) +
+    (volExpansion ? 10 : 0) +
+    (sessionNoise ? -10 : 0)))
 
 bullBOS = barstate.isconfirmed and not na(lastSwingH) and close[1] <= lastSwingH and close > lastSwingH
 bearBOS = barstate.isconfirmed and not na(lastSwingL) and close[1] >= lastSwingL and close < lastSwingL
@@ -474,90 +589,55 @@ _vwapP  = close > vwapVal ? "above" : "below"
 // All dynamic Pine values are computed; only {{ticker}}, {{interval}}, {{time}}
 // are TradingView template variables (resolved at alert fire time)
 _buildPayload(setup, dir, conf, sl, tp) =>
-    '{"source":"tradingview"' +
-    ',"sym":"{{ticker}}"' +
-    ',"tf":"{{interval}}"' +
-    ',"ts":"{{time}}"' +
-    ',"setup":"' + setup + '"' +
-    ',"dir":"' + dir + '"' +
-    ',"conf":' + str.tostring(conf) +
-    ',"price":' + str.tostring(close, format.mintick) +
-    ',"sl":' + str.tostring(sl, format.mintick) +
-    ',"tp":' + str.tostring(tp, format.mintick) +
-    ',"atr":' + str.tostring(atr14, format.mintick) +
-    ',"regime":"' + _regime + '"' +
-    ',"htf15":"' + _htf + '"' +
-    ',"vwap":"' + _vwapP + '"' +
-    ',"vwapVal":' + str.tostring(vwapVal, format.mintick) +
-    ',"ema9":' + str.tostring(ema9, format.mintick) +
-    ',"ema21":' + str.tostring(ema21, format.mintick) +
-    ',"ema50":' + str.tostring(ema50, format.mintick) +
-    ',"pdh":' + str.tostring(prevDayHigh, format.mintick) +
-    ',"pdl":' + str.tostring(prevDayLow, format.mintick) +
-    ',"sess":"' + _sess + '"}'
+    '{"source":"tradingview"' + ',"sym":"{{ticker}}"' + ',"tf":"{{interval}}"' + ',"ts":"{{time}}"' + ',"setup":"' + setup + '"' + ',"dir":"' + dir + '"' + ',"conf":' + str.tostring(conf) + ',"price":' + str.tostring(close, format.mintick) + ',"sl":' + str.tostring(sl, format.mintick) + ',"tp":' + str.tostring(tp, format.mintick) + ',"atr":' + str.tostring(atr14, format.mintick) + ',"regime":"' + _regime + '"' + ',"htf15":"' + _htf + '"' + ',"vwap":"' + _vwapP + '"' + ',"vwapVal":' + str.tostring(vwapVal, format.mintick) + ',"ema9":' + str.tostring(ema9, format.mintick) + ',"ema21":' + str.tostring(ema21, format.mintick) + ',"ema50":' + str.tostring(ema50, format.mintick) + ',"pdh":' + str.tostring(prevDayHigh, format.mintick) + ',"pdl":' + str.tostring(prevDayLow, format.mintick) + ',"sess":"' + _sess + '"}'
 
 // ───────────────────────────────────────────────────────────────────────────────
 // alertcondition() — standard TradingView alerts (same as Phase 2)
 // ───────────────────────────────────────────────────────────────────────────────
 
+// alertcondition() message must be const string — no runtime expressions allowed.
 alertcondition(bullZoneAlert,
                title="FE · Bullish Zone Rejection",
-               message="[FuturesEdge] BULLISH ZONE REJECTION | {{ticker}} {{interval}} | Price: {{close}} | Conf: " + str.tostring(bullZoneConf) + "%")
+               message="[FuturesEdge] BULLISH ZONE REJECTION | {{ticker}} {{interval}} | Price: {{close}}")
 
 alertcondition(bearZoneAlert,
                title="FE · Bearish Zone Rejection",
-               message="[FuturesEdge] BEARISH ZONE REJECTION | {{ticker}} {{interval}} | Price: {{close}} | Conf: " + str.tostring(bearZoneConf) + "%")
+               message="[FuturesEdge] BEARISH ZONE REJECTION | {{ticker}} {{interval}} | Price: {{close}}")
 
 alertcondition(pdhAlert,
                title="FE · PDH Breakout",
-               message="[FuturesEdge] PDH BREAKOUT ▲ | {{ticker}} {{interval}} | Close: {{close}} | Conf: " + str.tostring(pdhConf) + "%")
+               message="[FuturesEdge] PDH BREAKOUT ▲ | {{ticker}} {{interval}} | Close: {{close}}")
 
 alertcondition(pdlAlert,
                title="FE · PDL Breakout",
-               message="[FuturesEdge] PDL BREAKOUT ▼ | {{ticker}} {{interval}} | Close: {{close}} | Conf: " + str.tostring(pdlConf) + "%")
+               message="[FuturesEdge] PDL BREAKOUT ▼ | {{ticker}} {{interval}} | Close: {{close}}")
 
 alertcondition(tlBullAlert,
                title="FE · Bullish TL Break",
-               message="[FuturesEdge] TL BREAK ▲ | {{ticker}} {{interval}} | Close: {{close}} | Conf: " + str.tostring(tlBullConf) + "%")
+               message="[FuturesEdge] TL BREAK ▲ | {{ticker}} {{interval}} | Close: {{close}}")
 
 alertcondition(tlBearAlert,
                title="FE · Bearish TL Break",
-               message="[FuturesEdge] TL BREAK ▼ | {{ticker}} {{interval}} | Close: {{close}} | Conf: " + str.tostring(tlBearConf) + "%")
+               message="[FuturesEdge] TL BREAK ▼ | {{ticker}} {{interval}} | Close: {{close}}")
 
-// ── Webhook alerts — use these when creating alerts with Webhook URL ──────────
-// In TradingView: Create Alert → Notifications → Enable Webhook URL
-// Set webhook URL to: http://<your-server>:3000/api/tv-webhook
-// For the "Message" field, use one of these alert conditions and set the
-// message to the JSON payload string.
-//
-// RECOMMENDED: Create one alert per setup type using the alertcondition above,
-// and paste the corresponding JSON payload as the alert message manually.
-// Example payload for Zone Rejection:
-//   {"source":"tradingview","sym":"MNQ1!","tf":"5","setup":"zone_rejection","dir":"bullish",...}
+// ── Webhook alerts — alert() supports series string (dynamic JSON payload) ───
+// SETUP: In TradingView create an alert with condition "Any alert() function call"
+//        → Notifications → Webhook URL: http://<your-server>:3000/api/tv-webhook
+// alert() fires the full JSON payload automatically — no manual message needed.
 
-alertcondition(bullZoneAlert,
-               title="FE · Webhook: Bull Zone Rej",
-               message=_buildPayload("zone_rejection", "bullish", bullZoneConf, _bullSL, _bullTP))
-
-alertcondition(bearZoneAlert,
-               title="FE · Webhook: Bear Zone Rej",
-               message=_buildPayload("zone_rejection", "bearish", bearZoneConf, _bearSL, _bearTP))
-
-alertcondition(pdhAlert,
-               title="FE · Webhook: PDH Breakout",
-               message=_buildPayload("pdh_breakout", "bullish", pdhConf, _bullSL, _bullTP))
-
-alertcondition(pdlAlert,
-               title="FE · Webhook: PDL Breakout",
-               message=_buildPayload("pdl_breakout", "bearish", pdlConf, _bearSL, _bearTP))
-
-alertcondition(tlBullAlert,
-               title="FE · Webhook: Bull TL Break",
-               message=_buildPayload("trendline_break", "bullish", tlBullConf, _bullSL, _bullTP))
-
-alertcondition(tlBearAlert,
-               title="FE · Webhook: Bear TL Break",
-               message=_buildPayload("trendline_break", "bearish", tlBearConf, _bearSL, _bearTP))
+if barstate.isconfirmed
+    if bullZoneAlert
+        alert(_buildPayload("zone_rejection", "bullish", bullZoneConf, _bullSL, _bullTP), alert.freq_once_per_bar_close)
+    if bearZoneAlert
+        alert(_buildPayload("zone_rejection", "bearish", bearZoneConf, _bearSL, _bearTP), alert.freq_once_per_bar_close)
+    if pdhAlert
+        alert(_buildPayload("pdh_breakout", "bullish", pdhConf, _bullSL, _bullTP), alert.freq_once_per_bar_close)
+    if pdlAlert
+        alert(_buildPayload("pdl_breakout", "bearish", pdlConf, _bearSL, _bearTP), alert.freq_once_per_bar_close)
+    if tlBullAlert
+        alert(_buildPayload("trendline_break", "bullish", tlBullConf, _bullSL, _bullTP), alert.freq_once_per_bar_close)
+    if tlBearAlert
+        alert(_buildPayload("trendline_break", "bearish", tlBearConf, _bearSL, _bearTP), alert.freq_once_per_bar_close)
 
 // ───────────────────────────────────────────────────────────────────────────────
 // RECENT SIGNALS PANEL + INFO TABLE (same as Phase 2)

@@ -2,13 +2,16 @@
 (function () {
   'use strict';
 
-  let _trades   = [];
-  let _filtered = [];
-  let _accounts = [];
-  let _sortKey  = 'takenAt';
-  let _sortAsc  = false;
-  let _editId   = null;
-  let _ladderId = null;   // trade ID currently open in Fill Ladder
+  let _trades    = [];
+  let _filtered  = [];
+  let _accounts  = [];
+  let _sortKey   = 'takenAt';
+  let _sortAsc   = false;
+  let _editId    = null;
+  let _ladderId  = null;   // trade ID currently open in Fill Ladder
+  let _totalFees = 0;      // updated by _updateFeesStat, used in _renderSummary
+
+  const _chartInstances = new Map(); // tradeId → LW chart instance
 
   const $ = id => document.getElementById(id);
 
@@ -37,60 +40,39 @@
   }
 
   function _populateAccountDropdowns() {
-    const pfAccts = _accounts.filter(a => a.type === 'propfirm');
-    const raAccts = _accounts.filter(a => a.type === 'realaccount');
+    const fundedAccts    = _accounts.filter(a => a.type === 'propfirm'    && a.phase === 'funded');
+    const challengeAccts = _accounts.filter(a => a.type === 'propfirm'    && a.phase !== 'funded');
+    const raAccts        = _accounts.filter(a => a.type === 'realaccount');
+
+    function _appendGroup(sel, label, list) {
+      if (!list.length) return;
+      const grp = document.createElement('optgroup');
+      grp.label = label;
+      list.forEach(a => {
+        const o = document.createElement('option');
+        o.value = a.id; o.textContent = a.label;
+        grp.appendChild(o);
+      });
+      sel.appendChild(grp);
+    }
 
     function _buildOptions(sel) {
       sel.innerHTML = '<option value="">— None —</option>';
-      if (pfAccts.length) {
-        const grp = document.createElement('optgroup');
-        grp.label = 'Prop Firm Accounts';
-        pfAccts.forEach(a => {
-          const o = document.createElement('option');
-          o.value = a.id; o.textContent = a.label;
-          grp.appendChild(o);
-        });
-        sel.appendChild(grp);
-      }
-      if (raAccts.length) {
-        const grp = document.createElement('optgroup');
-        grp.label = 'Real Accounts';
-        raAccts.forEach(a => {
-          const o = document.createElement('option');
-          o.value = a.id; o.textContent = a.label;
-          grp.appendChild(o);
-        });
-        sel.appendChild(grp);
-      }
+      _appendGroup(sel, 'Funded Accounts',    fundedAccts);
+      _appendGroup(sel, 'Challenge Accounts', challengeAccts);
+      _appendGroup(sel, 'Real Accounts',      raAccts);
     }
 
     // Filter dropdown — has extra "All Accounts" option
     const filterSel = $('filter-account');
     const prev = filterSel.value;
     filterSel.innerHTML = '<option value="">All Accounts</option>';
-    if (pfAccts.length) {
-      const grp = document.createElement('optgroup');
-      grp.label = 'Prop Firm Accounts';
-      pfAccts.forEach(a => {
-        const o = document.createElement('option');
-        o.value = a.id; o.textContent = a.label;
-        grp.appendChild(o);
-      });
-      filterSel.appendChild(grp);
-    }
-    if (raAccts.length) {
-      const grp = document.createElement('optgroup');
-      grp.label = 'Real Accounts';
-      raAccts.forEach(a => {
-        const o = document.createElement('option');
-        o.value = a.id; o.textContent = a.label;
-        grp.appendChild(o);
-      });
-      filterSel.appendChild(grp);
-    }
+    _appendGroup(filterSel, 'Funded Accounts',    fundedAccts);
+    _appendGroup(filterSel, 'Challenge Accounts', challengeAccts);
+    _appendGroup(filterSel, 'Real Accounts',      raAccts);
     if (prev) filterSel.value = prev;
 
-    ['mt-account','em-account'].forEach(id => {
+    ['mt-account','em-account','im-account','fim-account'].forEach(id => {
       const sel = $(id);
       if (sel) _buildOptions(sel);
     });
@@ -166,15 +148,21 @@
     const lost   = _filtered.filter(t => t.outcome === 'lost').length;
     const open   = _filtered.filter(t => !t.outcome || t.outcome === 'open').length;
     const wr     = (won + lost) > 0 ? Math.round(won / (won + lost) * 100) : null;
-    const netPnl = _filtered.reduce((s, t) => s + (t.pnl || 0), 0);
+    const grossPnl = _filtered.reduce((s, t) => s + (t.pnl || 0), 0);
+    const netPnl   = grossPnl - _totalFees;
 
     $('stat-total').textContent = `${total} trade${total !== 1 ? 's' : ''}`;
     $('stat-won').textContent   = `${won} won`;
     $('stat-lost').textContent  = `${lost} lost`;
     $('stat-open').textContent  = `${open} open`;
     $('stat-wr').textContent    = wr != null ? `${wr}% WR` : '—% WR';
-    $('stat-pnl').textContent   = `${netPnl >= 0 ? '+' : ''}$${netPnl.toFixed(0)} net P&L`;
-    $('stat-pnl').className     = `tl-stat ${netPnl >= 0 ? 'bull' : 'bear'}`;
+    $('stat-pnl').textContent   = `${grossPnl >= 0 ? '+' : ''}$${grossPnl.toFixed(0)} gross P&L`;
+    $('stat-pnl').className     = `tl-stat ${grossPnl >= 0 ? 'bull' : 'bear'}`;
+    const netEl = $('stat-net-pnl');
+    if (netEl) {
+      netEl.textContent = `${netPnl >= 0 ? '+' : ''}$${netPnl.toFixed(0)} net P&L`;
+      netEl.className   = `tl-stat ${netPnl >= 0 ? 'bull' : 'bear'}`;
+    }
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
@@ -252,6 +240,11 @@
 
   function _renderTable() {
     const tbody = $('tl-tbody');
+
+    // Destroy any open chart instances before re-rendering
+    _chartInstances.forEach(chart => { try { chart.remove(); } catch {} });
+    _chartInstances.clear();
+
     if (_filtered.length === 0) {
       tbody.innerHTML = `<tr><td colspan="17" class="tl-empty">No trades match the current filters.</td></tr>`;
       return;
@@ -286,6 +279,7 @@
         <td class="td-account">${_accountHtml(t)}</td>
         <td class="td-notes" title="${(t.notes || '').replace(/"/g, '&quot;')}">${t.notes || '—'}</td>
         <td class="td-actions">
+          <button class="tl-chart-btn"  data-id="${t.id}" title="Chart">📊</button>
           <button class="tl-ladder-btn" data-id="${t.id}" title="Fill Ladder — log DCA entries &amp; exits">🪜</button>
           <button class="tl-edit-btn"   data-id="${t.id}" title="Edit">✎</button>
           <button class="tl-del-btn"    data-id="${t.id}" title="Delete">✕</button>
@@ -300,6 +294,124 @@
       btn.addEventListener('click', e => { e.stopPropagation(); _openEdit(btn.dataset.id); }));
     tbody.querySelectorAll('.tl-del-btn').forEach(btn =>
       btn.addEventListener('click', e => { e.stopPropagation(); _deleteTrade(btn.dataset.id); }));
+    tbody.querySelectorAll('.tl-chart-btn').forEach(btn =>
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        const parentRow = btn.closest('.tl-row');
+        _toggleTradeChart(btn.dataset.id, btn, parentRow);
+      }));
+  }
+
+  // ── Inline trade chart (expand row) ────────────────────────────────────────
+
+  const CHART_TFS = ['1m', '5m', '15m', '30m', '1h'];
+
+  function _toggleTradeChart(tradeId, btn, parentRow) {
+    const existing = document.querySelector(`.tl-expand-row[data-for="${tradeId}"]`);
+    if (existing) {
+      const chart = _chartInstances.get(tradeId);
+      if (chart) { try { chart.remove(); } catch {} _chartInstances.delete(tradeId); }
+      existing.remove();
+      btn.textContent = '📊';
+      btn.classList.remove('active');
+      return;
+    }
+
+    btn.textContent = '▲';
+    btn.classList.add('active');
+
+    const expandRow = document.createElement('tr');
+    expandRow.className = 'tl-expand-row';
+    expandRow.dataset.for = tradeId;
+    const td = document.createElement('td');
+    td.colSpan = 17;
+    td.innerHTML = `
+      <div class="chart-tf-bar" id="tlc-tfbar-${tradeId}">
+        ${CHART_TFS.map(tf => `<button class="chart-tf-btn${tf === '1m' ? ' active' : ''}" data-tf="${tf}">${tf}</button>`).join('')}
+      </div>
+      <div class="tl-chart-inline" id="tlc-inline-${tradeId}">
+        <div style="color:var(--text-dim);padding:16px;text-align:center">Loading…</div>
+      </div>
+      <div class="tc-legend" id="tlc-leg-${tradeId}"></div>
+    `;
+    expandRow.appendChild(td);
+
+    // Insert after fills row if present, otherwise after trade row
+    const fillsRow = document.querySelector(`.tl-fills-row[data-id="${tradeId}"]`);
+    (fillsRow || parentRow).insertAdjacentElement('afterend', expandRow);
+
+    // Wire TF buttons
+    td.querySelectorAll('.chart-tf-btn').forEach(tfBtn => {
+      tfBtn.addEventListener('click', () => {
+        td.querySelectorAll('.chart-tf-btn').forEach(b => b.classList.remove('active'));
+        tfBtn.classList.add('active');
+        _renderTlChart(tradeId, tfBtn.dataset.tf);
+      });
+    });
+
+    _renderTlChart(tradeId, '1m');
+  }
+
+  async function _renderTlChart(tradeId, tf) {
+    const container = document.getElementById(`tlc-inline-${tradeId}`);
+    const legEl     = document.getElementById(`tlc-leg-${tradeId}`);
+    if (!container) return;
+
+    const prev = _chartInstances.get(tradeId);
+    if (prev) { try { prev.remove(); } catch {} _chartInstances.delete(tradeId); }
+    container.innerHTML = '<div style="color:var(--text-dim);padding:16px;text-align:center">Loading…</div>';
+    if (legEl) legEl.innerHTML = '';
+
+    let data;
+    try {
+      const res = await fetch(`/api/trade-chart/${tradeId}?tf=${tf}`);
+      if (!res.ok) {
+        let errMsg = 'Server error';
+        try { errMsg = (await res.json()).error || errMsg; } catch { errMsg = await res.text().catch(() => errMsg); }
+        container.innerHTML = `<div style="color:var(--bear);padding:16px;text-align:center">${errMsg}</div>`;
+        return;
+      }
+      data = await res.json();
+    } catch {
+      container.innerHTML = `<div style="color:var(--bear);padding:16px;text-align:center">Failed to load chart</div>`;
+      return;
+    }
+
+    container.innerHTML = '';
+    const chart = LightweightCharts.createChart(container, {
+      width:   container.clientWidth,
+      height:  260,
+      layout:  { background: { color: '#141624' }, textColor: '#e2e8f0' },
+      grid:    { vertLines: { color: 'rgba(255,255,255,0.04)' }, horzLines: { color: 'rgba(255,255,255,0.04)' } },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+      timeScale: { borderColor: '#1e2235', timeVisible: true, secondsVisible: false },
+      rightPriceScale: { borderColor: '#1e2235' },
+    });
+    _chartInstances.set(tradeId, chart);
+
+    const series = chart.addCandlestickSeries({
+      upColor: '#4caf50', downColor: '#ef4444',
+      borderUpColor: '#4caf50', borderDownColor: '#ef4444',
+      wickUpColor: '#4caf50', wickDownColor: '#ef4444',
+    });
+    series.setData(data.candles);
+    if (data.markers && data.markers.length) series.setMarkers(data.markers);
+    chart.timeScale().fitContent();
+
+    const ro = new ResizeObserver(() => {
+      if (_chartInstances.has(tradeId)) _chartInstances.get(tradeId).applyOptions({ width: container.clientWidth });
+    });
+    ro.observe(container);
+
+    if (legEl) {
+      const entries = data.markers.filter(m => m.color === '#4caf50' && m.text.startsWith('B '));
+      const exits   = data.markers.filter(m => m.text.startsWith('S '));
+      const items = [
+        ...entries.map(m => `<span class="tc-leg-entry">▲ ${m.text}</span>`),
+        ...exits.map(m => `<span class="${m.color === '#ef4444' ? 'tc-leg-exit-loss' : 'tc-leg-exit-win'}">▼ ${m.text}</span>`),
+      ];
+      legEl.innerHTML = items.join('') || '<span>No fill markers (seed data may not cover this date)</span>';
+    }
   }
 
   function _fillsSummaryHtml(t) {
@@ -830,9 +942,182 @@
   $('im-cancel').addEventListener('click', _closeImport);
   $('import-modal').querySelector('.im-backdrop').addEventListener('click', _closeImport);
 
+  // ── Tab switching ─────────────────────────────────────────────────────────
+
+  window.tlSwitchTab = function(tab) {
+    const isFeesTab = tab === 'fees';
+    $('tab-trades').classList.toggle('active', !isFeesTab);
+    $('tab-fees').classList.toggle('active', isFeesTab);
+    $('tl-table-wrap').style.display     = isFeesTab ? 'none' : '';
+    $('fees-table-wrap').style.display   = isFeesTab ? '' : 'none';
+    $('btn-import-csv').style.display    = isFeesTab ? 'none' : '';
+    $('btn-import-fees').style.display   = isFeesTab ? '' : 'none';
+    $('btn-add-trade').style.display     = isFeesTab ? 'none' : '';
+    // Hide manual form when switching tabs
+    $('manual-trade-form').style.display = 'none';
+    if (isFeesTab) _loadFees();
+  };
+
+  // ── Fees ──────────────────────────────────────────────────────────────────
+
+  let _feesImportCsvText = null;
+
+  async function _loadFees() {
+    try {
+      const params = new URLSearchParams();
+      const acctVal = $('filter-account').value;
+      if (acctVal) params.set('accountId', acctVal);
+      const sym = $('filter-symbol').value;
+      if (sym) params.set('symbol', sym);
+      const df = $('filter-date-from').value;
+      if (df) params.set('dateFrom', df);
+      const dt = $('filter-date-to').value;
+      if (dt) params.set('dateTo', dt);
+      const res = await fetch('/api/fees?' + params.toString());
+      const { fees } = await res.json();
+      _renderFees(fees);
+      _updateFeesStat(fees);
+    } catch(e) { console.error('[fees]', e); }
+  }
+
+  function _renderFees(fees) {
+    const tbody = $('fees-tfoot') ? $('fees-tbody') : null;
+    if (!tbody) return;
+    if (!fees.length) {
+      tbody.innerHTML = '<tr><td colspan="8" class="tl-empty">No fees found. Import a TradeDay fees CSV.</td></tr>';
+      $('fees-tfoot').innerHTML = '';
+      $('fees-summary-bar').innerHTML = '';
+      return;
+    }
+
+    // Aggregate by date+symbol for display
+    const byDateSym = new Map();
+    for (const f of fees) {
+      const key = `${f.date}|${f.symbol}`;
+      if (!byDateSym.has(key)) byDateSym.set(key, { date: f.date, symbol: f.symbol, accountLabel: f.accountLabel || f.sourceAccount || '—', exchange: 0, clearing: 0, nfa: 0, commission: 0, total: 0, fills: 0 });
+      const g = byDateSym.get(key);
+      g.exchange   += f.exchange;
+      g.clearing   += f.clearing;
+      g.nfa        += f.nfa;
+      g.commission += f.commission;
+      g.total      += f.total;
+      g.fills++;
+    }
+
+    const rows = [...byDateSym.values()].sort((a, b) => a.date.localeCompare(b.date) || a.symbol.localeCompare(b.symbol));
+    const fmt = v => '$' + Math.abs(v).toFixed(2);
+
+    tbody.innerHTML = rows.map(r => `
+      <tr>
+        <td>${r.date}</td>
+        <td><span class="sym-badge">${r.symbol}</span></td>
+        <td class="fee-acct">${r.accountLabel}</td>
+        <td class="fee-num">${fmt(r.exchange)}</td>
+        <td class="fee-num">${fmt(r.clearing)}</td>
+        <td class="fee-num">${fmt(r.nfa)}</td>
+        <td class="fee-num">${fmt(r.commission)}</td>
+        <td class="fee-num fee-total">${fmt(r.total)}</td>
+      </tr>`).join('');
+
+    // Totals footer
+    const tot = rows.reduce((s, r) => {
+      s.exchange += r.exchange; s.clearing += r.clearing;
+      s.nfa += r.nfa; s.commission += r.commission; s.total += r.total; return s;
+    }, { exchange: 0, clearing: 0, nfa: 0, commission: 0, total: 0 });
+    $('fees-tfoot').innerHTML = `
+      <tr class="fees-total-row">
+        <td colspan="3">Total (${rows.length} day/symbol combos, ${fees.length} fills)</td>
+        <td class="fee-num">${fmt(tot.exchange)}</td>
+        <td class="fee-num">${fmt(tot.clearing)}</td>
+        <td class="fee-num">${fmt(tot.nfa)}</td>
+        <td class="fee-num">${fmt(tot.commission)}</td>
+        <td class="fee-num fee-total">${fmt(tot.total)}</td>
+      </tr>`;
+
+    // Symbol summary chips
+    const bySym = new Map();
+    for (const r of rows) {
+      if (!bySym.has(r.symbol)) bySym.set(r.symbol, 0);
+      bySym.set(r.symbol, bySym.get(r.symbol) + r.total);
+    }
+    $('fees-summary-bar').innerHTML = [...bySym.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([sym, t]) => `<span class="fee-chip"><span class="sym-badge">${sym}</span> ${fmt(t)}</span>`)
+      .join('') + `<span class="fee-chip fee-chip-total">Total ${fmt(tot.total)}</span>`;
+  }
+
+  function _updateFeesStat(fees) {
+    if (!fees) return;
+    _totalFees = fees.reduce((s, f) => s + f.total, 0);
+    const el = $('stat-fees');
+    if (el) el.textContent = _totalFees > 0 ? `-$${_totalFees.toFixed(2)} fees` : '$0 fees';
+    _renderSummary(); // recalculate net P&L with updated fees
+  }
+
+  // Open fees import modal
+  function _openFeesImport() {
+    _feesImportCsvText = null;
+    $('fim-file-text').textContent = '📂 Choose CSV file…';
+    $('fim-preview').innerHTML = '';
+    $('fim-status').textContent = '';
+    $('fim-confirm').disabled = true;
+    $('fees-import-modal').style.display = 'flex';
+  }
+  function _closeFeesImport() { $('fees-import-modal').style.display = 'none'; }
+
+  $('fim-file').addEventListener('change', e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    $('fim-file-text').textContent = '📄 ' + file.name;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      _feesImportCsvText = ev.target.result;
+      // Quick preview: count fee rows
+      const lines = _feesImportCsvText.split('\n').filter(l => l.trim() && !l.startsWith('Account,'));
+      const feeTypes = ['Exchange Fee', 'Clearing Fee', 'Nfa Fee', 'Commission'];
+      const feeRows = lines.filter(l => feeTypes.some(t => l.includes(t)));
+      const fillCount = Math.round(feeRows.length / 4);
+      $('fim-preview').innerHTML = `<div class="im-preview-note">📊 ${feeRows.length} fee rows detected ≈ ${fillCount} round-turn fills</div>`;
+      $('fim-confirm').disabled = false;
+      $('fim-status').textContent = '';
+    };
+    reader.readAsText(file);
+  });
+
+  $('fim-confirm').addEventListener('click', async () => {
+    if (!_feesImportCsvText) return;
+    $('fim-confirm').disabled = true;
+    $('fim-status').textContent = 'Importing…';
+    const sel = $('fim-account').value;
+    const acctOpt = $('fim-account').options[$('fim-account').selectedIndex];
+    const { accountId, accountLabel, accountType } = _accountPayload ? _accountPayload(sel) : { accountId: sel, accountLabel: acctOpt?.text || '', accountType: '' };
+    try {
+      const r = await fetch('/api/fees/import-csv', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ csv: _feesImportCsvText, accountId, accountLabel, accountType }),
+      });
+      const data = await r.json();
+      if (!r.ok) { $('fim-status').textContent = '⚠ ' + (data.error || 'Import failed'); $('fim-confirm').disabled = false; return; }
+      const dupNote = data.duplicates > 0 ? `, ${data.duplicates} skipped (duplicate)` : '';
+      $('fim-status').textContent = `✓ Imported ${data.created} fill${data.created !== 1 ? 's' : ''}${dupNote}`;
+      setTimeout(() => { _closeFeesImport(); _loadFees(); }, 1200);
+    } catch(e) { $('fim-status').textContent = '⚠ ' + e.message; $('fim-confirm').disabled = false; }
+  });
+
+  $('btn-import-fees').addEventListener('click', _openFeesImport);
+  $('fim-close').addEventListener('click', _closeFeesImport);
+  $('fim-cancel').addEventListener('click', _closeFeesImport);
+  $('fees-import-modal').querySelector('.im-backdrop').addEventListener('click', _closeFeesImport);
+
   // ── Boot ──────────────────────────────────────────────────────────────────
 
-  _loadAccounts().then(_applyFilters);
+  _loadAccounts().then(() => {
+    _applyFilters();
+  });
   _load();
+
+  // Load fee total for summary bar on page load
+  fetch('/api/fees').then(r => r.json()).then(({ fees }) => _updateFeesStat(fees)).catch(() => {});
 
 })();

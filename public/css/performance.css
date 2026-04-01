@@ -242,6 +242,94 @@ body { overflow: auto; }
   text-align: center;
 }
 
+/* ── Trade table ─────────────────────────────────────────────────────────── */
+
+#trade-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+#trade-table th {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+#trade-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  color: var(--text);
+}
+
+#trade-table tr:hover td { background: rgba(255,255,255,0.03); }
+
+.chart-btn {
+  background: rgba(76,175,80,0.15);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.chart-btn:hover { background: rgba(76,175,80,0.3); }
+
+/* ── Inline trade chart (expand row) ────────────────────────────────────── */
+
+.chart-tf-bar {
+  display: flex;
+  gap: 4px;
+  padding: 6px 10px;
+  background: #0e1120;
+  border-bottom: 1px solid var(--border);
+}
+
+.chart-tf-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 3px;
+  padding: 2px 9px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.chart-tf-btn:hover  { color: var(--text); border-color: var(--text-dim); }
+.chart-tf-btn.active { background: rgba(76,175,80,0.15); border-color: var(--accent); color: var(--accent); }
+
+.trade-expand-row td {
+  padding: 0;
+  background: #0e1120;
+  border-bottom: 2px solid var(--border);
+}
+
+.trade-chart-inline {
+  width: 100%;
+  height: 260px;
+}
+
+.tc-legend {
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--text-dim);
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--border);
+}
+
+.tc-leg-entry     { color: #4caf50; }
+.tc-leg-exit-win  { color: #4caf50; }
+.tc-leg-exit-loss { color: #ef4444; }
+
+.chart-btn.active { background: rgba(76,175,80,0.3); }
+
 /* ═══════════════════════════════════════════════════════════════════════════
    Mobile layout (≤ 767px)
    ═══════════════════════════════════════════════════════════════════════════ */

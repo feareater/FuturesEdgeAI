@@ -109,9 +109,30 @@
         </div>
       </section>
 
+      <!-- Trade log with charts -->
+      <section class="alert-table-section" style="margin-top:16px">
+        <div class="perf-panel-header">
+          Trade Log
+          <span id="trade-count" class="table-count"></span>
+        </div>
+        <div class="table-wrap">
+          <table id="trade-table">
+            <thead>
+              <tr>
+                <th>Symbol</th><th>TF</th><th>Dir</th>
+                <th>Entries</th><th>Avg Entry</th><th>Avg Exit</th>
+                <th>P&amp;L</th><th>Outcome</th><th>Date</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="trade-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
     </main>
   </div>
 
+  <script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
   <script src="/js/performance.js"></script>
 </body>
 </html>

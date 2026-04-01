@@ -47,6 +47,7 @@
           <a href="/tradelog.html"      id="tradelog-nav-link"   title="Trade Log">Trade Log</a>
           <a href="/propfirms.html"      id="propfirms-nav-link"  title="Prop Firm Tracker">Prop Firms</a>
           <a href="/tradingaccount.html" id="realaccount-nav-link" title="Real Account Tracker">Real Account</a>
+          <button id="pine-copy-btn" title="Copy Pine Script for TradingView" onclick="window._copyPineScript()">Pine Script</button>
           <a href="/api/export"          id="export-nav-link"     title="Export JSON" download>Export</a>
         </div>
       </div>
@@ -72,11 +73,19 @@
           </div>
           <div class="sym-group-divider"></div>
           <div class="sym-group">
+            <span class="sym-group-label">Commodities</span>
+            <div class="btn-group">
+              <button class="sym-btn" data-symbol="SIL">SIL</button>
+            </div>
+          </div>
+          <div class="sym-group-divider"></div>
+          <div class="sym-group">
             <span class="sym-group-label">Crypto</span>
             <div class="btn-group">
               <button class="sym-btn" data-symbol="BTC">BTC</button>
               <button class="sym-btn" data-symbol="ETH">ETH</button>
               <button class="sym-btn" data-symbol="XRP">XRP</button>
+              <button class="sym-btn" data-symbol="XLM">XLM</button>
             </div>
           </div>
         </div>
@@ -121,11 +130,21 @@
           <span id="rs-signal" class="rs-signal">—</span>
         </div>
         <div id="options-widget" class="options-widget" style="display:none">
+          <span id="opt-source" class="opt-source"></span>
           <span class="opt-label">P/C</span>
           <span id="opt-pc" class="opt-value">—</span>
           <span class="opt-sep">|</span>
           <span class="opt-label">IV</span>
           <span id="opt-iv" class="opt-value">—</span>
+          <span class="opt-sep">|</span>
+          <span class="opt-label">MaxPain</span>
+          <span id="opt-maxpain" class="opt-value">—</span>
+          <span class="opt-sep">|</span>
+          <span class="opt-label">DEX</span>
+          <span id="opt-dex" class="opt-value">—</span>
+          <span class="opt-sep">|</span>
+          <span class="opt-label">Resilience</span>
+          <span id="opt-resilience" class="opt-value">—</span>
         </div>
         <div id="gamma-widget" class="gamma-widget" style="display:none"></div>
         <!-- Hidden span kept for JS compatibility -->

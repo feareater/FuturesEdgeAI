@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-// FuturesEdge AI — Phase 2: Alerts
+// FuturesEdge AI — Phase 2: Alerts (v2.1)
 // ═══════════════════════════════════════════════════════════════════════════════
 // Includes everything from Phase 1 (overlays) plus:
 //   · Setup detection: Zone Rejection, PDH/PDL Breakout, Trendline Break, BOS
@@ -8,6 +8,14 @@
 //   · alertcondition() for all setup types — set your alerts in TradingView
 //   · Multi-timeframe EMA regime check (15m vs current TF)
 //   · Recent signals panel (bottom-right)
+//
+// v2.1 improvements (matches server engine):
+//   · Regime strength-scaled bonus — EMA spread / ATR proxy (weak trend → smaller bonus)
+//   · VWAP proximity confluence: +8 pts when zone entry is within 0.3 × ATR of VWAP
+//   · Volume expansion: +12 pts (zones) / +10 pts (PDH/TL) when vol > 1.5 × 20-bar avg
+//   · Session transition suppression: −10 pts near RTH open (09:15–10:15) and close (15:45–16:15)
+//   · IOF boxes now labelled: FVG ▲/▼, OB ▲/▼ — status updates on fill/mitigation
+//   · OB body-to-range filter tightened to ≤ 50% (was 75%) — matches server iof.js
 // ═══════════════════════════════════════════════════════════════════════════════
 //@version=6
 indicator("FuturesEdge AI — Alerts", shorttitle="FE·Alerts",
@@ -99,6 +107,22 @@ bear15m   = ema9_15m < ema21_15m and ema21_15m < ema50_15m
 
 swingH = ta.pivothigh(high, swingLookback, swingLookback)
 swingL = ta.pivotlow(low,   swingLookback, swingLookback)
+
+// ── v2.1: regime strength proxy + volume + session noise ─────────────────────
+// Regime strength: EMA 9/50 spread relative to ATR. Wide spread = strong trend.
+// regStrength ranges 0.0–1.0 and scales the regime confidence bonus/penalty.
+emaSpread    = math.abs(ema9 - ema50)
+regStrength  = math.min(1.0, emaSpread / (2.0 * atr14))
+
+// Volume expansion: volume > 1.5× 20-bar SMA signals institutional participation.
+vol20        = ta.sma(volume, 20)
+volExpansion = vol20 > 0 and volume > vol20 * 1.5
+
+// Session noise: near RTH open (09:15–10:15 ET) or close (15:45–16:15 ET).
+// Stop-hunting and volatility spikes at these times reduce setup reliability.
+isNearOpen   = not na(time("", "0915-1015", "America/New_York"))
+isNearClose  = not na(time("", "1545-1615", "America/New_York"))
+sessionNoise = isRTH and (isNearOpen or isNearClose)
 
 // ───────────────────────────────────────────────────────────────────────────────
 // OVERLAYS
@@ -202,11 +226,15 @@ var bool[]  obBearMit    = array.new<bool>()
 if barstate.isconfirmed
     isImpulse = math.abs(close - open) > obImpulseMult * atr14
 
-    // ── FVG detection ────────────────────────────────────────────────────────
+    // ── FVG detection ─────────────────────────────────────────────────────────
+    // Bullish FVG: candle 3 low > candle 1 high (gap up — unfilled demand zone)
+    // Bearish FVG: candle 3 high < candle 1 low (gap down — unfilled supply zone)
     if showFVG
         if low > high[2]
             b = box.new(bar_index - 2, high[2], bar_index + fvgExtendBars, low,
-                        bgcolor=fvgBullColor, border_color=color.new(#26a69a, 50), border_width=1)
+                        bgcolor=fvgBullColor, border_color=color.new(#26a69a, 50), border_width=1,
+                        text="FVG ▲", text_size=size.tiny,
+                        text_color=color.new(#26a69a, 20), text_halign=text.align_left, text_valign=text.align_top)
             array.push(fvgBullBoxes, b)
             array.push(fvgBullTop,   low)
             array.push(fvgBullBot,   high[2])
@@ -214,41 +242,55 @@ if barstate.isconfirmed
 
         if high < low[2]
             b = box.new(bar_index - 2, high, bar_index + fvgExtendBars, low[2],
-                        bgcolor=fvgBearColor, border_color=color.new(#ef5350, 50), border_width=1)
+                        bgcolor=fvgBearColor, border_color=color.new(#ef5350, 50), border_width=1,
+                        text="FVG ▼", text_size=size.tiny,
+                        text_color=color.new(#ef5350, 20), text_halign=text.align_left, text_valign=text.align_top)
             array.push(fvgBearBoxes, b)
             array.push(fvgBearTop,   low[2])
             array.push(fvgBearBot,   high)
             array.push(fvgBearFill,  false)
 
-        for i = array.size(fvgBullBoxes) - 1 to 0
-            if not array.get(fvgBullFill, i)
-                bTop = array.get(fvgBullTop, i)
-                bBot = array.get(fvgBullBot, i)
-                if close <= bTop and close >= bBot
-                    array.set(fvgBullFill, i, true)
-                    b = array.get(fvgBullBoxes, i)
-                    box.set_bgcolor(b, color.new(#26a69a, 93))
-                    box.set_right(b, bar_index)
+        // Mark FVG as filled when price closes inside the gap
+        if array.size(fvgBullBoxes) > 0
+            for i = array.size(fvgBullBoxes) - 1 to 0
+                if not array.get(fvgBullFill, i)
+                    bTop = array.get(fvgBullTop, i)
+                    bBot = array.get(fvgBullBot, i)
+                    if close <= bTop and close >= bBot
+                        array.set(fvgBullFill, i, true)
+                        b = array.get(fvgBullBoxes, i)
+                        box.set_bgcolor(b, color.new(#26a69a, 93))
+                        box.set_right(b, bar_index)
+                        box.set_text(b, "FVG ▲ ✓")
+                        box.set_text_color(b, color.new(#26a69a, 55))
 
-        for i = array.size(fvgBearBoxes) - 1 to 0
-            if not array.get(fvgBearFill, i)
-                bTop = array.get(fvgBearTop, i)
-                bBot = array.get(fvgBearBot, i)
-                if close >= bBot and close <= bTop
-                    array.set(fvgBearFill, i, true)
-                    b = array.get(fvgBearBoxes, i)
-                    box.set_bgcolor(b, color.new(#ef5350, 93))
-                    box.set_right(b, bar_index)
+        if array.size(fvgBearBoxes) > 0
+            for i = array.size(fvgBearBoxes) - 1 to 0
+                if not array.get(fvgBearFill, i)
+                    bTop = array.get(fvgBearTop, i)
+                    bBot = array.get(fvgBearBot, i)
+                    if close >= bBot and close <= bTop
+                        array.set(fvgBearFill, i, true)
+                        b = array.get(fvgBearBoxes, i)
+                        box.set_bgcolor(b, color.new(#ef5350, 93))
+                        box.set_right(b, bar_index)
+                        box.set_text(b, "FVG ▼ ✓")
+                        box.set_text_color(b, color.new(#ef5350, 55))
 
-    // ── OB detection ─────────────────────────────────────────────────────────
+    // ── OB detection ──────────────────────────────────────────────────────────
+    // Bullish OB: last bearish candle before a bullish impulse move.
+    // Bearish OB: last bullish candle before a bearish impulse move.
+    // Body-to-range ≤ 50% required (matches server iof.js — was 75% in prior version).
     if showOB
         if isImpulse and close > open and close[1] < open[1]
             bH  = math.max(open[1], close[1])
             bL  = math.min(open[1], close[1])
             rng = high[1] - low[1]
-            if rng > 0 and (bH - bL) / rng <= 0.75
+            if rng > 0 and (bH - bL) / rng <= 0.50
                 b = box.new(bar_index - 1, bL, bar_index + obExtendBars, bH,
-                            bgcolor=obBullColor, border_color=color.new(#1976d2, 30), border_width=1)
+                            bgcolor=obBullColor, border_color=color.new(#1976d2, 30), border_width=1,
+                            text="OB ▲", text_size=size.tiny,
+                            text_color=color.new(#1976d2, 20), text_halign=text.align_left, text_valign=text.align_top)
                 array.push(obBullBoxes, b)
                 array.push(obBullTop, bH)
                 array.push(obBullBot, bL)
@@ -258,27 +300,36 @@ if barstate.isconfirmed
             bH  = math.max(open[1], close[1])
             bL  = math.min(open[1], close[1])
             rng = high[1] - low[1]
-            if rng > 0 and (bH - bL) / rng <= 0.75
+            if rng > 0 and (bH - bL) / rng <= 0.50
                 b = box.new(bar_index - 1, bL, bar_index + obExtendBars, bH,
-                            bgcolor=obBearColor, border_color=color.new(#c62828, 30), border_width=1)
+                            bgcolor=obBearColor, border_color=color.new(#c62828, 30), border_width=1,
+                            text="OB ▼", text_size=size.tiny,
+                            text_color=color.new(#c62828, 20), text_halign=text.align_left, text_valign=text.align_top)
                 array.push(obBearBoxes, b)
                 array.push(obBearTop, bH)
                 array.push(obBearBot, bL)
                 array.push(obBearMit, false)
 
-        for i = array.size(obBullBoxes) - 1 to 0
-            if not array.get(obBullMit, i) and close < array.get(obBullBot, i)
-                array.set(obBullMit, i, true)
-                b = array.get(obBullBoxes, i)
-                box.set_bgcolor(b, color.new(color.gray, 88))
-                box.set_border_color(b, color.new(color.gray, 70))
+        // Mark OB as mitigated when price closes through the block
+        if array.size(obBullBoxes) > 0
+            for i = array.size(obBullBoxes) - 1 to 0
+                if not array.get(obBullMit, i) and close < array.get(obBullBot, i)
+                    array.set(obBullMit, i, true)
+                    b = array.get(obBullBoxes, i)
+                    box.set_bgcolor(b, color.new(color.gray, 88))
+                    box.set_border_color(b, color.new(color.gray, 70))
+                    box.set_text(b, "OB ▲ ✗")
+                    box.set_text_color(b, color.new(color.gray, 55))
 
-        for i = array.size(obBearBoxes) - 1 to 0
-            if not array.get(obBearMit, i) and close > array.get(obBearTop, i)
-                array.set(obBearMit, i, true)
-                b = array.get(obBearBoxes, i)
-                box.set_bgcolor(b, color.new(color.gray, 88))
-                box.set_border_color(b, color.new(color.gray, 70))
+        if array.size(obBearBoxes) > 0
+            for i = array.size(obBearBoxes) - 1 to 0
+                if not array.get(obBearMit, i) and close > array.get(obBearTop, i)
+                    array.set(obBearMit, i, true)
+                    b = array.get(obBearBoxes, i)
+                    box.set_bgcolor(b, color.new(color.gray, 88))
+                    box.set_border_color(b, color.new(color.gray, 70))
+                    box.set_text(b, "OB ▼ ✗")
+                    box.set_text_color(b, color.new(color.gray, 55))
 
     // ── Cleanup: keep most recent N zones ────────────────────────────────────
     while array.size(fvgBullBoxes) > 30
@@ -316,35 +367,37 @@ bgcolor(showSession and isRTH ? color.new(color.blue, 97) : na, title="RTH Sessi
 bullZoneRejection(topArr, botArr, fillArr) =>
     rejected = false
     zLevel   = float(na)
-    for i = array.size(topArr) - 1 to 0
-        if not array.get(fillArr, i)
-            zTop = array.get(topArr, i)
-            zBot = array.get(botArr, i)
-            if low <= zTop and low >= zBot
-                totalRng  = high - low
-                wickSize  = zTop - low
-                wickRatio = totalRng > 0 ? wickSize / totalRng : 0.0
-                if close > zTop and wickRatio >= wickRatioMin
-                    rejected := true
-                    zLevel   := (zTop + zBot) / 2
-                    break
+    if array.size(topArr) > 0
+        for i = array.size(topArr) - 1 to 0
+            if not array.get(fillArr, i)
+                zTop = array.get(topArr, i)
+                zBot = array.get(botArr, i)
+                if low <= zTop and low >= zBot
+                    totalRng  = high - low
+                    wickSize  = zTop - low
+                    wickRatio = totalRng > 0 ? wickSize / totalRng : 0.0
+                    if close > zTop and wickRatio >= wickRatioMin
+                        rejected := true
+                        zLevel   := (zTop + zBot) / 2
+                        break
     [rejected, zLevel]
 
 bearZoneRejection(topArr, botArr, fillArr) =>
     rejected = false
     zLevel   = float(na)
-    for i = array.size(topArr) - 1 to 0
-        if not array.get(fillArr, i)
-            zTop = array.get(topArr, i)
-            zBot = array.get(botArr, i)
-            if high >= zBot and high <= zTop
-                totalRng  = high - low
-                wickSize  = high - zBot
-                wickRatio = totalRng > 0 ? wickSize / totalRng : 0.0
-                if close < zBot and wickRatio >= wickRatioMin
-                    rejected := true
-                    zLevel   := (zTop + zBot) / 2
-                    break
+    if array.size(topArr) > 0
+        for i = array.size(topArr) - 1 to 0
+            if not array.get(fillArr, i)
+                zTop = array.get(topArr, i)
+                zBot = array.get(botArr, i)
+                if high >= zBot and high <= zTop
+                    totalRng  = high - low
+                    wickSize  = high - zBot
+                    wickRatio = totalRng > 0 ? wickSize / totalRng : 0.0
+                    if close < zBot and wickRatio >= wickRatioMin
+                        rejected := true
+                        zLevel   := (zTop + zBot) / 2
+                        break
     [rejected, zLevel]
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -374,21 +427,34 @@ bearZoneRej = bearOBRej or bearFVGRej
 
 totalRng = high == low ? 0.0001 : (high - low)
 
+// ── Zone Rejection confidence ─────────────────────────────────────────────────
+// Regime bonus/penalty now scaled by regStrength (EMA spread proxy).
+// Strong bullish trend = full +15; weak trend = partial; neutral = 0.
+// VWAP proximity: +8 when entry is within 0.3 × ATR of VWAP (fair-value anchor).
+// Volume expansion: +12 when volume > 1.5× 20-bar average.
+// Session noise: −10 near RTH open/close (elevated stop-hunting, reduced reliability).
+
 bullZoneConf = math.min(100, math.max(0,
-    40
-    + (bullishStack ? 15 : bearishStack ? -20 : 0)
-    + (bull15m ? 15 : bear15m ? -10 : 5)
-    + (bullOBRej ? 5 : 0)
-    + ((close - low) / totalRng > 0.7 ? 10 : (close - low) / totalRng > 0.5 ? 5 : 0)
-    + (math.abs(close - open) / totalRng < 0.4 ? 5 : 0)))
+    40 +
+    (bullishStack ? math.round(regStrength * 15) : bearishStack ? math.round(-regStrength * 15) : 0) +
+    (bull15m ? 15 : bear15m ? -10 : 5) +
+    (bullOBRej ? 5 : 0) +
+    ((close - low) / totalRng > 0.7 ? 10 : (close - low) / totalRng > 0.5 ? 5 : 0) +
+    (math.abs(close - open) / totalRng < 0.4 ? 5 : 0) +
+    (math.abs(close - vwapVal) <= 0.3 * atr14 ? 8 : 0) +
+    (volExpansion ? 12 : 0) +
+    (sessionNoise ? -10 : 0)))
 
 bearZoneConf = math.min(100, math.max(0,
-    40
-    + (bearishStack ? 15 : bullishStack ? -20 : 0)
-    + (bear15m ? 15 : bull15m ? -10 : 5)
-    + (bearOBRej ? 5 : 0)
-    + ((high - close) / totalRng > 0.7 ? 10 : (high - close) / totalRng > 0.5 ? 5 : 0)
-    + (math.abs(close - open) / totalRng < 0.4 ? 5 : 0)))
+    40 +
+    (bearishStack ? math.round(regStrength * 15) : bullishStack ? math.round(-regStrength * 15) : 0) +
+    (bear15m ? 15 : bull15m ? -10 : 5) +
+    (bearOBRej ? 5 : 0) +
+    ((high - close) / totalRng > 0.7 ? 10 : (high - close) / totalRng > 0.5 ? 5 : 0) +
+    (math.abs(close - open) / totalRng < 0.4 ? 5 : 0) +
+    (math.abs(close - vwapVal) <= 0.3 * atr14 ? 8 : 0) +
+    (volExpansion ? 12 : 0) +
+    (sessionNoise ? -10 : 0)))
 
 // ── PDH / PDL Breakout ────────────────────────────────────────────────────────
 
@@ -396,18 +462,22 @@ pdhBreak = barstate.isconfirmed and close > prevDayHigh and close[1] <= prevDayH
 pdlBreak = barstate.isconfirmed and close < prevDayLow  and close[1] >= prevDayLow
 
 pdhConf = math.min(100, math.max(0,
-    45
-    + (bullishStack ? 15 : bearishStack ? -10 : 5)
-    + (bull15m ? 15 : bear15m ? -5 : 5)
-    + (close > vwapVal ? 5 : 0)
-    + (math.abs(close - prevDayHigh) < 0.5 * atr14 ? 5 : 0)))
+    45 +
+    (bullishStack ? math.round(regStrength * 15) : bearishStack ? math.round(-regStrength * 10) : 5) +
+    (bull15m ? 15 : bear15m ? -5 : 5) +
+    (close > vwapVal ? 8 : 0) +
+    (math.abs(close - prevDayHigh) < 0.5 * atr14 ? 5 : 0) +
+    (volExpansion ? 10 : 0) +
+    (sessionNoise ? -10 : 0)))
 
 pdlConf = math.min(100, math.max(0,
-    45
-    + (bearishStack ? 15 : bullishStack ? -10 : 5)
-    + (bear15m ? 15 : bull15m ? -5 : 5)
-    + (close < vwapVal ? 5 : 0)
-    + (math.abs(prevDayLow - close) < 0.5 * atr14 ? 5 : 0)))
+    45 +
+    (bearishStack ? math.round(regStrength * 15) : bullishStack ? math.round(-regStrength * 10) : 5) +
+    (bear15m ? 15 : bull15m ? -5 : 5) +
+    (close < vwapVal ? 8 : 0) +
+    (math.abs(prevDayLow - close) < 0.5 * atr14 ? 5 : 0) +
+    (volExpansion ? 10 : 0) +
+    (sessionNoise ? -10 : 0)))
 
 // ── Trendline Break ───────────────────────────────────────────────────────────
 
@@ -415,18 +485,22 @@ tlBullBreak = barstate.isconfirmed and not na(resistVal) and close[1] < resistVa
 tlBearBreak = barstate.isconfirmed and not na(supportVal) and close[1] > supportVal[1] and close < supportVal
 
 tlBullConf = math.min(100, math.max(0,
-    40
-    + (bullishStack ? 15 : bearishStack ? -10 : 5)
-    + (bull15m ? 15 : 5)
-    + (close > vwapVal ? 10 : 0)
-    + (math.abs(close - resistVal) > 0.3 * atr14 ? 10 : 5)))
+    40 +
+    (bullishStack ? math.round(regStrength * 15) : bearishStack ? math.round(-regStrength * 10) : 5) +
+    (bull15m ? 15 : 5) +
+    (close > vwapVal ? 10 : 0) +
+    (math.abs(close - resistVal) > 0.3 * atr14 ? 10 : 5) +
+    (volExpansion ? 10 : 0) +
+    (sessionNoise ? -10 : 0)))
 
 tlBearConf = math.min(100, math.max(0,
-    40
-    + (bearishStack ? 15 : bullishStack ? -10 : 5)
-    + (bear15m ? 15 : 5)
-    + (close < vwapVal ? 10 : 0)
-    + (math.abs(supportVal - close) > 0.3 * atr14 ? 10 : 5)))
+    40 +
+    (bearishStack ? math.round(regStrength * 15) : bullishStack ? math.round(-regStrength * 10) : 5) +
+    (bear15m ? 15 : 5) +
+    (close < vwapVal ? 10 : 0) +
+    (math.abs(supportVal - close) > 0.3 * atr14 ? 10 : 5) +
+    (volExpansion ? 10 : 0) +
+    (sessionNoise ? -10 : 0)))
 
 // ── BOS — Break of Structure ──────────────────────────────────────────────────
 
@@ -454,22 +528,22 @@ labelOffset = atr14 * 1.2
 
 if showSignalLabels and barstate.isconfirmed
     if bullZoneAlert
-        label.new(bar_index, low - labelOffset, "ZONE REJ ▲\n" + str.tostring(bullZoneConf) + "% conf",
+        label.new(bar_index, low - labelOffset, "ZONE REJ ▲\n" + str.tostring(bullZoneConf) + "%",
                   color=color.new(#26a69a, 20), textcolor=color.white, size=size.small, style=label.style_label_up)
     if bearZoneAlert
-        label.new(bar_index, high + labelOffset, "ZONE REJ ▼\n" + str.tostring(bearZoneConf) + "% conf",
+        label.new(bar_index, high + labelOffset, "ZONE REJ ▼\n" + str.tostring(bearZoneConf) + "%",
                   color=color.new(#ef5350, 20), textcolor=color.white, size=size.small, style=label.style_label_down)
     if pdhAlert
-        label.new(bar_index, high + labelOffset, "PDH BO ▲\n" + str.tostring(pdhConf) + "% conf",
+        label.new(bar_index, high + labelOffset, "PDH BO ▲\n" + str.tostring(pdhConf) + "%",
                   color=color.new(#1976d2, 20), textcolor=color.white, size=size.small, style=label.style_label_down)
     if pdlAlert
-        label.new(bar_index, low - labelOffset, "PDL BO ▼\n" + str.tostring(pdlConf) + "% conf",
+        label.new(bar_index, low - labelOffset, "PDL BO ▼\n" + str.tostring(pdlConf) + "%",
                   color=color.new(#c62828, 20), textcolor=color.white, size=size.small, style=label.style_label_up)
     if tlBullAlert
-        label.new(bar_index, high + labelOffset, "TL BREAK ▲\n" + str.tostring(tlBullConf) + "% conf",
+        label.new(bar_index, high + labelOffset, "TL BREAK ▲\n" + str.tostring(tlBullConf) + "%",
                   color=color.new(#00796b, 20), textcolor=color.white, size=size.small, style=label.style_label_down)
     if tlBearAlert
-        label.new(bar_index, low - labelOffset, "TL BREAK ▼\n" + str.tostring(tlBearConf) + "% conf",
+        label.new(bar_index, low - labelOffset, "TL BREAK ▼\n" + str.tostring(tlBearConf) + "%",
                   color=color.new(#b71c1c, 20), textcolor=color.white, size=size.small, style=label.style_label_up)
     if bullBOSAlert
         label.new(bar_index, high + labelOffset * 0.6, "BOS ▲",
@@ -482,33 +556,35 @@ if showSignalLabels and barstate.isconfirmed
 // alertcondition() — wire these in TradingView: Alt+A → Create Alert
 // ───────────────────────────────────────────────────────────────────────────────
 
+// alertcondition() message must be a const string — no str.tostring() or runtime expressions.
+// Confidence score is shown in the signal label on the chart; use {{close}} for live price.
 alertcondition(bullZoneAlert,
                title="FE · Bullish Zone Rejection",
-               message="[FuturesEdge] BULLISH ZONE REJECTION | {{ticker}} {{interval}} | Price: {{close}} | Conf: " + str.tostring(bullZoneConf) + "%")
+               message="[FuturesEdge] BULLISH ZONE REJECTION | {{ticker}} {{interval}} | Price: {{close}}")
 
 alertcondition(bearZoneAlert,
                title="FE · Bearish Zone Rejection",
-               message="[FuturesEdge] BEARISH ZONE REJECTION | {{ticker}} {{interval}} | Price: {{close}} | Conf: " + str.tostring(bearZoneConf) + "%")
+               message="[FuturesEdge] BEARISH ZONE REJECTION | {{ticker}} {{interval}} | Price: {{close}}")
 
 alertcondition(pdhAlert,
                title="FE · PDH Breakout (Bullish)",
-               message="[FuturesEdge] PDH BREAKOUT ▲ | {{ticker}} {{interval}} | Close: {{close}} | PDH: " + str.tostring(prevDayHigh, format.mintick) + " | Conf: " + str.tostring(pdhConf) + "%")
+               message="[FuturesEdge] PDH BREAKOUT ▲ | {{ticker}} {{interval}} | Close: {{close}}")
 
 alertcondition(pdlAlert,
                title="FE · PDL Breakout (Bearish)",
-               message="[FuturesEdge] PDL BREAKOUT ▼ | {{ticker}} {{interval}} | Close: {{close}} | PDL: " + str.tostring(prevDayLow, format.mintick) + " | Conf: " + str.tostring(pdlConf) + "%")
+               message="[FuturesEdge] PDL BREAKOUT ▼ | {{ticker}} {{interval}} | Close: {{close}}")
 
 alertcondition(tlBullAlert,
                title="FE · Bullish Trendline Break",
-               message="[FuturesEdge] TL BREAK ▲ | {{ticker}} {{interval}} | Close: {{close}} | Conf: " + str.tostring(tlBullConf) + "%")
+               message="[FuturesEdge] TL BREAK ▲ | {{ticker}} {{interval}} | Close: {{close}}")
 
 alertcondition(tlBearAlert,
                title="FE · Bearish Trendline Break",
-               message="[FuturesEdge] TL BREAK ▼ | {{ticker}} {{interval}} | Close: {{close}} | Conf: " + str.tostring(tlBearConf) + "%")
+               message="[FuturesEdge] TL BREAK ▼ | {{ticker}} {{interval}} | Close: {{close}}")
 
 alertcondition(bullBOSAlert or bearBOSAlert,
                title="FE · Break of Structure",
-               message="[FuturesEdge] BOS | {{ticker}} {{interval}} | Dir: " + (bullBOSAlert ? "BULLISH" : "BEARISH") + " | Close: {{close}}")
+               message="[FuturesEdge] BOS | {{ticker}} {{interval}} | Close: {{close}}")
 
 anyHighConf = (bullZoneAlert and bullZoneConf >= 80) or (bearZoneAlert and bearZoneConf >= 80) or
               (pdhAlert and pdhConf >= 80) or (pdlAlert and pdlConf >= 80) or

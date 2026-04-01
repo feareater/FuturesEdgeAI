@@ -4,6 +4,69 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v8.0] — 2026-03-31 — QQQ Options Intelligence + Pine Script Export
+
+### Added — CBOE Options Data Source
+- `server/data/options.js` — complete rewrite from Yahoo Finance v7 (broken, requires crumb auth) to CBOE Delayed Quotes API (`cdn.cboe.com/api/global/delayed_quotes/options/QQQ.json`). Free, no auth, returns full chain with delta/gamma/iv/OI per contract.
+- Option ticker parser: CBOE format `QQQ260330C00500000` → expiry/type/strike.
+- Strike filter: ±25% of spot (excludes deep ITM/OTM which distort GEX and max pain).
+- Expiry filter: next 30 days only (nearest-term OI most actionable).
+
+### Added — DEX (Dealer Delta Exposure)
+- Computed from CBOE delta × OI across all strikes. Dealers are short options they sold; to stay delta-neutral they hold offsetting futures positions.
+- Normalized to −100/+100 score. Bias labels: `bullish` (>20), `bearish` (<−20), `neutral`.
+- Displayed in options widget topbar: `DEX: +72 bullish`.
+
+### Added — Resilience Score
+- 0–100 composite: GEX sign component (±50), flip proximity adjustment (±30), DEX alignment bonus (±15).
+- Labels: `resilient` (≥65), `neutral` (40–64), `fragile` (<40).
+- Displayed in options widget topbar: `Resilience: 68 resilient`.
+
+### Added — Liquidity Zones
+- Clusters of adjacent strikes where combined OI ≥ 70th percentile. Adjacent strikes grouped into zones.
+- Each zone: `{ low, high, center, totalOI, bias }`. Bias: `call` (overhead resistance), `put` (below support), `balanced` (contested pivot).
+- Top 5 zones returned; scaled to futures price space.
+- Drawn on chart as filled horizontal bands (blue/teal/yellow by bias).
+
+### Added — Hedge Pressure Zones
+- Top 5 strikes by |GEX|. Positive GEX = dealer buying support (green). Negative = dealer selling resistance (red).
+- Top 3 shown on chart as dashed lines with ▲/▼ labels.
+
+### Added — Pivot Candidates
+- Strikes where |callOI − putOI| / totalOI < 25% AND totalOI ≥ median. No dominant dealer direction → natural turning points.
+- Top 3 shown on chart as orange dotted lines.
+
+### Added — Accurate ETF→Futures Scaling
+- `_fetchDailyLevels()` fetches `MNQ=F` and `QQQ` live prices simultaneously from Yahoo Finance.
+- Ratio = `liveFuturesPrice / liveEtfPrice` captured at same moment — eliminates prior ~10% error from mixing stale seed candles with CBOE delayed prices.
+
+### Added — QQQ Daily Reference Levels
+- `prevDayOpen`, `prevDayClose`, `curDayOpen` fetched from Yahoo daily endpoint.
+- Intraday 5m fallback for `curDayOpen` when daily in-progress candle open is null.
+- All three scaled to futures price space and drawn on chart (purple/amber/silver dotted lines).
+
+### Added — Pine Script Export
+- `GET /api/pine-script?symbol=MNQ` — generates complete TradingView Pine Script v6 with all levels baked in as constants.
+- All levels rendered as `plot()` series — integrated with chart price scale and data window (not overlay drawings).
+- `line.new(extend=extend.right)` + `label.new()` at `barstate.islast` adds right-extending lines and labels past the current bar.
+- `fill()` between `plot()` pairs creates filled liquidity zone bands.
+- Info table (P/C ratio, ATM IV, DEX, Resilience, Max Pain, GEX Flip, timestamp) via `table.new()`.
+- Button in nav: `Pine Script` → copies to clipboard. Repaste daily (or mid-session on 0DTE days Mon/Wed/Fri).
+- Pine Script v6 syntax: `array.new<float>`, explicit type annotations, individual `array.set()` calls, no trailing dots on floats.
+
+### Fixed — seedFetch.js Micro Tickers
+- Changed all SYMBOLS from `NQ=F`/`ES=F`/`GC=F`/`CL=F` to `MNQ=F`/`MES=F`/`MGC=F`/`MCL=F`.
+- Full-size and micro contracts trade at slightly different prices; using full-size for micro candles produced ~0.1–0.3% price discrepancy, compounding into incorrect options scaling ratios.
+
+### Fixed — GEX Flip Accuracy
+- Added ±25% spot strike filter to exclude deep ITM/OTM options from GEX scan.
+- Changed to outward-from-spot scan (alternating above/below) instead of sequential scan — gives nearest actionable flip level rather than a deep OTM artifact.
+
+### Added — Docs (docs.html)
+- Full "QQQ Options Levels" section with table of all 8 chart lines, explanations of each metric, widget decoder, and usage guidance.
+
+---
+
 ## [v7.0] — 2026-03-04 — All-Setups Scanner + MTF Confluence
 
 ### Added — All-Setups Scanner (`/scanner.html`)

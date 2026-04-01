@@ -659,6 +659,89 @@
         title: 'MaxPain',
       })});
     }
+    // Liquidity Zones — shaded price bands where clustered OI creates friction
+    // call-biased = overhead resistance (blue), put-biased = below support (green), balanced = pivot zone (yellow)
+    (data.scaledLiquidityZones || []).forEach((z, i) => {
+      if (z.center == null) return;
+      const opacity = (0.55 - i * 0.08).toFixed(2);
+      const color = z.bias === 'call'     ? `rgba(33,150,243,${opacity})`   // blue  — resistance liquidity
+                  : z.bias === 'put'      ? `rgba(38,166,154,${opacity})`   // teal  — support liquidity
+                  :                         `rgba(255,235,59,${opacity})`;  // yellow — balanced/pivot
+      optionsPriceLines.push({ line: candleSeries.createPriceLine({
+        price: z.center,
+        color,
+        lineWidth: 2,
+        lineStyle: LightweightCharts.LineStyle.SparseDotted,
+        axisLabelVisible: i === 0,
+        title: i === 0 ? `LZ ${z.bias[0].toUpperCase()}` : '',
+      })});
+    });
+
+    // Hedge Pressure Zones — where dealer gamma hedging is most mechanically intense
+    // support pressure = dealers buy dips here (green solid), resistance = dealers sell rips (red solid)
+    (data.scaledHedgePressureZones || []).slice(0, 3).forEach((z, i) => {
+      if (z.strike == null) return;
+      const opacity = (0.70 - i * 0.15).toFixed(2);
+      const color = z.pressure === 'support'
+        ? `rgba(76,175,80,${opacity})`    // green — mechanical buying
+        : `rgba(244,67,54,${opacity})`;   // red   — mechanical selling
+      optionsPriceLines.push({ line: candleSeries.createPriceLine({
+        price: z.strike,
+        color,
+        lineWidth: i === 0 ? 2 : 1,
+        lineStyle: LightweightCharts.LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: `HP ${z.pressure === 'support' ? '▲' : '▼'}`,
+      })});
+    });
+
+    // Pivot Candidates — balanced call/put OI, most likely natural turning points
+    (data.scaledPivotCandidates || []).slice(0, 3).forEach((z, i) => {
+      if (z.strike == null) return;
+      optionsPriceLines.push({ line: candleSeries.createPriceLine({
+        price: z.strike,
+        color: `rgba(255,152,0,${(0.70 - i * 0.15).toFixed(2)})`,  // orange
+        lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.SparseDotted,
+        axisLabelVisible: i === 0,
+        title: i === 0 ? 'Pivot' : '',
+      })});
+    });
+
+    // QQQ Daily reference levels — scaled to futures price space
+    const dl = data.scaledDaily;
+    if (dl) {
+      if (dl.prevDayOpen != null) {
+        optionsPriceLines.push({ line: candleSeries.createPriceLine({
+          price: dl.prevDayOpen,
+          color: 'rgba(179,136,255,0.75)',  // soft purple
+          lineWidth: 1,
+          lineStyle: Dotted,
+          axisLabelVisible: true,
+          title: 'QQQ PDO',
+        })});
+      }
+      if (dl.prevDayClose != null) {
+        optionsPriceLines.push({ line: candleSeries.createPriceLine({
+          price: dl.prevDayClose,
+          color: 'rgba(255,213,79,0.80)',   // amber
+          lineWidth: 1,
+          lineStyle: Dotted,
+          axisLabelVisible: true,
+          title: 'QQQ PDC',
+        })});
+      }
+      if (dl.curDayOpen != null) {
+        optionsPriceLines.push({ line: candleSeries.createPriceLine({
+          price: dl.curDayOpen,
+          color: 'rgba(224,224,224,0.70)',  // light grey
+          lineWidth: 1,
+          lineStyle: Dotted,
+          axisLabelVisible: true,
+          title: 'QQQ DO',
+        })});
+      }
+    }
   }
 
   // ── Gamma Levels ───────────────────────────────────────────────────────────

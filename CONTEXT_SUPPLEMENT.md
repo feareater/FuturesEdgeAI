@@ -1,0 +1,314 @@
+# FuturesEdge AI — Extended Context (Phases F–I + Options/Pine Script)
+
+> This document supplements CLAUDE.md with everything added after Phase 10.
+> Read CLAUDE.md first, then this document.
+
+---
+
+## Build Phases F–I (post-Phase 10)
+
+| Phase | Version | Focus |
+|---|---|---|
+| F | v4 | Archive, manual outcomes, manual trade log, OB/FVG quality scoring |
+| G | v5 | HVN/LVN (High/Low Volume Nodes), CVD (Cumulative Volume Delta), Options levels |
+| H | v6 | 1h/2h/4h timeframes, BTC/ETH/XRP crypto perpetuals via Coinbase INTX |
+| I | v7 | scanner.html (live all-setups view), MTF confluence scoring in runScan() |
+
+---
+
+## Instruments
+
+- **Futures**: MNQ (NQ=F), MGC (GC=F), MES (ES=F), MCL (CL=F)
+- **Crypto perpetuals**: BTC, ETH, XRP via Coinbase INTX (coinbaseFetch.js + coinbaseWS.js)
+- **Options proxies**: QQQ → MNQ, SPY → MES, GLD → MGC, USO → MCL
+
+---
+
+## Server Startup
+
+```bash
+PORT=3000 node server/index.js
+```
+
+VS Code shell sets PORT=54112 — always override explicitly.
+
+---
+
+## File Structure Additions (beyond CLAUDE.md)
+
+```
+server/
+  data/
+    options.js          ← CBOE options chain: OI walls, max pain, GEX, DEX, resilience
+    coinbaseFetch.js    ← Coinbase INTX BTC/ETH/XRP perpetual candles (REST)
+    coinbaseWS.js       ← Coinbase INTX WebSocket live price feed
+  analysis/
+    indicators.js       ← computeIndicators(candles, opts) — opts has {symbol, features}
+    setups.js           ← detectSetups(candles, ind, regime, opts) — opts has {calendarEvents}
+public/
+  scanner.html          ← Live all-symbols/all-setups scanner (Phase I / v7)
+  performance.html      ← Performance analytics (WR/PF/avgR)
+  backtest.html         ← Alert replay / step-through
+  docs.html             ← Setup guide + QQQ options level definitions
+config/
+  settings.json         ← risk block + features block (hot-toggle)
+```
+
+---
+
+## New API Routes (Phases F–I)
+
+| Route | Purpose |
+|---|---|
+| GET /api/options?symbol=MNQ&futuresPrice= | Options chain metrics — OI walls, max pain, GEX, DEX, resilience, liquidity zones |
+| GET /api/pine-script?symbol=MNQ | Generates complete Pine Script v6 with all levels baked in |
+| GET /api/calendar?symbol= | ForexFactory events (1h cache) |
+| GET /api/correlation | Pairwise rolling correlation matrix |
+| GET /api/relativestrength?base=MNQ&compare=MES | Normalized ratio + Pearson correlation |
+| GET /api/performance | WR/PF/avgR stats from alertCache |
+| GET /api/alerts?start=ISO&end=ISO | Date range filter for backtest |
+| GET/POST /api/settings | Includes features block |
+| POST /api/features | Hot-toggle feature flags (no restart needed) |
+
+---
+
+## Options Data — server/data/options.js
+
+### Data Source
+**CBOE Delayed Quotes API** — `https://cdn.cboe.com/api/global/delayed_quotes/options/QQQ.json`
+- Free, no auth, no API key required
+- Returns full options chain with delta/gamma/iv/OI per contract
+- Yahoo Finance v7 options was abandoned (requires crumb auth — returns 401)
+
+### Caching
+- CBOE chain: 1-hour cache (`CACHE_TTL_MS = 3_600_000`)
+- Daily OHLC: 30-minute cache (`DAILY_TTL_MS = 1_800_000`)
+
+### Scaling: ETF → Futures Price Space
+The ETF (QQQ at ~$470) and futures (MNQ at ~$19,700) trade at different price levels.
+All option strikes are scaled using: `ratio = liveMNQ=F price / liveQQQ price` (~41.9×).
+
+**Critical**: Both prices are fetched simultaneously from Yahoo Finance in `_fetchDailyLevels()`.
+Do NOT use stale seed candle prices for the futures side — the ratio will be wrong (~37×).
+
+```javascript
+const ETF_PROXY     = { MNQ: 'QQQ', MES: 'SPY', MGC: 'GLD', MCL: 'USO' };
+const FUTURES_YAHOO = { MNQ: 'MNQ=F', MES: 'MES=F', MGC: 'MGC=F', MCL: 'MCL=F' };
+```
+
+### Computed Metrics
+
+**OI Walls** — Top 3 strikes by combined call+put open interest. Represent levels where large
+options positions create price friction. Plotted as orange dashed lines.
+
+**Max Pain** — Strike K that minimizes total intrinsic payout to all option buyers.
+Formula: `Σ(max(0, S-K) × callOI + max(0, K-S) × putOI)` across all strikes.
+Stable after overnight OI update. Plotted as fuchsia dotted line.
+
+**GEX (Gamma Exposure)** — `(callGamma - putGamma) × OI × 100 × spot` per strike.
+- Positive total GEX: dealers net long gamma → market is self-stabilizing (mean-reverting)
+- Negative total GEX: dealers net short gamma → market is self-amplifying (trending)
+
+**GEX Flip** — Nearest strike to spot where per-strike net GEX changes sign.
+Scanned outward from spot (not sequentially). Strikes filtered to ±25% of spot to exclude
+deep ITM/OTM which distort the calculation. Plotted as aqua dashed line.
+
+**Call/Put Walls** — Highest-OI call strike above spot (call wall) and put strike below spot
+(put wall). Represent the most likely near-term range boundaries.
+
+**DEX (Dealer Delta Exposure)** — Sum of `(callDelta × callOI) + (putDelta × putOI) × 100`.
+Dealers are short options they sold → must hold an offsetting futures position to hedge.
+- Positive DEX: dealers net long futures (bullish bias, buying support)
+- Negative DEX: dealers net short futures (bearish bias, selling pressure)
+- Normalized to −100/+100 score; bias label: bullish (>20), bearish (<−20), neutral
+
+**Resilience Score** (0–100) — Measures how much the options market acts as shock absorber vs amplifier.
+- GEX component: +50 (positive GEX) or −50 (negative GEX), adjusted by distance from flip (±30)
+- DEX alignment bonus: +15 if DEX opposes GEX regime (absorbing), −10 if aligned (amplifying)
+- Labels: resilient (≥65), neutral (40–64), fragile (<40)
+
+**Liquidity Zones** — Clusters of adjacent strikes where combined OI ≥ 70th percentile.
+Each zone has: `{ low, high, center, totalOI, bias }` where bias = call/put/balanced.
+- call bias: overhead resistance (calls dominate)
+- put bias: below support (puts dominate)
+- balanced: contested pivot zone
+
+**Hedge Pressure Zones** — Top 5 strikes by |GEX|. Where mechanical hedging is most intense.
+- Positive GEX strike: dealer buying support on dips
+- Negative GEX strike: dealer selling resistance on rips
+
+**Pivot Candidates** — Strikes where |callOI - putOI| / totalOI < 25% AND totalOI ≥ median.
+No dominant dealer direction → natural turning points.
+
+### Daily Reference Levels (QQQ-scaled to futures)
+Fetched from Yahoo Finance `v8/finance/chart` daily endpoint:
+- `prevDayOpen` — prior session open
+- `prevDayClose` — prior session close
+- `curDayOpen` — today's open (with intraday 5m fallback if daily candle is in-progress)
+
+All three are then scaled by the live ratio to futures price space.
+
+### Return Shape (getOptionsData)
+```javascript
+{
+  // ETF-space values
+  oiWalls: [strike, strike, strike],
+  maxPain, callWall, putWall, gexFlip, totalGex,
+  dex, dexScore, dexBias,
+  resilience, resilienceLabel,
+  liquidityZones: [{ low, high, center, totalOI, bias }, ...],   // top 5
+  hedgePressureZones: [{ strike, gex, pressure }, ...],           // top 5
+  pivotCandidates: [{ strike, balance, totalOI }, ...],           // top 4
+  pcRatio, atmIV, etfPrice,
+  source: 'QQQ',
+  daily: { prevDayOpen, prevDayClose, curDayOpen, liveEtfPrice, liveFuturesPrice },
+
+  // Futures-space scaled values (present when live prices available)
+  scalingRatio,
+  scaledOiWalls, scaledMaxPain, scaledGexFlip, scaledCallWall, scaledPutWall,
+  scaledLiquidityZones, scaledHedgePressureZones, scaledPivotCandidates,
+  scaledDaily: { prevDayOpen, prevDayClose, curDayOpen },
+}
+```
+
+---
+
+## Crypto — server/data/coinbaseFetch.js + coinbaseWS.js
+
+- **Symbols**: BTC, ETH, XRP
+- **Exchange**: Coinbase INTX (perpetuals) — product IDs: `BTC-PERP-INTX`, `ETH-PERP-INTX`, `XRP-PERP-INTX`
+- `coinbaseFetch.js` — REST: fetches historical candles for seeding
+- `coinbaseWS.js` — WebSocket: live price feed, feeds into snapshot candle store
+- These symbols share the same `getCandles(symbol, tf)` interface as futures
+
+---
+
+## Features Block — config/settings.json
+
+All features default to `true` except `soundAlerts` and `pushNotifications` (false).
+Hot-toggle via `POST /api/features { "featureName": true|false }` — no restart needed.
+
+```json
+{
+  "features": {
+    "volumeProfile": true,
+    "openingRange": true,
+    "sessionLevels": true,
+    "economicCalendar": true,
+    "relativeStrength": true,
+    "correlationHeatmap": true,
+    "performanceStats": true,
+    "alertReplay": true,
+    "soundAlerts": false,
+    "pushNotifications": false
+  }
+}
+```
+
+---
+
+## Alert Schema Notes
+
+- `setup.direction` values: `"bullish"` / `"bearish"` (NOT "long"/"short")
+- `regime.direction` values: `"bullish"` / `"bearish"` / `"neutral"`
+- `GET /api/alerts` returns `{ alerts: [...] }` — not a raw array
+- `setup.mtfConfluence` shape: `{ tfs: ['5m','15m'], bonus: N }` (added in v7)
+
+---
+
+## Dashboard Options Widget (index.html)
+
+The options widget in the top bar shows:
+```
+[Source] P/C: 1.02 | IV: 32.1% | MaxPain: 19850 | DEX: +72 bullish | Resilience: 68 resilient
+```
+
+Widget element IDs: `opt-source`, `opt-pc`, `opt-iv`, `opt-maxpain`, `opt-dex`, `opt-resilience`
+
+**Pine Script button** in nav: `<button id="pine-copy-btn" onclick="window._copyPineScript()">Pine Script</button>`
+Fetches `/api/pine-script`, copies generated Pine Script v6 to clipboard.
+
+---
+
+## Pine Script Generation — GET /api/pine-script?symbol=MNQ
+
+Generates a complete TradingView Pine Script v6 with all options levels baked in as constants.
+Since Pine Script cannot make HTTP requests, values are embedded at generation time.
+
+**Why baked constants**: TradingView Pine has no external HTTP access. Levels are computed
+server-side and embedded as `float oi1 = 24887` etc. Refresh by regenerating and repasting.
+Typical cadence: once before market open. On 0DTE days (Mon/Wed/Fri for QQQ), refresh mid-session.
+
+**Rendering approach** (important — was changed to fix "overlay image" problem):
+- `plot()` — draws lines across historical bars, integrates with price scale and data window
+- `line.new(extend=extend.right)` at `barstate.islast` — extends each level into future (right of last bar)
+- `label.new(bar_index + 2, ...)` at `barstate.islast` — places labels just right of current bar
+- `fill()` between two `plot()` calls — creates filled liquidity zone bands
+- Info table uses `table.new()` — correct for tabular data
+
+**v6 syntax requirements** (do not revert these):
+- `//@version=6`
+- `array.new<float>(N, na)` — NOT `array.new_float`
+- `array.new<string>(N, "")` — NOT `array.new_string`
+- Individual `array.set(arr, i, val)` on separate lines — NOT comma-separated `:=` assignments
+- Explicit type annotations: `float oi1 = ...`, `int dex_score = ...`, `string dex_bias = ...`
+- No trailing dots on float literals: `23500` not `23500.`
+
+---
+
+## Scanner — public/scanner.html
+
+Added in Phase I (v7). Shows all setup alerts across all symbols and timeframes in real time.
+`runScan()` in server/index.js powers this — includes MTF confluence scoring.
+
+---
+
+## Correlation Heatmap
+
+`GET /api/correlation` returns 20-bar rolling Pearson correlation on 5m log-returns.
+Instruments: MNQ, MES, MCL, MGC, SIL, DXY, VIX, BTC, ETH, XRP, XLM.
+
+**How to use it**:
+- Strong positive correlation (>0.7): instruments moving together — confirms macro move
+- Negative correlation: risk-off/risk-on divergence — check if MNQ and DXY inverting (typical)
+- BTC diverging from MNQ: crypto-specific move, not macro signal — filter out
+- All instruments in lockstep: macro event-driven, setups less reliable
+
+---
+
+## seedFetch.js Symbols
+
+Updated to use micro contract tickers (not full-size NQ=F, ES=F etc.):
+```javascript
+const SYMBOLS = {
+  MNQ: 'MNQ=F',  // NOT NQ=F — MNQ and NQ trade at slightly different prices
+  MGC: 'MGC=F',
+  MES: 'MES=F',
+  MCL: 'MCL=F',
+  SIL: 'SIL',
+};
+```
+Using NQ=F for MNQ data produces a ~0.1–0.3% price discrepancy which compounds into
+incorrect options scaling ratios.
+
+---
+
+## Known Limitations
+
+- CBOE data is 15-min delayed (free tier) — options levels are approximate intraday
+- Pine Script levels are static until regenerated and repasted — not live-updating
+- Crypto (BTC/ETH/XRP) options data not available — options panel only shown for MNQ/MES
+- `pushNotifications` feature flag exists but is not yet implemented
+
+---
+
+## Port Assignments
+
+| Port | Project |
+|---|---|
+| 3000 | FuturesEdgeAI |
+| 3001 | BudgetApp |
+| 3002 | JobEdge |
+| 3003 | WeddingPlanner |
+| 3004 | EdgeLog |
+| 3005 | PropFirmTools |

@@ -2,3 +2,6 @@ node_modules/
 .env
 .claude/
 data/logs/*.json
+server.log
+*_tmp.json
+*_tmp.js

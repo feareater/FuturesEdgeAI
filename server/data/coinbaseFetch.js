@@ -20,6 +20,7 @@ const CRYPTO_INSTRUMENTS = {
   BTC: 'BTC-PERP',
   ETH: 'ETH-PERP',
   XRP: 'XRP-PERP',
+  XLM: 'XLM-PERP',
 };
 
 // Granularities natively supported by Coinbase INTX + number of bars per day
