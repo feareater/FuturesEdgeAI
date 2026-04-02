@@ -25,7 +25,7 @@ const autotrader                = require('./trading/autotrader');
 const simulator                 = require('./trading/simulator');
 const { computeRelativeStrength } = require('./analysis/relativeStrength');
 const { computeCorrelationMatrix } = require('./analysis/correlation');
-const { computePerformanceStats }  = require('./analysis/performanceStats');
+const { computePerformanceStats, computeOptimizeStats } = require('./analysis/performanceStats');
 const { predict }                  = require('./analysis/predictor');
 const { getCalendarEvents } = require('./data/calendar');
 const { getOptionsData }    = require('./data/options');
@@ -1410,6 +1410,31 @@ app.get('/api/performance', (_req, res) => {
     res.json(stats);
   } catch (err) {
     console.error('[api] /performance error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/performance/optimize — richer breakdown for the Optimize tab
+// Uses setup_archive.json if non-empty, otherwise falls back to alertCache.
+// Cached in-memory for 5 minutes.
+let _optCache = null, _optCacheTs = 0;
+const OPT_CACHE_TTL = 5 * 60 * 1000;
+
+app.get('/api/performance/optimize', (_req, res) => {
+  try {
+    if (_optCache && (Date.now() - _optCacheTs) < OPT_CACHE_TTL) {
+      return res.json(_optCache);
+    }
+    let alerts = alertCache;
+    try {
+      const archived = loadArchive();
+      if (Array.isArray(archived) && archived.length > 0) alerts = archived;
+    } catch {}
+    _optCache   = computeOptimizeStats(alerts);
+    _optCacheTs = Date.now();
+    res.json(_optCache);
+  } catch (err) {
+    console.error('[api] /performance/optimize error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

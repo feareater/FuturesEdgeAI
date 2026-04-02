@@ -1,11 +1,11 @@
-# FuturesEdge AI — Extended Context (Phases F–I + Options/Pine Script)
+# FuturesEdge AI — Extended Context (Phases F–M + Options/Pine Script)
 
 > This document supplements CLAUDE.md with everything added after Phase 10.
 > Read CLAUDE.md first, then this document.
 
 ---
 
-## Build Phases F–I (post-Phase 10)
+## Build Phases F–M (post-Phase 10)
 
 | Phase | Version | Focus |
 |---|---|---|
@@ -13,6 +13,10 @@
 | G | v5 | HVN/LVN (High/Low Volume Nodes), CVD (Cumulative Volume Delta), Options levels |
 | H | v6 | 1h/2h/4h timeframes, BTC/ETH/XRP crypto perpetuals via Coinbase INTX |
 | I | v7 | scanner.html (live all-setups view), MTF confluence scoring in runScan() |
+| J | v8 | CBOE options integration, DEX/Resilience/Liquidity/Hedge/Pivot zones, Pine Script export, SIL |
+| K | v8.x | Stats page 4-tab redesign, dashboard Futures/Crypto mode split, nav cleanup |
+| L | v10.0 | Historical backtesting system — Databento data pipeline, HP computation, backtest engine, backtest2.html |
+| M | v10.1–10.3 | Backtest bias fixes, trading hours filter, Compare tab, Optimize tab |
 
 ---
 
@@ -293,12 +297,36 @@ incorrect options scaling ratios.
 
 ---
 
+## Backtest System (v10.x) — Phase L/M
+
+### Engine (`server/backtest/engine.js`)
+- `runBacktestMTF()` — bar-by-bar replay, no lookahead, current-bar filter, OR dedup per session/direction
+- Trade object fields: `symbol`, `date`, `timeframe`, `setupType`, `direction`, `entryTs`, `entry`, `sl`, `tp`, `confidence`, `outcome`, `exitTs`, `exitPrice`, `netPnl`, `grossPnl`, `hour` (ET), `hpProximity`, `resilienceLabel`, `dexBias`
+- **No** `regime`, `nearEvent`, `mtfConfluence`, or `rMultiple` on trade objects (applied upstream)
+- `excludeHours` config: array of ET hours (0–23) to skip at entry
+
+### Backtest UI (`public/backtest2.html`, `backtest2.js`, `backtest2.css`)
+- 5 tabs: Summary / Trades / Replay / Compare / **Optimize**
+- **Optimize tab** — client-side analysis of `_currentResults.trades`, no API call
+  - Confidence sub-tab: threshold floors 60–90%, optimal floor (best PF where n≥10), MTF impact
+  - Regime sub-tab: direction + HP proximity; regime/calendar not on trade records
+  - Time of Day: ET hour heatmap (9–18) per setup type, uses `trade.hour`
+  - Notifications: static tier/dedup/staleness design reference
+  - State vars: `_bt2ActiveSubtab`, `_bt2OptSetupType`, `_bt2OptSymbol`
+
+### `/api/performance/optimize` (separate from backtest)
+- Computes threshold/regime/MTF/hour stats from alertCache (live alerts, not backtest trades)
+- 5-minute cache; exports `computeOptimizeStats` from `server/analysis/performanceStats.js`
+
+---
+
 ## Known Limitations
 
 - CBOE data is 15-min delayed (free tier) — options levels are approximate intraday
 - Pine Script levels are static until regenerated and repasted — not live-updating
 - Crypto (BTC/ETH/XRP) options data not available — options panel only shown for MNQ/MES
 - `pushNotifications` feature flag exists but is not yet implemented
+- Backtest trade objects do not include regime/nearEvent/mtfConfluence fields (v10.x)
 
 ---
 

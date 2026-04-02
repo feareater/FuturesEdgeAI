@@ -153,6 +153,7 @@
             <button class="bt2-tab" data-tab="trades">Trades</button>
             <button class="bt2-tab" data-tab="replay">Replay</button>
             <button class="bt2-tab" data-tab="compare">Compare</button>
+            <button class="bt2-tab" data-tab="optimize">Optimize</button>
           </div>
 
           <!-- Summary Tab -->
@@ -275,6 +276,50 @@
               <div class="bt2-placeholder">Add two or more runs to compare.</div>
             </div>
           </div>
+
+          <!-- Optimize Tab -->
+          <div id="bt2-tab-optimize" class="bt2-tab-panel">
+
+            <!-- Placeholder when no results loaded -->
+            <div id="bt2-opt-placeholder" class="bt2-placeholder">
+              Run or load a backtest to see optimization analysis.
+            </div>
+
+            <!-- Main content (hidden until results loaded) -->
+            <div id="bt2-opt-main" style="display:none">
+
+              <!-- Controls -->
+              <div class="bt2-opt-controls">
+                <div class="bt2-opt-ctrl-group">
+                  <label class="bt2-opt-ctrl-label">Setup type</label>
+                  <select id="bt2-opt-setup-sel" class="bt2-opt-select">
+                    <option value="all">All setups</option>
+                  </select>
+                </div>
+                <div class="bt2-opt-ctrl-group">
+                  <label class="bt2-opt-ctrl-label">Symbol</label>
+                  <select id="bt2-opt-symbol-sel" class="bt2-opt-select">
+                    <option value="all">All symbols</option>
+                  </select>
+                </div>
+              </div>
+
+              <!-- Sub-tab pills -->
+              <div class="bt2-opt-subtabs">
+                <button class="bt2-opt-pill active" data-subtab="confidence">Confidence</button>
+                <button class="bt2-opt-pill" data-subtab="regime">Regime</button>
+                <button class="bt2-opt-pill" data-subtab="heatmap">Time of Day</button>
+                <button class="bt2-opt-pill" data-subtab="notifications">Notifications</button>
+              </div>
+
+              <!-- Sub-tab panels -->
+              <div id="bt2-opt-panel-confidence" class="bt2-opt-panel"></div>
+              <div id="bt2-opt-panel-regime"      class="bt2-opt-panel" style="display:none"></div>
+              <div id="bt2-opt-panel-heatmap"     class="bt2-opt-panel" style="display:none"></div>
+              <div id="bt2-opt-panel-notifications" class="bt2-opt-panel" style="display:none"></div>
+
+            </div><!-- /#bt2-opt-main -->
+          </div><!-- /#bt2-tab-optimize -->
 
         </section>
       </div>

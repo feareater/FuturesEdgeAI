@@ -85,6 +85,9 @@ function bindEvents() {
       if (btn.dataset.tab === 'compare') {
         initCompareTab();
       }
+      if (btn.dataset.tab === 'optimize') {
+        initOptimizeTab();
+      }
     });
   });
 
@@ -1324,4 +1327,782 @@ function showToast(msg, type) {
   div.textContent = msg;
   document.body.appendChild(div);
   setTimeout(() => div.remove(), 3000);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// OPTIMIZE TAB
+// Works entirely from _currentResults.trades — no additional API calls.
+// Trade fields used: setupType, symbol, timeframe, direction, outcome,
+//   confidence, entryTs, hour, entry, sl, tp, exitPrice, netPnl,
+//   hpProximity (optional), resilienceLabel (optional).
+// ═══════════════════════════════════════════════════════════════════════
+
+let _bt2ActiveSubtab = localStorage.getItem('bt2_opt_subtab') || 'confidence';
+let _bt2OptSetupType = 'all';
+let _bt2OptSymbol    = 'all';
+
+// ── Sub-tab pill listeners ─────────────────────────────────────────────────
+document.querySelectorAll('.bt2-opt-pill').forEach(btn => {
+  btn.addEventListener('click', () => _bt2OptSubtabName(btn.dataset.subtab));
+});
+
+// ── Shared select listeners (delegated — elements may not exist at parse time) ─
+document.addEventListener('change', e => {
+  if (e.target.id === 'bt2-opt-setup-sel') {
+    _bt2OptSetupType = e.target.value;
+    _renderOptimizeTab();
+  }
+  if (e.target.id === 'bt2-opt-symbol-sel') {
+    _bt2OptSymbol = e.target.value;
+    _renderOptimizeTab();
+  }
+});
+
+// ── Sub-tab switch ─────────────────────────────────────────────────────────
+function _bt2OptSubtabName(name) {
+  _bt2ActiveSubtab = name;
+  localStorage.setItem('bt2_opt_subtab', name);
+  document.querySelectorAll('.bt2-opt-pill').forEach(b => {
+    b.classList.toggle('active', b.dataset.subtab === name);
+  });
+  document.querySelectorAll('.bt2-opt-panel').forEach(p => p.style.display = 'none');
+  const panel = document.getElementById('bt2-opt-panel-' + name);
+  if (panel) panel.style.display = '';
+  _renderOptimizeTab();
+}
+
+// ── Entry point (called from tab click handler) ───────────────────────────
+function initOptimizeTab() {
+  _renderOptimizeTab();
+}
+
+// ── Master render dispatcher ──────────────────────────────────────────────
+function _renderOptimizeTab() {
+  const placeholder = document.getElementById('bt2-opt-placeholder');
+  const main        = document.getElementById('bt2-opt-main');
+  if (!placeholder || !main) return;
+
+  if (!_currentResults) {
+    placeholder.style.display = '';
+    main.style.display = 'none';
+    return;
+  }
+
+  placeholder.style.display = 'none';
+  main.style.display = '';
+
+  _bt2OptPopulateSelects();
+
+  // Ensure correct sub-tab panel is shown
+  document.querySelectorAll('.bt2-opt-panel').forEach(p => p.style.display = 'none');
+  const activePanel = document.getElementById('bt2-opt-panel-' + _bt2ActiveSubtab);
+  if (activePanel) activePanel.style.display = '';
+  document.querySelectorAll('.bt2-opt-pill').forEach(b => {
+    b.classList.toggle('active', b.dataset.subtab === _bt2ActiveSubtab);
+  });
+
+  switch (_bt2ActiveSubtab) {
+    case 'confidence':    _bt2RenderConfidence(); break;
+    case 'regime':        _bt2RenderRegime(); break;
+    case 'heatmap':       _bt2RenderHeatmap(); break;
+    case 'notifications': _bt2RenderNotifications(); break;
+  }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+
+/** Populate setup type + symbol selects from current results, preserving selection */
+function _bt2OptPopulateSelects() {
+  const trades   = (_currentResults?.trades || []);
+  const setupSel = document.getElementById('bt2-opt-setup-sel');
+  const symSel   = document.getElementById('bt2-opt-symbol-sel');
+  if (!setupSel || !symSel) return;
+
+  const setups  = [...new Set(trades.map(t => t.setupType).filter(Boolean))].sort();
+  const symbols = [...new Set(trades.map(t => t.symbol).filter(Boolean))].sort();
+
+  const SETUP_LABELS = {
+    zone_rejection: 'Zone Rejection', pdh_breakout: 'PDH Breakout',
+    trendline_break: 'Trendline Break', or_breakout: 'OR Breakout',
+  };
+
+  setupSel.innerHTML = '<option value="all">All setups</option>' +
+    setups.map(s => `<option value="${s}"${_bt2OptSetupType===s?' selected':''}>${SETUP_LABELS[s]||s}</option>`).join('');
+  symSel.innerHTML = '<option value="all">All symbols</option>' +
+    symbols.map(s => `<option value="${s}"${_bt2OptSymbol===s?' selected':''}>${s}</option>`).join('');
+
+  // If selection no longer valid, reset
+  if (_bt2OptSetupType !== 'all' && !setups.includes(_bt2OptSetupType)) _bt2OptSetupType = 'all';
+  if (_bt2OptSymbol    !== 'all' && !symbols.includes(_bt2OptSymbol))    _bt2OptSymbol    = 'all';
+}
+
+/** Returns trades filtered by current setup type + symbol selects, outcome !== open */
+function _bt2OptGetTrades() {
+  return (_currentResults?.trades || []).filter(t => {
+    if (t.outcome === 'open') return false;
+    if (_bt2OptSetupType !== 'all' && t.setupType !== _bt2OptSetupType) return false;
+    if (_bt2OptSymbol    !== 'all' && t.symbol    !== _bt2OptSymbol)    return false;
+    return true;
+  });
+}
+
+/** Compute R-multiple for a trade from entry/sl/tp/exit */
+function _bt2R(t) {
+  const risk = Math.abs((t.entry ?? 0) - (t.sl ?? 0));
+  if (!risk) return 0;
+  if (t.outcome === 'won') return +( Math.abs((t.tp ?? t.entry) - (t.entry ?? 0)) / risk ).toFixed(2);
+  if (t.outcome === 'lost') return -1;
+  // timeout / closed — use actual exit if available
+  if (t.exitPrice != null && t.entry != null) {
+    const signed = (t.direction === 'bullish' ? 1 : -1) * (t.exitPrice - t.entry);
+    return +(signed / risk).toFixed(2);
+  }
+  return 0;
+}
+
+/**
+ * Compute threshold analysis rows for a trade set.
+ * Returns { rows: [{floor, n, wr, pf, avgR}], optimalFloor, sampleWarning }
+ */
+function _bt2ComputeThresholds(trades) {
+  const FLOORS = [60, 65, 70, 75, 80, 85, 90];
+  const rows = FLOORS.map(floor => {
+    const sub  = trades.filter(t => (t.confidence ?? 0) >= floor);
+    const n    = sub.length;
+    if (n === 0) return { floor, n: 0, wr: null, pf: null, avgR: null };
+    const won  = sub.filter(t => t.outcome === 'won');
+    const lost = sub.filter(t => t.outcome === 'lost');
+    const wr   = won.length / n;
+    const sumWin  = won.reduce( (s, t) => s + Math.max(0, _bt2R(t)), 0);
+    const sumLoss = lost.reduce((s, t) => s + Math.abs(_bt2R(t)),    0);
+    const pf    = sumLoss > 0 ? sumWin / sumLoss : (sumWin > 0 ? null : null);
+    const allR  = sub.map(t => _bt2R(t));
+    const avgR  = allR.reduce((s, r) => s + r, 0) / n;
+    return {
+      floor,
+      n,
+      wr:   +wr.toFixed(4),
+      pf:   pf != null ? +pf.toFixed(2) : null,
+      avgR: +avgR.toFixed(2),
+    };
+  });
+
+  let optimalFloor = null, bestPf = -1;
+  for (const r of rows) {
+    if (r.n >= 10 && r.pf != null && r.pf > bestPf) { bestPf = r.pf; optimalFloor = r.floor; }
+  }
+
+  return { rows, optimalFloor, sampleWarning: trades.length < 30 };
+}
+
+/** Bar-row HTML helper used by Confidence and Regime tabs */
+function _bt2BarRow(label, n, wr) {
+  if (n < 3) {
+    return `<div class="bt2-opt-bar-row">
+      <div class="bt2-opt-bar-label">${label}</div>
+      <div style="color:var(--muted,#6b7280);font-size:11px">insufficient data (n=${n})</div>
+    </div>`;
+  }
+  const pct  = Math.round(wr * 100);
+  const fill = wr >= 0.72 ? 'green' : wr >= 0.60 ? 'amber' : 'red';
+  return `<div class="bt2-opt-bar-row">
+    <div class="bt2-opt-bar-label">${label}</div>
+    <div class="bt2-opt-bar-bg"><div class="bt2-opt-bar-fill ${fill}" style="width:${Math.min(100,pct)}%"></div></div>
+    <div style="font-size:12px;font-weight:600;min-width:38px;text-align:right">${pct}%</div>
+    <div class="bt2-opt-bar-n">n=${n}</div>
+  </div>`;
+}
+
+/** Grade badge HTML */
+function _bt2GradeBadge(wr, pf) {
+  if (wr == null) return '';
+  if (wr >= 0.75 && pf >= 2.5) return '<span class="bt2-opt-badge green">strong edge</span>';
+  if (wr >= 0.65)               return '<span class="bt2-opt-badge amber">marginal</span>';
+  return '<span class="bt2-opt-badge red">noise zone</span>';
+}
+
+// ── Confidence sub-tab ────────────────────────────────────────────────────
+function _bt2RenderConfidence() {
+  const panel = document.getElementById('bt2-opt-panel-confidence');
+  if (!panel) return;
+
+  const trades = _bt2OptGetTrades();
+  const { rows, optimalFloor, sampleWarning } = _bt2ComputeThresholds(trades);
+  const best = rows.find(r => r.floor === optimalFloor);
+
+  // Metric cards
+  const metrics = `<div class="bt2-opt-metrics">
+    <div class="bt2-opt-metric">
+      <div class="bt2-opt-metric-label">Optimal Floor</div>
+      <div class="bt2-opt-metric-val">${optimalFloor != null ? optimalFloor + '%' : '—'}</div>
+    </div>
+    <div class="bt2-opt-metric">
+      <div class="bt2-opt-metric-label">Win Rate @ Optimal</div>
+      <div class="bt2-opt-metric-val">${best?.wr != null ? Math.round(best.wr*100)+'%' : '—'}</div>
+    </div>
+    <div class="bt2-opt-metric">
+      <div class="bt2-opt-metric-label">Profit Factor @ Optimal</div>
+      <div class="bt2-opt-metric-val">${best?.pf ?? '—'}</div>
+    </div>
+    <div class="bt2-opt-metric">
+      <div class="bt2-opt-metric-label">Trades @ Optimal</div>
+      <div class="bt2-opt-metric-val">${best?.n ?? '—'}</div>
+    </div>
+  </div>`;
+
+  const warning = sampleWarning
+    ? '<div class="bt2-opt-notice-amber">Fewer than 30 completed trades — results are indicative only.</div>'
+    : '';
+
+  // Threshold table
+  const tableRows = rows.map(r => {
+    const isOpt  = r.floor === optimalFloor;
+    const wrPct  = r.wr != null ? Math.round(r.wr * 100) : null;
+    const barClr = r.wr == null ? 'gray' : r.wr >= 0.72 ? 'green' : r.wr >= 0.60 ? 'amber' : 'red';
+    const lowN   = (r.n > 0 && r.n < 10) ? '<span class="bt2-opt-badge amber" style="font-size:9px">low N</span>' : '';
+    if (r.n === 0) {
+      return `<tr><td>${r.floor}%</td><td>0</td><td colspan="4" style="color:var(--muted,#6b7280);text-align:center">—</td></tr>`;
+    }
+    return `<tr class="${isOpt ? 'opt-best' : ''}">
+      <td>${isOpt ? '★ ' : ''}${r.floor}%</td>
+      <td>${r.n} ${lowN}</td>
+      <td><div class="bt2-opt-bar-bg" style="min-width:60px"><div class="bt2-opt-bar-fill ${barClr}" style="width:${wrPct}%"></div></div></td>
+      <td>${wrPct != null ? wrPct+'%' : '—'}</td>
+      <td>${r.pf ?? '—'}</td>
+      <td>${r.avgR != null ? r.avgR+'R' : '—'}</td>
+      <td>${_bt2GradeBadge(r.wr, r.pf)}</td>
+    </tr>`;
+  }).join('');
+
+  const table = `<table class="bt2-opt-table">
+    <thead><tr><th>Min Conf</th><th>N</th><th>Bar</th><th>Win Rate</th><th>PF</th><th>Avg R</th><th>Grade</th></tr></thead>
+    <tbody>${tableRows}</tbody>
+  </table>`;
+
+  // MTF section — group by mtfConfluence presence
+  const mtfGroups = { 'MTF confirmed': [], 'No MTF': [] };
+  for (const t of trades) {
+    const mtf = t.mtfConfluence;
+    if (mtf && (typeof mtf === 'object' ? (mtf.tfs?.length > 0) : true)) {
+      mtfGroups['MTF confirmed'].push(t);
+    } else {
+      mtfGroups['No MTF'].push(t);
+    }
+  }
+  const mtfGroupsWithData = Object.entries(mtfGroups).filter(([, g]) => g.length >= 3);
+  let mtfHtml = '';
+  if (mtfGroupsWithData.length >= 2) {
+    const mtfRows = mtfGroupsWithData.map(([label, g]) => {
+      const won = g.filter(t => t.outcome === 'won').length;
+      const wr  = g.length > 0 ? won / g.length : 0;
+      const sumWin  = g.filter(t=>t.outcome==='won').reduce((s,t)=>s+Math.max(0,_bt2R(t)),0);
+      const sumLoss = g.filter(t=>t.outcome==='lost').reduce((s,t)=>s+Math.abs(_bt2R(t)),0);
+      const pf = sumLoss > 0 ? +(sumWin/sumLoss).toFixed(2) : null;
+      return `<tr><td>${label}</td><td>${g.length}</td><td>${Math.round(wr*100)}%</td><td>${pf??'—'}</td></tr>`;
+    }).join('');
+    mtfHtml = `<div style="margin-top:14px">
+      <div class="bt2-section-label">MTF confluence impact</div>
+      <table class="bt2-opt-table"><thead><tr><th>Group</th><th>N</th><th>WR</th><th>PF</th></tr></thead>
+      <tbody>${mtfRows}</tbody></table>
+    </div>`;
+  }
+
+  panel.innerHTML = metrics + warning + table + mtfHtml;
+}
+
+// ── Regime sub-tab ────────────────────────────────────────────────────────
+function _bt2RenderRegime() {
+  const panel = document.getElementById('bt2-opt-panel-regime');
+  if (!panel) return;
+
+  const trades = _bt2OptGetTrades();
+
+  function card(title, groups) {
+    const rows = groups.map(([label, g]) => {
+      const won = g.filter(t => t.outcome === 'won').length;
+      const wr  = g.length > 0 ? won / g.length : 0;
+      return _bt2BarRow(label, g.length, wr);
+    }).join('');
+    return `<div class="bt2-card" style="margin-bottom:10px">
+      <div class="bt2-section-label" style="margin-bottom:8px">${title}</div>
+      <div class="bt2-opt-bar-rows">${rows}</div>
+    </div>`;
+  }
+
+  // Card 1: Direction
+  const bullTrades = trades.filter(t => t.direction === 'bullish');
+  const bearTrades = trades.filter(t => t.direction === 'bearish');
+  const dirCard = card('Direction', [
+    ['Bullish setups', bullTrades],
+    ['Bearish setups', bearTrades],
+  ]);
+
+  // Card 2: HP Proximity (if data exists)
+  const hasHp = trades.some(t => t.hpProximity != null);
+  let hpCard = '';
+  if (hasHp) {
+    const atLevel   = trades.filter(t => t.hpProximity === 'at_level');
+    const nearLevel = trades.filter(t => t.hpProximity === 'near_level');
+    const other     = trades.filter(t => t.hpProximity == null || (t.hpProximity !== 'at_level' && t.hpProximity !== 'near_level'));
+    hpCard = card('HP Level Proximity', [
+      ['At level',   atLevel],
+      ['Near level', nearLevel],
+      ['No HP data', other],
+    ]);
+  } else {
+    hpCard = `<div class="bt2-card" style="margin-bottom:10px">
+      <div class="bt2-section-label" style="margin-bottom:8px">HP Level Proximity</div>
+      <div class="bt2-opt-notice-info">HP levels not enabled in this backtest run.</div>
+    </div>`;
+  }
+
+  // Card 3: Regime / calendar — not on trade objects, show info
+  const infoCard = `<div class="bt2-card">
+    <div class="bt2-section-label" style="margin-bottom:8px">Regime &amp; Calendar Gate</div>
+    <div class="bt2-opt-notice-info">Regime type, trend alignment, and calendar event data are not
+      captured in backtest trade records (v10.x). These gates are applied upstream during signal
+      detection — their effect is already reflected in overall win rate.
+      Future backtest versions will include per-trade regime metadata.</div>
+  </div>`;
+
+  panel.innerHTML = dirCard + hpCard + infoCard;
+}
+
+// ── Time of Day sub-tab ───────────────────────────────────────────────────
+function _bt2RenderHeatmap() {
+  const panel = document.getElementById('bt2-opt-panel-heatmap');
+  if (!panel) return;
+
+  const allTrades = _bt2OptGetTrades();
+  const ET_HOURS  = [9, 10, 11, 12, 13, 14, 15, 16, 17, 18];
+  const RTH_HOURS = new Set([9, 10, 11, 12, 13, 14, 15, 16]);
+
+  // Get ET hour from trade (use pre-computed trade.hour if available)
+  function etHour(t) {
+    if (t.hour != null) return t.hour;
+    if (t.entryTs) return new Date((t.entryTs - 5 * 3600) * 1000).getUTCHours();
+    return null;
+  }
+
+  function heatmapRow(label, trades) {
+    const cells = ET_HOURS.map(h => {
+      const bucket = trades.filter(t => etHour(t) === h);
+      const n      = bucket.length;
+      const won    = bucket.filter(t => t.outcome === 'won').length;
+      const wr     = n >= 3 ? won / n : null;
+      const rthBorder = RTH_HOURS.has(h) ? 'border-top:2px solid rgba(99,102,241,0.4)' : '';
+      const title  = `${h}:00 ET — ${n} trade${n!==1?'s':''}`;
+
+      if (wr === null) {
+        return `<div class="bt2-opt-heatmap-cell" style="background:rgba(107,114,128,0.1);color:#9ca3af;${rthBorder}" title="${title}">—</div>`;
+      }
+      const pct  = Math.round(wr * 100);
+      const bg   = wr >= 0.72 ? '#22c55e20' : wr >= 0.55 ? '#f59e0b20' : '#ef444420';
+      const clr  = wr >= 0.72 ? '#22c55e'   : wr >= 0.55 ? '#f59e0b'   : '#ef4444';
+      return `<div class="bt2-opt-heatmap-cell" style="background:${bg};color:${clr};${rthBorder}" title="${title}">${pct}%</div>`;
+    }).join('');
+
+    return `<div class="bt2-opt-heatmap-wrap">
+      <div class="bt2-opt-heatmap-label">${label}</div>
+      <div class="bt2-opt-heatmap-row">${cells}</div>
+    </div>`;
+  }
+
+  // Hour header row
+  const hourHeader = `<div style="margin-bottom:4px">
+    <div style="display:grid;grid-template-columns:repeat(10,1fr);gap:2px;font-size:9px;color:var(--muted,#6b7280);text-align:center">
+      ${ET_HOURS.map(h => `<div>${h}:00</div>`).join('')}
+    </div>
+  </div>`;
+
+  // All row + per-setup-type rows
+  const setups = [...new Set(allTrades.map(t => t.setupType).filter(Boolean))].sort();
+  const SETUP_LABELS = {
+    zone_rejection: 'Zone Rejection', pdh_breakout: 'PDH Breakout',
+    trendline_break: 'Trendline Break', or_breakout: 'OR Breakout',
+  };
+
+  let html = hourHeader + heatmapRow('All setups', allTrades);
+  for (const st of setups) {
+    html += heatmapRow(SETUP_LABELS[st] || st, allTrades.filter(t => t.setupType === st));
+  }
+
+  html += `<div class="bt2-opt-notice-info" style="margin-top:12px">
+    Hours with WR &lt; 50% receive a &minus;10 confidence adjustment before the notification threshold check.
+  </div>`;
+
+  panel.innerHTML = html;
+}
+
+// ── Notifications sub-tab (static) ────────────────────────────────────────
+function _bt2RenderNotifications() {
+  const panel = document.getElementById('bt2-opt-panel-notifications');
+  if (!panel || panel.dataset.rendered) return;
+  panel.dataset.rendered = '1';
+
+  panel.innerHTML = `
+    <!-- Tier cards -->
+    <div class="bt2-section-label" style="margin-bottom:10px">Urgency tiers</div>
+
+    <div class="bt2-opt-tier">
+      <div class="bt2-opt-tier-icon" style="background:rgba(107,114,128,.2);color:#9ca3af">1</div>
+      <div class="bt2-opt-tier-body">
+        <div class="bt2-opt-tier-title">Confidence 65–74 <span class="bt2-opt-badge gray">sound only</span></div>
+        <div class="bt2-opt-tier-desc">Sound only (existing behavior — two-tone chime). Alert appears in feed. No visual interrupt.</div>
+      </div>
+    </div>
+
+    <div class="bt2-opt-tier">
+      <div class="bt2-opt-tier-icon" style="background:rgba(245,158,11,.2);color:#f59e0b">2</div>
+      <div class="bt2-opt-tier-body">
+        <div class="bt2-opt-tier-title">Confidence 75–84 <span class="bt2-opt-badge amber">sound + flash</span></div>
+        <div class="bt2-opt-tier-desc">Sound + topbar symbol badge pulses amber for 8 seconds. Non-blocking. Alert card border highlighted amber.</div>
+      </div>
+    </div>
+
+    <div class="bt2-opt-tier" style="border-color:rgba(99,102,241,0.4)">
+      <div class="bt2-opt-tier-icon" style="background:rgba(99,102,241,.2);color:#818cf8">3</div>
+      <div class="bt2-opt-tier-body">
+        <div class="bt2-opt-tier-title">Confidence 85+ <span class="bt2-opt-badge blue">full alert</span></div>
+        <div class="bt2-opt-tier-desc">Sound + 12-second dismissible topbar banner + push notification. Banner shows symbol / setup type / direction. Alert pinned to top of feed.</div>
+      </div>
+    </div>
+
+    <!-- Dedup steps -->
+    <div class="bt2-section-label" style="margin:16px 0 10px">Deduplication logic</div>
+    <div class="bt2-opt-steps">
+      <div class="bt2-opt-step">
+        <div class="bt2-opt-step-num">1</div>
+        <div class="bt2-opt-step-text">New alert fires — <strong>symbol + direction + setup type</strong> captured.</div>
+      </div>
+      <div class="bt2-opt-step">
+        <div class="bt2-opt-step-num">2</div>
+        <div class="bt2-opt-step-text">Check alert cache: same symbol + direction + price within <strong>1×ATR</strong>, fired within last <strong>30 minutes</strong>.</div>
+      </div>
+      <div class="bt2-opt-step">
+        <div class="bt2-opt-step-num">3a</div>
+        <div class="bt2-opt-step-text"><strong>Match found</strong> → update confidence if higher. Suppress notification. Existing alert card refreshes its confidence badge.</div>
+      </div>
+      <div class="bt2-opt-step">
+        <div class="bt2-opt-step-num">3b</div>
+        <div class="bt2-opt-step-text"><strong>No match</strong> → proceed to tier check.</div>
+      </div>
+      <div class="bt2-opt-step">
+        <div class="bt2-opt-step-num">4</div>
+        <div class="bt2-opt-step-text">Time-of-day gate: if historical WR for this setup+hour &lt; 50%, reduce effective confidence by <strong>10</strong> before tier check.</div>
+      </div>
+    </div>
+    <div class="bt2-opt-notice-info" style="margin-top:8px">
+      Deduplication and tier behavior will be wired up in a separate implementation task. This panel is the design reference.
+    </div>
+
+    <!-- Staleness decay -->
+    <div class="bt2-section-label" style="margin:16px 0 8px">Staleness decay</div>
+    <div class="bt2-card">
+      <div style="font-size:11px;color:var(--muted,#6b7280);margin-bottom:10px">
+        Alert visual weight decays over time so stale alerts don't compete for attention with fresh ones.
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <div style="display:flex;align-items:center;gap:10px;font-size:11px">
+          <span style="color:var(--muted,#6b7280);width:80px">0–15 min</span>
+          <div style="flex:1;height:8px;background:#6366f1;border-radius:3px;opacity:1"></div>
+          <span>100%</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;font-size:11px">
+          <span style="color:var(--muted,#6b7280);width:80px">15–30 min</span>
+          <div style="flex:1;height:8px;background:#6366f1;border-radius:3px;opacity:0.78"></div>
+          <span>78%</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;font-size:11px">
+          <span style="color:var(--muted,#6b7280);width:80px">30–45 min</span>
+          <div style="flex:1;height:8px;background:#6366f1;border-radius:3px;opacity:0.60"></div>
+          <span>60%</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;font-size:11px">
+          <span style="color:var(--muted,#6b7280);width:80px">45+ min</span>
+          <div style="flex:1;height:4px;background:rgba(99,102,241,0.3);border-radius:3px"></div>
+          <span style="color:var(--muted,#6b7280)">collapses → compact row</span>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ── Dead code from old alert-based optimize (kept to avoid parse errors) ──
+// These functions are no longer called but referenced by old variable names.
+function _computeOptForAlerts(alerts) {
+  const SETUP_TYPES      = ['zone_rejection', 'pdh_breakout', 'trendline_break', 'or_breakout'];
+  const THRESHOLD_FLOORS = [60, 65, 70, 75, 80, 85, 90];
+  const completed = alerts.filter(a =>
+    a.setup?.outcome === 'won' || a.setup?.outcome === 'lost'
+  );
+  const bySetupAndThreshold = {};
+  const byRegime    = {};
+  const byAlignment = {};
+  const byCalendar  = {};
+  const byMtf       = {};
+  const byHour      = {};
+
+  for (const setupType of SETUP_TYPES) {
+    const forSetup = completed.filter(a => a.setup?.type === setupType);
+
+    const thresholds = THRESHOLD_FLOORS.map(floor => {
+      const filt = forSetup.filter(a => (a.setup.confidence || 0) >= floor);
+      if (!filt.length) return { floor, n: 0, wr: 0, pf: 0, avgR: 0 };
+      const s = _optStats(filt);
+      return { floor, n: filt.length, wr: s.wr, pf: s.pf, avgR: s.avgR };
+    });
+    let optimalFloor = null, bestPf = -1;
+    for (const t of thresholds) {
+      if (t.n >= 10 && t.pf > bestPf) { bestPf = t.pf; optimalFloor = t.floor; }
+    }
+    bySetupAndThreshold[setupType] = { thresholds, optimalFloor, sampleWarning: forSetup.length < 30 };
+
+    const regGroups = { 'trend + aligned': [], 'trend + misaligned': [], 'range': [] };
+    for (const a of forSetup) {
+      const r = a.regime || {};
+      if      (r.type === 'trend' && r.alignment === true)  regGroups['trend + aligned'].push(a);
+      else if (r.type === 'trend' && r.alignment === false) regGroups['trend + misaligned'].push(a);
+      else if (r.type === 'range')                          regGroups['range'].push(a);
+    }
+    byRegime[setupType] = Object.entries(regGroups).map(([label, g]) => ({
+      label, n: g.length, wr: g.length ? _optStats(g).wr : 0,
+    }));
+
+    const aligned    = forSetup.filter(a => a.regime?.alignment === true);
+    const misaligned = forSetup.filter(a => a.regime?.alignment !== true);
+    byAlignment[setupType] = [
+      { label: 'aligned',    n: aligned.length,    wr: aligned.length    ? _optStats(aligned).wr    : 0 },
+      { label: 'misaligned', n: misaligned.length, wr: misaligned.length ? _optStats(misaligned).wr : 0 },
+    ];
+
+    const nearEvent = forSetup.filter(a =>  a.setup?.nearEvent === true);
+    const notNear   = forSetup.filter(a => !a.setup?.nearEvent);
+    byCalendar[setupType] = [
+      { label: 'nearEvent: false', n: notNear.length,   wr: notNear.length   ? _optStats(notNear).wr   : 0 },
+      { label: 'nearEvent: true',  n: nearEvent.length, wr: nearEvent.length ? _optStats(nearEvent).wr : 0 },
+    ];
+
+    const mtfBuckets = {};
+    for (const a of forSetup) {
+      const mtf = a.setup?.mtfConfluence;
+      const lbl = (!mtf || !mtf.tfs || !mtf.tfs.length) ? 'no MTF' : 'MTF ' + mtf.tfs.join('+');
+      if (!mtfBuckets[lbl]) mtfBuckets[lbl] = [];
+      mtfBuckets[lbl].push(a);
+    }
+    const mtfResult = [], mtfOther = [];
+    for (const [lbl, g] of Object.entries(mtfBuckets)) {
+      if (lbl !== 'no MTF' && g.length < 5) { mtfOther.push(...g); }
+      else { const s = _optStats(g); mtfResult.push({ label: lbl, n: g.length, wr: s.wr, pf: s.pf }); }
+    }
+    if (mtfOther.length) {
+      const s = _optStats(mtfOther);
+      mtfResult.push({ label: 'MTF (other)', n: mtfOther.length, wr: s.wr, pf: s.pf });
+    }
+    byMtf[setupType] = mtfResult;
+
+    const hourBuckets = {};
+    for (const a of forSetup) {
+      if (!a.setup?.time) continue;
+      const h = new Date(a.setup.time * 1000).getUTCHours();
+      if (!hourBuckets[h]) hourBuckets[h] = [];
+      hourBuckets[h].push(a);
+    }
+    byHour[setupType] = Object.entries(hourBuckets)
+      .filter(([, g]) => g.length >= 3)
+      .map(([h, g]) => ({ hour: +h, n: g.length, wr: _optStats(g).wr }))
+      .sort((a, b) => a.hour - b.hour);
+  }
+
+  return { bySetupAndThreshold, byRegime, byAlignment, byCalendar, byMtf, byHour, rawAlerts: alerts };
+}
+
+function _optStats(alerts) {
+  const won  = alerts.filter(a => a.setup.outcome === 'won');
+  const lost = alerts.filter(a => a.setup.outcome === 'lost');
+  const total = won.length + lost.length;
+  if (total === 0) return { wr: 0, pf: 0, avgR: 0 };
+  const wonR  = won.map(a  => _optCalcR(a, true)).filter(r => r != null);
+  const lostR = lost.map(a => _optCalcR(a, false)).filter(r => r != null);
+  const totalWonR  = wonR.reduce((s, r) => s + r, 0);
+  const totalLostR = lostR.reduce((s, r) => s + r, 0);
+  return {
+    wr:   Math.round(won.length / total * 1000) / 10,
+    pf:   totalLostR > 0 ? Math.round(totalWonR / totalLostR * 100) / 100 : 0,
+    avgR: (wonR.length + lostR.length) > 0
+      ? Math.round((totalWonR - totalLostR) / (wonR.length + lostR.length) * 100) / 100 : 0,
+  };
+}
+
+function _optCalcR(alert, isWon) {
+  const { entry, sl, tp } = alert.setup;
+  if (entry == null || sl == null || tp == null) return null;
+  const risk = Math.abs(entry - sl);
+  if (risk === 0) return null;
+  return isWon ? Math.abs(tp - entry) / risk : 1.0;
+}
+
+function _renderThresholdTab(data, setupType) {
+  const panel = document.getElementById('opt-subpanel-threshold');
+  if (!panel) return;
+  const d = data.bySetupAndThreshold?.[setupType];
+  if (!d) { panel.innerHTML = '<div class="opt-notice opt-notice-info">No data for this setup type.</div>'; return; }
+
+  const optimal = d.optimalFloor;
+  const best    = d.thresholds.find(t => t.floor === optimal);
+
+  const metricHtml = `
+    <div class="opt-metric-row">
+      <div class="opt-metric"><div class="opt-metric-label">Optimal Floor</div>
+        <div class="opt-metric-value">${optimal != null ? optimal + '%' : '—'}</div></div>
+      <div class="opt-metric"><div class="opt-metric-label">Win Rate @ Optimal</div>
+        <div class="opt-metric-value">${best ? best.wr + '%' : '—'}</div></div>
+      <div class="opt-metric"><div class="opt-metric-label">Profit Factor @ Optimal</div>
+        <div class="opt-metric-value">${best ? best.pf : '—'}</div></div>
+      <div class="opt-metric"><div class="opt-metric-label">Sample (n)</div>
+        <div class="opt-metric-value">${best ? best.n : '—'}</div></div>
+    </div>
+    ${d.sampleWarning ? '<div class="opt-notice opt-notice-info">Sample &lt; 30 — treat results as directional only.</div>' : ''}`;
+
+  const maxWr = Math.max(1, ...d.thresholds.map(t => t.wr));
+  const rows = d.thresholds.map(t => {
+    const isOpt  = t.floor === optimal;
+    const barPct = Math.round(t.wr / maxWr * 100);
+    const lowN   = t.n < 10 ? '<span class="opt-lown">low n</span>' : '';
+    return `<tr class="${isOpt ? 'opt-threshold-optimal' : ''}">
+      <td>${t.floor}%${isOpt ? ' <span class="opt-badge-green">optimal</span>' : ''}</td>
+      <td>${t.n} ${lowN}</td>
+      <td class="opt-bar-cell">
+        <div class="opt-bar-bg"><div class="opt-bar-fill" style="width:${barPct}%"></div></div>
+        <span>${t.wr}%</span>
+      </td>
+      <td>${t.pf || '—'}</td>
+      <td>${t.avgR || '—'}</td>
+      <td>${_optAssessBadge(t.wr, t.pf)}</td>
+    </tr>`;
+  }).join('');
+
+  const tableHtml = `
+    <table class="opt-threshold-table">
+      <thead><tr><th>Floor</th><th>n</th><th>Win Rate</th><th>PF</th><th>Avg R</th><th>Assessment</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+
+  const mtfRows = (data.byMtf?.[setupType] || []).map(m => `
+    <tr><td>${m.label}</td><td>${m.n}</td><td>${m.wr}%</td><td>${m.pf || '—'}</td></tr>`).join('');
+  const mtfHtml = mtfRows ? `
+    <div class="opt-section-title">MTF Confluence Impact</div>
+    <table class="opt-threshold-table">
+      <thead><tr><th>MTF Group</th><th>n</th><th>Win Rate</th><th>PF</th></tr></thead>
+      <tbody>${mtfRows}</tbody>
+    </table>` : '';
+
+  panel.innerHTML = metricHtml + tableHtml + mtfHtml;
+}
+
+function _renderRegimeTab(data, setupType) {
+  const panel = document.getElementById('opt-subpanel-regime');
+  if (!panel) return;
+
+  function barCard(title, rows) {
+    const maxWr = Math.max(1, ...rows.map(r => r.wr));
+    const bars  = rows.map(r => {
+      const pct = Math.round(r.wr / maxWr * 100);
+      return `<div class="opt-regime-row">
+        <div class="opt-regime-label">${r.label} <span class="opt-regime-n">(n=${r.n})</span></div>
+        <div class="opt-bar-bg"><div class="opt-bar-fill" style="width:${pct}%"></div></div>
+        <span class="opt-regime-wr">${r.wr}%</span>
+      </div>`;
+    }).join('');
+    const lowN = rows.some(r => r.n < 10) ? '<div class="opt-notice opt-notice-info">Some groups have n &lt; 10.</div>' : '';
+    return `<div class="opt-card"><div class="opt-card-title">${title}</div>${bars}${lowN}</div>`;
+  }
+
+  const alignRows = data.byAlignment?.[setupType] || [];
+  const wrDiff    = alignRows.length >= 2 ? Math.abs(alignRows[0].wr - alignRows[1].wr) : 0;
+  const alignNotice = wrDiff < 5
+    ? '<div class="opt-notice opt-notice-info">Alignment WR difference &lt; 5pp — gating may not add value for this setup type.</div>' : '';
+
+  panel.innerHTML =
+    barCard('Regime Type + Alignment', data.byRegime?.[setupType] || []) +
+    alignNotice +
+    barCard('Trend Alignment Gate', alignRows) +
+    barCard('Calendar Gate (near high-impact event)', data.byCalendar?.[setupType] || []);
+}
+
+function _renderHeatmapTab(data) {
+  const panel = document.getElementById('opt-subpanel-heatmap');
+  if (!panel) return;
+
+  const SETUP_LABELS = {
+    zone_rejection: 'Zone Rejection', pdh_breakout: 'PDH Breakout',
+    trendline_break: 'Trendline Break', or_breakout: 'OR Breakout',
+  };
+  const HOURS = Array.from({ length: 10 }, (_, i) => i + 12);
+
+  let html = '';
+  for (const [type, label] of Object.entries(SETUP_LABELS)) {
+    const byHour = {};
+    for (const h of (data.byHour?.[type] || [])) byHour[h.hour] = h;
+    const cells = HOURS.map(h => {
+      const d = byHour[h];
+      if (!d) return `<div class="opt-heatmap-cell hm-gray"><div class="opt-heatmap-hour">${h}:00</div><div>—</div></div>`;
+      const cls = d.wr >= 65 ? 'hm-green' : d.wr >= 50 ? 'hm-amber' : d.n >= 3 ? 'hm-red' : 'hm-gray';
+      return `<div class="opt-heatmap-cell ${cls}" title="n=${d.n}">
+        <div class="opt-heatmap-hour">${h}:00</div>
+        <div>${d.wr}%</div>
+        <div class="opt-heatmap-n">n=${d.n}</div>
+      </div>`;
+    }).join('');
+    html += `<div class="opt-card"><div class="opt-card-title">${label} — Win Rate by UTC Hour</div>
+      <div class="opt-heatmap-row">${cells}</div></div>`;
+  }
+
+  panel.innerHTML = html || '<div class="opt-notice opt-notice-info">No hourly data available yet.</div>';
+}
+
+function _renderNotifTab() {
+  const panel = document.getElementById('opt-subpanel-notif');
+  if (!panel) return;
+  panel.innerHTML = `
+    <div class="opt-card">
+      <div class="opt-card-title">Notification Tiers</div>
+      <div class="opt-notif-tier opt-badge-green">
+        <strong>Tier 1 — High Priority</strong>
+        <p>Confidence &ge; 80% · Trend-aligned · No near event · MTF confluence</p>
+        <p>Action: immediate alert + sound + push notification</p>
+      </div>
+      <div class="opt-notif-tier opt-badge-amber">
+        <strong>Tier 2 — Standard</strong>
+        <p>Confidence 65–79% · Regime not counter-trend · Standard conditions</p>
+        <p>Action: alert card only</p>
+      </div>
+      <div class="opt-notif-tier opt-badge-red">
+        <strong>Tier 3 — Low Priority / Muted</strong>
+        <p>Confidence &lt; 65% OR counter-trend OR near high-impact event</p>
+        <p>Action: logged only, no push/sound</p>
+      </div>
+    </div>
+    <div class="opt-card">
+      <div class="opt-card-title">Alert Deduplication Logic</div>
+      <div class="opt-dedup-step">1. Same symbol + setup type + direction within the same 5m bar → suppress duplicate.</div>
+      <div class="opt-dedup-step">2. OR breakout: once per session per direction (re-fires only after RTH reset).</div>
+      <div class="opt-dedup-step">3. Zone rejection at same level within 15 min → suppress if confidence &lt; 70%.</div>
+    </div>
+    <div class="opt-card">
+      <div class="opt-card-title">Staleness Decay</div>
+      <div class="opt-staleness-block">
+        <p>Open alerts older than <strong>2 hours</strong> are automatically downgraded (no re-notification).</p>
+        <p>PDH/PDL breakout signals remain valid for the full RTH session.</p>
+        <p>Zone rejection signals decay after <strong>45 minutes</strong>.</p>
+      </div>
+    </div>`;
+}
+
+function _optAssessBadge(wr, pf) {
+  if (!wr && !pf) return '<span class="opt-badge-gray">no data</span>';
+  if (wr >= 60 && pf >= 1.5) return '<span class="opt-badge-green">strong edge</span>';
+  if (wr >= 50 && pf >= 1.0) return '<span class="opt-badge-amber">marginal</span>';
+  if (pf < 1.0 && wr > 0)    return '<span class="opt-badge-red">noise zone</span>';
+  return '<span class="opt-badge-gray">insufficient data</span>';
 }

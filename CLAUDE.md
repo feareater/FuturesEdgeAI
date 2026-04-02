@@ -376,6 +376,12 @@ All toggleable at runtime via `POST /api/features { "featureName": true|false }`
 - Trades tab: sortable/filterable table, CSV export
 - Replay tab: 1m animated chart, full-run mode (`/api/backtest/replay/:jobId/full`)
 - **Compare tab**: up to 6 runs side by side; overlaid equity curves (x = trade#); full breakdown table (config, overall stats, by setup type, by TF, by symbol, by direction, by confidence bucket); best value highlighted green; CSV export
+- **Optimize tab** (v10.3): client-side analysis of loaded job's trades — no new API calls
+  - Confidence sub-tab: threshold table (60–90%), optimal floor, PF/WR/avgR per floor, MTF impact
+  - Regime sub-tab: direction split, HP proximity; regime/calendar fields not in trade records (v10.x)
+  - Time of Day sub-tab: ET hour heatmap (9–18) per setup type using `trade.hour`
+  - Notifications sub-tab: static tier design reference + dedup logic + staleness decay
+  - State: `_bt2ActiveSubtab`, `_bt2OptSetupType`, `_bt2OptSymbol` (localStorage-persisted)
 
 ### Backtest API Routes
 - `POST /api/backtest/run` — launch async job

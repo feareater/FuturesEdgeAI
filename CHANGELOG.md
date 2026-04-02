@@ -4,6 +4,70 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v10.3] — 2026-04-02 — Optimize Tab in backtest2 (from trade data)
+
+### New: Optimize tab in backtest2.html (`public/backtest2.html`, `backtest2.js`, `backtest2.css`)
+- Fifth tab "Optimize" added to the backtest2 results area — works entirely from
+  `_currentResults.trades` already in memory; no new API calls.
+- Shows placeholder message when no job is loaded; renders on tab click.
+
+**Confidence sub-tab**
+- Setup type + symbol selects (populated dynamically from loaded trades; selection preserved).
+- 4 metric cards: optimal confidence floor, WR at optimal, PF at optimal, trade count.
+- Threshold table (floors 60/65/70/75/80/85/90%): N, win rate bar, PF, avg R, grade badge.
+- Optimal row highlighted with accent left-border + ★; low-N rows get amber badge.
+- Sample warning banner when fewer than 30 completed trades.
+- MTF confluence impact section (shown when both groups have n ≥ 3).
+
+**Regime sub-tab**
+- Direction card: bullish vs bearish win rate bars.
+- HP Proximity card: at_level / near_level / other (shown when HP enabled in run).
+- Informational notice: regime type / trend alignment / calendar gate not captured in
+  backtest trade records (v10.x limitation — gates applied upstream in signal detection).
+
+**Time of Day sub-tab**
+- Heatmap grid covering ET hours 9–18, one row per setup type + "All setups" header row.
+- Colors: green ≥ 72%, amber ≥ 55%, red < 55%, gray when n < 3.
+- RTH hours (9–16) marked with accent top border.
+- Trade count shown in cell tooltip.
+- Static info note about −10 confidence penalty for sub-50% hours.
+
+**Notifications sub-tab** (static design reference)
+- Three tier cards (Tier 1: sound; Tier 2: sound + flash; Tier 3: full alert + banner).
+- 5-step deduplication logic list.
+- Staleness decay visual with 4 opacity levels.
+
+**CSS** (`backtest2.css`): Added `bt2-opt-*` class family matching existing bt2 variables.
+
+---
+
+## [v10.2] — 2026-04-02 — Optimize Tab (backtest.html)
+
+### New API Route — `/api/performance/optimize` (`server/index.js`, `server/analysis/performanceStats.js`)
+- Added `computeOptimizeStats(alerts)` to `performanceStats.js` — computes:
+  - `bySetupAndThreshold`: WR/PF/avgR at confidence floors 60/65/70/75/80/85/90% with `optimalFloor` (highest PF where n≥10) and `sampleWarning` (n<30).
+  - `byRegime`: trend+aligned / trend+misaligned / range win rates per setup type.
+  - `byAlignment`: aligned vs misaligned win rates per setup type.
+  - `byCalendar`: nearEvent true vs false win rates.
+  - `byMtf`: MTF confluence group win rates (groups with n<5 merged into "MTF other").
+  - `byHour`: UTC hour win rates (groups with n<3 excluded).
+  - `rawAlerts`: minimal alert fields for client-side per-symbol recomputation.
+- Added `GET /api/performance/optimize` route with 5-minute response cache.
+- Falls back to archived alerts if alertCache is empty.
+
+### Optimize Tab — `backtest.html`
+- New **Optimize** tab alongside the existing **Replay** tab.
+- Shared controls: Setup Type and Symbol selects (state saved to localStorage).
+- Four sub-tabs:
+  - **Confidence Threshold**: metric cards (optimal floor, WR, PF, sample n) + threshold table with inline bar charts, assessment badges (strong edge / marginal / noise zone / no data), MTF confluence impact table.
+  - **Regime Gate**: 3 bar-list cards — Regime Type+Alignment, Trend Alignment Gate, Calendar Gate. Inline notice when alignment WR difference <5pp.
+  - **Time of Day**: UTC hour heatmap for all 4 setup types (green ≥65%, amber 50–64%, red <50%, gray = no data).
+  - **Notifications**: static tier cards (Tier 1/2/3), deduplication logic steps, staleness decay reference.
+- Per-symbol recomputation: when Symbol ≠ All, full `_computeOptForAlerts()` runs client-side on `rawAlerts`.
+- Loading spinner while fetching; sub-tab selection persisted to localStorage.
+
+---
+
 ## [v10.1] — 2026-04-02 — Backtest Bias Fixes, Hour Filter & Compare
 
 ### Backtest Engine — Bias Fixes (`server/backtest/engine.js`)
