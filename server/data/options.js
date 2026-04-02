@@ -519,7 +519,7 @@ async function getOptionsData(symbol, futuresPrice) {
   const metrics = _computeMetrics(raw, bestFp);
   if (!metrics) { _cache.set(symbol, { data: null, timestamp: Date.now() }); return null; }
 
-  const result = { ...metrics, source: etf, daily: daily ?? null };
+  const result = { ...metrics, source: etf, daily: daily ?? null, lastFetchedAt: Date.now() };
   _cache.set(symbol, { data: result, timestamp: Date.now() });
 
   // Scale daily levels with the same ratio used for options strikes

@@ -7,6 +7,7 @@ const { detectFVGs, detectOrderBlocks }    = require('./iof');
 const { computeVolumeProfile }             = require('./volumeProfile');
 const { computeOpeningRange }              = require('./openingRange');
 const { computeSessionLevels }             = require('./sessionLevels');
+const { MACRO_SYMBOLS } = require('../data/snapshot');
 
 const CRYPTO_SYMBOLS = new Set(['BTC', 'ETH', 'XRP']);
 
@@ -40,6 +41,7 @@ function computeIndicators(candles, opts = {}) {
   }
 
   const isCrypto = CRYPTO_SYMBOLS.has(symbol);
+  const isMacro  = MACRO_SYMBOLS.has(symbol);
 
   const ema9   = _ema(candles, 9);
   const ema21  = _ema(candles, 21);
@@ -51,10 +53,10 @@ function computeIndicators(candles, opts = {}) {
   const fvgs        = detectFVGs(candles, atrCurrent);
   const orderBlocks = detectOrderBlocks(candles, atrCurrent, impulseThreshold);
 
-  // Crypto assets (BTC/ETH/XRP) trade 24/7 — no RTH session, opening range, or Asian/London levels
-  const volumeProfile  = !isCrypto && symbol ? computeVolumeProfile(candles, symbol) : null;
-  const openingRange   = !isCrypto          ? computeOpeningRange(candles)           : null;
-  const sessionLevels  = !isCrypto          ? computeSessionLevels(candles)          : null;
+  // Crypto and macro/reference symbols skip session-specific indicators
+  const volumeProfile  = !isCrypto && !isMacro && symbol ? computeVolumeProfile(candles, symbol) : null;
+  const openingRange   = !isCrypto && !isMacro           ? computeOpeningRange(candles)           : null;
+  const sessionLevels  = !isCrypto && !isMacro           ? computeSessionLevels(candles)          : null;
 
   console.log(
     `[indicators] ema9:${ema9.length} ema21:${ema21.length} ema50:${ema50.length}` +

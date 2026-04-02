@@ -107,6 +107,16 @@ function detectSetups(candles, indicators, regime, opts = {}) {
     }
   }
 
+  // Market context scoring: HP multiplier, Resilience × setup-type, VIX × setup-type,
+  // DEX bonus, DXY alignment bonus, freshness decay. Applied after all base scoring.
+  if (opts.marketContext) {
+    for (const setup of top) {
+      const { finalScore, contextBreakdown } = applyMarketContext(setup.confidence, setup, opts.marketContext);
+      setup.confidence    = finalScore;
+      setup.scoreBreakdown = { ...(setup.scoreBreakdown || {}), context: contextBreakdown };
+    }
+  }
+
   const bosQual = zoneSetups.filter(z => (z.scoreBreakdown?.bos || 0) > 0).length;
   console.log(
     `[setups]  found=${pdhSetups.length + zoneSetups.length + tlSetups.length + orSetups.length}  returned=${top.length}  rr=${rrRatio}:1  ` +
@@ -1030,5 +1040,109 @@ function _volumeMA(candles, period = 20) {
 }
 
 // ---------------------------------------------------------------------------
+// Market context scoring — applies HP/VIX/DXY/DEX multipliers and bonuses
+// on top of the existing BaseScore from setup detection.
+// ---------------------------------------------------------------------------
 
-module.exports = { detectSetups };
+/**
+ * Apply market context (HP, VIX, DXY, DEX) to a finalized base confidence score.
+ * Called per-setup in detectSetups() when opts.marketContext is provided.
+ *
+ * @param {number} baseScore     Setup confidence after all base scoring (0–100)
+ * @param {Object} setup         Setup object — needs .type and .direction
+ * @param {Object} marketContext Result of buildMarketContext()
+ * @returns {{ finalScore: number, contextBreakdown: Object }}
+ */
+function applyMarketContext(baseScore, setup, marketContext) {
+  if (!marketContext) return { finalScore: baseScore, contextBreakdown: {} };
+
+  const isReversal = ['zone_rejection', 'or_breakout'].includes(setup.type);
+  const isBreakout = ['pdh_breakout', 'trendline_break'].includes(setup.type);
+  const isBullish  = setup.direction === 'bullish';
+
+  // ── HP multiplier ──────────────────────────────────────────────────────────
+  let hpMult = marketContext.hp.multiplier ?? 1.0;
+
+  // Corridor overrides base distance multiplier
+  if (marketContext.hp.inCorridor) {
+    hpMult = isReversal
+      ? (marketContext.hp.corridorMultiplierReversal ?? 1.08)
+      : (marketContext.hp.corridorMultiplierBreakout ?? 0.88);
+  } else if (marketContext.hp.nearestLevel?.distance_atr <= 0.3) {
+    // At level (≤0.3 ATR): adjust for pressure direction vs setup direction
+    const pd = marketContext.hp.pressureDirection;
+    if ((isBullish && pd === 'support') || (!isBullish && pd === 'resistance')) {
+      hpMult = 1.20; // aligned — HP pushes price toward setup direction
+    } else if ((isBullish && pd === 'resistance') || (!isBullish && pd === 'support')) {
+      hpMult = 0.85; // opposing — HP pushes against setup direction
+    }
+    // neutral pd: keep 1.05 from buildMarketContext
+  }
+
+  // ── Resilience multiplier (setup-type aware) ───────────────────────────────
+  const rl = marketContext.options.resilienceLabel;
+  let resilienceMult = 1.0;
+  if      (rl === 'resilient') resilienceMult = isReversal ? 1.15 : 0.90;
+  else if (rl === 'fragile')   resilienceMult = isReversal ? 0.90 : 1.15;
+
+  // ── VIX multiplier (regime + direction, setup-type aware) ─────────────────
+  const vr = marketContext.vix.regime;
+  const vd = marketContext.vix.direction;
+  let vixMult = 1.0;
+  if      (vr === 'low')      vixMult = isBreakout ? 1.10 : 1.00;
+  else if (vr === 'elevated') vixMult = isReversal ? 1.10 : 0.90;
+  else if (vr === 'crisis')   vixMult = isReversal ? 0.90 : 0.85;
+  // Direction nudge
+  if (vd === 'rising')  vixMult += isBreakout ? 0.05 : -0.05;
+  if (vd === 'falling') vixMult += isReversal ? 0.05 : -0.05;
+
+  // ── Clamp combined multiplier ──────────────────────────────────────────────
+  let combinedMult = hpMult * resilienceMult * vixMult;
+  combinedMult = Math.max(0.80, Math.min(1.30, combinedMult));
+
+  // ── DEX bonus (direction-aware) ────────────────────────────────────────────
+  const dexScore  = marketContext.options.dexScore ?? 0;
+  const dexBias   = marketContext.options.dexBias  ?? 'neutral';
+  const setupDir  = isBullish ? 'bullish' : 'bearish';
+  const absScore  = Math.abs(dexScore);
+  let dexBonus = 0;
+  if      (absScore >= 50 && dexBias === setupDir)   dexBonus = +8;
+  else if (absScore >= 50 && dexBias !== 'neutral')  dexBonus = -6;
+  else if (absScore >= 20 && dexBias === setupDir)   dexBonus = +4;
+  else if (absScore >= 20 && dexBias !== 'neutral')  dexBonus = -3;
+
+  // ── DXY alignment bonus ────────────────────────────────────────────────────
+  const dxyBonus = isBullish
+    ? (marketContext.dxy.alignmentBonusLong  ?? 0)
+    : (marketContext.dxy.alignmentBonusShort ?? 0);
+
+  const freshnessDecay = marketContext.hp.freshnessDecayPts ?? 0;
+
+  // ── Final score ────────────────────────────────────────────────────────────
+  const afterMultipliers = baseScore * combinedMult;
+  const finalScore = Math.round(
+    Math.max(0, Math.min(100, afterMultipliers + dexBonus + dxyBonus + freshnessDecay))
+  );
+
+  const contextBreakdown = {
+    baseScore,
+    hpMultiplier:        +hpMult.toFixed(2),
+    resilienceMultiplier: +resilienceMult.toFixed(2),
+    vixMultiplier:        +vixMult.toFixed(2),
+    combinedMultiplier:   +combinedMult.toFixed(2),
+    dexBonus,
+    dxyBonus,
+    freshnessDecay,
+    stressFlag:    marketContext.vix.stressFlag ?? false,
+    hpNearest:     marketContext.hp.nearestLevel ?? null,
+    inCorridor:    marketContext.hp.inCorridor   ?? false,
+    vixRegime:     marketContext.vix.regime,
+    dxyDirection:  marketContext.dxy.direction,
+  };
+
+  return { finalScore, contextBreakdown };
+}
+
+// ---------------------------------------------------------------------------
+
+module.exports = { detectSetups, applyMarketContext };

@@ -17,6 +17,9 @@ const SEED_DIR     = path.join(__dirname, '..', '..', 'data', 'seed');
 const VALID_SYMBOLS    = ['MNQ', 'MGC', 'MES', 'MCL', 'BTC', 'ETH', 'XRP', 'XLM', 'SIL', 'DXY', 'VIX', 'QQQ', 'SPY'];
 const VALID_TIMEFRAMES = ['1m', '2m', '3m', '5m', '15m', '30m', '1h', '2h', '4h'];
 const CRYPTO_SYMBOLS   = new Set(['BTC', 'ETH', 'XRP', 'XLM']);
+// Macro/reference symbols — context-only data sources. Must never trigger setup detection,
+// volume profile, opening range, or session level computation.
+const MACRO_SYMBOLS    = new Set(['DXY', 'VIX', 'QQQ', 'SPY', 'GLD', 'USO', 'SLV']);
 
 // ---------------------------------------------------------------------------
 // Public interface — these signatures stay constant regardless of data source
@@ -114,4 +117,4 @@ function _validate(symbol, timeframe) {
 
 // ---------------------------------------------------------------------------
 
-module.exports = { getCandles, getAllTimeframes, VALID_SYMBOLS, VALID_TIMEFRAMES, CRYPTO_SYMBOLS };
+module.exports = { getCandles, getAllTimeframes, VALID_SYMBOLS, VALID_TIMEFRAMES, CRYPTO_SYMBOLS, MACRO_SYMBOLS };

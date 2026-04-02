@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FuturesEdge — Backtesting</title>
+  <link rel="stylesheet" href="/css/dashboard.css" />
+  <link rel="stylesheet" href="/css/backtest2.css" />
+</head>
+<body>
+  <div id="app">
+
+    <header id="topbar">
+      <div class="tb-brand-block">
+        <span id="brand">FuturesEdge AI</span>
+      </div>
+      <nav class="tb-nav-links">
+        <a href="/">Dashboard</a>
+        <a href="/performance.html">Stats</a>
+        <a href="/tradelog.html">Trade Log</a>
+        <a href="/propfirms.html">Prop Firms</a>
+        <a href="/tradingaccount.html">Real Account</a>
+        <a href="/backtest2.html" class="active">Backtest</a>
+        <a href="/docs.html">Guide</a>
+        <a href="/api/export" download>Export</a>
+      </nav>
+    </header>
+
+    <main id="bt2-main">
+
+      <!-- ── Layout ──────────────────────────────────────────────────────── -->
+      <div id="bt2-layout">
+
+        <!-- Config Panel -->
+        <aside id="bt2-config">
+          <h2 class="bt2-panel-title">Configuration</h2>
+
+          <div class="bt2-field-group">
+            <label>Date Range</label>
+            <div class="bt2-date-row">
+              <input type="date" id="bt2-start" />
+              <span>to</span>
+              <input type="date" id="bt2-end" />
+            </div>
+            <div id="bt2-date-hint" class="bt2-hint"></div>
+          </div>
+
+          <div class="bt2-field-group">
+            <label>Symbols</label>
+            <div class="bt2-checks">
+              <label><input type="checkbox" name="sym" value="MNQ" checked /> MNQ</label>
+              <label><input type="checkbox" name="sym" value="MES" /> MES</label>
+              <label><input type="checkbox" name="sym" value="MGC" /> MGC</label>
+              <label><input type="checkbox" name="sym" value="MCL" /> MCL</label>
+            </div>
+          </div>
+
+          <div class="bt2-field-group">
+            <label>Timeframes</label>
+            <div class="bt2-checks">
+              <label><input type="checkbox" name="tf" value="1m" /> 1m</label>
+              <label><input type="checkbox" name="tf" value="5m" checked /> 5m</label>
+              <label><input type="checkbox" name="tf" value="15m" checked /> 15m</label>
+              <label><input type="checkbox" name="tf" value="30m" /> 30m</label>
+            </div>
+          </div>
+
+          <div class="bt2-field-group">
+            <label>Setup Types</label>
+            <div class="bt2-checks">
+              <label><input type="checkbox" name="st" value="zone_rejection" checked /> Zone Rejection</label>
+              <label><input type="checkbox" name="st" value="pdh_breakout" checked /> PDH Breakout</label>
+              <label><input type="checkbox" name="st" value="trendline_break" checked /> Trendline Break</label>
+              <label><input type="checkbox" name="st" value="or_breakout" checked /> OR Breakout</label>
+            </div>
+          </div>
+
+          <div class="bt2-field-group">
+            <label>Min Confidence: <span id="bt2-conf-label">65</span>%</label>
+            <input type="range" id="bt2-conf" min="50" max="95" value="65" />
+          </div>
+
+          <div class="bt2-field-group">
+            <label>Starting Balance ($)</label>
+            <input type="number" id="bt2-balance" value="10000" min="1000" max="10000000" step="1000" />
+          </div>
+
+          <details class="bt2-advanced">
+            <summary>Advanced</summary>
+            <div class="bt2-field-group">
+              <label><input type="checkbox" id="bt2-use-hp" checked /> Use HP Levels (v9.0 scoring)</label>
+            </div>
+            <div class="bt2-field-group">
+              <label>Max Hold Time (hours)</label>
+              <input type="number" id="bt2-maxhold" value="8" min="1" max="24" />
+            </div>
+            <div class="bt2-field-group">
+              <label>Fee per RT ($)</label>
+              <input type="number" id="bt2-fee" value="4" min="0" max="50" step="0.5" />
+            </div>
+            <div class="bt2-field-group">
+              <label>Contracts per symbol</label>
+              <div class="bt2-contracts-grid">
+                <span>MNQ <input type="number" class="bt2-contracts" data-sym="MNQ" value="1" min="1" max="10" /></span>
+                <span>MES <input type="number" class="bt2-contracts" data-sym="MES" value="1" min="1" max="10" /></span>
+                <span>MGC <input type="number" class="bt2-contracts" data-sym="MGC" value="1" min="1" max="10" /></span>
+                <span>MCL <input type="number" class="bt2-contracts" data-sym="MCL" value="1" min="1" max="10" /></span>
+              </div>
+            </div>
+            <div class="bt2-field-group">
+              <label class="bt2-hours-label">
+                Trading Hours (ET)
+                <span class="bt2-hours-hint">Uncheck hours to skip</span>
+              </label>
+              <div class="bt2-hours-sessions">
+                <div class="bt2-hours-session-label">Overnight</div>
+                <div class="bt2-hours-grid" id="bt2-hours-overnight"></div>
+                <div class="bt2-hours-session-label">RTH</div>
+                <div class="bt2-hours-grid" id="bt2-hours-rth"></div>
+                <div class="bt2-hours-session-label">After Hours</div>
+                <div class="bt2-hours-grid" id="bt2-hours-afterhours"></div>
+              </div>
+              <div class="bt2-hours-actions">
+                <button type="button" class="bt2-hours-preset" data-preset="all">All</button>
+                <button type="button" class="bt2-hours-preset" data-preset="rth">RTH Only</button>
+                <button type="button" class="bt2-hours-preset" data-preset="none">None</button>
+              </div>
+            </div>
+          </details>
+
+          <div id="bt2-run-row">
+            <button id="bt2-run-btn" class="bt2-run-btn">Run Backtest</button>
+            <button id="bt2-save-btn" class="bt2-secondary-btn">Save Config</button>
+          </div>
+
+          <div id="bt2-progress-wrap" style="display:none">
+            <div id="bt2-progress-bar"><div id="bt2-progress-fill"></div></div>
+            <div id="bt2-progress-label">Running...</div>
+          </div>
+
+          <div id="bt2-prev-jobs">
+            <h3 class="bt2-section-label">Previous Runs</h3>
+            <div id="bt2-jobs-list"></div>
+          </div>
+        </aside>
+
+        <!-- Results Area -->
+        <section id="bt2-results">
+
+          <!-- Tab bar -->
+          <div class="bt2-tabs">
+            <button class="bt2-tab active" data-tab="summary">Summary</button>
+            <button class="bt2-tab" data-tab="trades">Trades</button>
+            <button class="bt2-tab" data-tab="replay">Replay</button>
+            <button class="bt2-tab" data-tab="compare">Compare</button>
+          </div>
+
+          <!-- Summary Tab -->
+          <div id="bt2-tab-summary" class="bt2-tab-panel active">
+            <div id="bt2-no-results" class="bt2-placeholder">
+              Configure and run a backtest to see results.
+            </div>
+            <div id="bt2-summary-content" style="display:none">
+              <div id="bt2-stat-cards" class="bt2-stat-cards"></div>
+              <div id="bt2-equity-wrap">
+                <h3 class="bt2-section-label">Equity Curve</h3>
+                <div id="bt2-equity-chart"></div>
+                <h3 class="bt2-section-label bt2-dd-label">Drawdown</h3>
+                <div id="bt2-drawdown-chart"></div>
+              </div>
+              <div id="bt2-daily-wrap">
+                <h3 class="bt2-section-label">Daily P&amp;L</h3>
+                <div id="bt2-daily-chart"></div>
+              </div>
+              <div id="bt2-breakdowns">
+                <h3 class="bt2-section-label">Breakdown</h3>
+                <div id="bt2-breakdown-grid"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Trades Tab -->
+          <div id="bt2-tab-trades" class="bt2-tab-panel">
+            <div class="bt2-trades-toolbar">
+              <select id="bt2-filter-outcome">
+                <option value="">All Outcomes</option>
+                <option value="won">Won</option>
+                <option value="lost">Lost</option>
+                <option value="timeout">Timeout</option>
+                <option value="closed">Force Closed</option>
+              </select>
+              <select id="bt2-filter-sym">
+                <option value="">All Symbols</option>
+                <option>MNQ</option><option>MES</option><option>MGC</option><option>MCL</option>
+              </select>
+              <select id="bt2-filter-setup">
+                <option value="">All Setups</option>
+                <option value="zone_rejection">Zone Rejection</option>
+                <option value="pdh_breakout">PDH Breakout</option>
+                <option value="trendline_break">Trendline Break</option>
+                <option value="or_breakout">OR Breakout</option>
+              </select>
+              <button id="bt2-export-csv" class="bt2-secondary-btn">Export CSV</button>
+            </div>
+            <div id="bt2-trades-table-wrap">
+              <table id="bt2-trades-table">
+                <thead>
+                  <tr>
+                    <th data-sort="date">Date</th>
+                    <th data-sort="symbol">Sym</th>
+                    <th data-sort="timeframe">TF</th>
+                    <th data-sort="setupType">Setup</th>
+                    <th data-sort="direction">Dir</th>
+                    <th data-sort="entry">Entry</th>
+                    <th>SL</th><th>TP</th>
+                    <th data-sort="exitPrice">Exit</th>
+                    <th data-sort="barsToOutcome">Bars</th>
+                    <th data-sort="outcome">Result</th>
+                    <th data-sort="netPnl">P&amp;L</th>
+                    <th data-sort="confidence">Conf</th>
+                    <th>HP Level</th>
+                    <th>DEX</th>
+                  </tr>
+                </thead>
+                <tbody id="bt2-trades-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Replay Tab -->
+          <div id="bt2-tab-replay" class="bt2-tab-panel">
+            <div id="bt2-replay-header">
+              <span id="bt2-replay-title">REPLAY</span>
+              <div id="bt2-replay-selectors">
+                <select id="bt2-replay-sym"></select>
+                <input type="date" id="bt2-replay-date" />
+                <button id="bt2-replay-load" class="bt2-secondary-btn">Load Day</button>
+                <button id="bt2-replay-fullrun" class="bt2-secondary-btn">▶ Full Run</button>
+              </div>
+            </div>
+            <div id="bt2-replay-chart"></div>
+            <div id="bt2-replay-controls">
+              <button id="bt2-ctrl-reset" title="Reset">&#9664;&#9664;</button>
+              <button id="bt2-ctrl-back"  title="Step back">&#9664;</button>
+              <button id="bt2-ctrl-play"  title="Play/Pause">&#9654;</button>
+              <button id="bt2-ctrl-fwd"   title="Step forward">&#9654;&#9654;</button>
+              <button id="bt2-ctrl-next"  title="Skip to next alert">&#8677;</button>
+              <label>Speed:
+                <select id="bt2-speed">
+                  <option value="1">1x</option>
+                  <option value="10">10x</option>
+                  <option value="50" selected>50x</option>
+                  <option value="100">100x</option>
+                  <option value="500">500x</option>
+                </select>
+              </label>
+              <span id="bt2-replay-pos">Bar 0/0</span>
+              <span id="bt2-replay-ts"></span>
+              <span id="bt2-replay-pnl" class="bt2-replay-pnl">Session P&amp;L: $0.00</span>
+            </div>
+            <div id="bt2-replay-alerts">
+              <div class="bt2-section-label">Alerts this session</div>
+              <div id="bt2-replay-alerts-list"></div>
+            </div>
+          </div>
+
+          <!-- Compare Tab -->
+          <div id="bt2-tab-compare" class="bt2-tab-panel">
+            <div id="bt2-cmp-toolbar">
+              <div id="bt2-cmp-selectors"></div>
+              <button id="bt2-cmp-add" class="bt2-secondary-btn">+ Add Run</button>
+              <button id="bt2-cmp-export" class="bt2-secondary-btn">Export CSV</button>
+            </div>
+            <div id="bt2-cmp-body">
+              <div class="bt2-placeholder">Add two or more runs to compare.</div>
+            </div>
+          </div>
+
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
+  <script src="/js/backtest2.js"></script>
+</body>
+</html>

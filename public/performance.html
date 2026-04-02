@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>FuturesEdge — Performance</title>
+  <title>FuturesEdge — Stats</title>
   <link rel="stylesheet" href="/css/dashboard.css" />
   <link rel="stylesheet" href="/css/performance.css" />
 </head>
@@ -16,13 +16,11 @@
       </div>
       <nav class="tb-nav-links">
         <a href="/">Dashboard</a>
-        <a href="/scanner.html">Scanner</a>
-        <a href="/commentary.html">AI</a>
         <a href="/performance.html" class="active">Stats</a>
-        <a href="/backtest.html">Replay</a>
         <a href="/tradelog.html">Trade Log</a>
         <a href="/propfirms.html">Prop Firms</a>
         <a href="/tradingaccount.html">Real Account</a>
+        <a href="/backtest2.html">Backtest</a>
         <a href="/docs.html">Guide</a>
         <a href="/api/export" download>Export</a>
       </nav>
@@ -30,103 +28,327 @@
 
     <main id="perf-main">
 
-      <!-- Summary cards -->
-      <section class="stat-cards" id="stat-cards">
-        <div class="stat-card">
-          <div class="stat-label">Win Rate</div>
-          <div class="stat-value" id="s-wr">—</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Profit Factor</div>
-          <div class="stat-value" id="s-pf">—</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Avg R</div>
-          <div class="stat-value" id="s-avgr">—</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Total Trades</div>
-          <div class="stat-value" id="s-total">—</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Won / Lost / Open</div>
-          <div class="stat-value" id="s-wlo">— / — / —</div>
-        </div>
-      </section>
-
-      <div class="perf-grid">
-
-        <!-- By Symbol -->
-        <div class="perf-panel">
-          <div class="perf-panel-header">Win Rate by Symbol</div>
-          <div id="chart-by-symbol" class="bar-chart"></div>
-        </div>
-
-        <!-- By Setup Type -->
-        <div class="perf-panel">
-          <div class="perf-panel-header">Win Rate by Setup Type</div>
-          <div id="chart-by-type" class="bar-chart"></div>
-        </div>
-
-        <!-- By Timeframe -->
-        <div class="perf-panel">
-          <div class="perf-panel-header">Win Rate by Timeframe</div>
-          <div id="chart-by-tf" class="bar-chart"></div>
-        </div>
-
-        <!-- By Direction -->
-        <div class="perf-panel">
-          <div class="perf-panel-header">Win Rate by Direction</div>
-          <div id="chart-by-dir" class="bar-chart"></div>
-        </div>
-
-        <!-- Time-of-Day heat map -->
-        <div class="perf-panel perf-panel-wide">
-          <div class="perf-panel-header">Win Rate by Hour (ET)</div>
-          <div id="tod-heatmap" class="tod-heatmap"></div>
-        </div>
-
+      <!-- ── Tab bar ─────────────────────────────────────────────────────── -->
+      <div class="perf-tabs">
+        <button class="perf-tab active" data-tab="overview">Overview</button>
+        <button class="perf-tab" data-tab="tradelog">Trade Log</button>
+        <button class="perf-tab" data-tab="propfirms">Prop Firms</button>
+        <button class="perf-tab" data-tab="realaccount">Real Account</button>
       </div>
 
-      <!-- Alert table -->
-      <section class="alert-table-section">
-        <div class="perf-panel-header">
-          All Resolved Alerts
-          <span id="table-count" class="table-count"></span>
-          <a href="/api/export" class="csv-btn" download>⬇ Export JSON</a>
+      <!-- ══════════════════════════════════════════════════════════════════ -->
+      <!-- TAB: Overview                                                      -->
+      <!-- ══════════════════════════════════════════════════════════════════ -->
+      <section class="perf-tab-content active" id="tab-overview">
+
+        <div class="stat-cards" id="ov-cards">
+          <!-- Trade Log -->
+          <div class="stat-card">
+            <div class="stat-label">Trade Log — Win Rate</div>
+            <div class="stat-value" id="ov-tl-wr">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Trade Log — Profit Factor</div>
+            <div class="stat-value" id="ov-tl-pf">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Trade Log — Trades</div>
+            <div class="stat-value" id="ov-tl-trades">—</div>
+          </div>
+          <!-- Prop Firms -->
+          <div class="stat-card">
+            <div class="stat-label">Prop — Net Cost</div>
+            <div class="stat-value" id="ov-pf-net">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Prop — Pass Rate</div>
+            <div class="stat-value" id="ov-pf-pass">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Prop — Payouts</div>
+            <div class="stat-value" id="ov-pf-payouts">—</div>
+          </div>
+          <!-- Real Account -->
+          <div class="stat-card">
+            <div class="stat-label">Real — Net P&amp;L</div>
+            <div class="stat-value" id="ov-ra-pnl">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Real — Win Rate</div>
+            <div class="stat-value" id="ov-ra-wr">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Real — Fees Paid</div>
+            <div class="stat-value" id="ov-ra-fees">—</div>
+          </div>
         </div>
-        <div class="table-wrap">
-          <table id="alert-table">
-            <thead>
-              <tr>
-                <th>Symbol</th><th>TF</th><th>Type</th>
-                <th>Dir</th><th>Conf</th><th>Outcome</th>
-                <th>Time (ET)</th>
-              </tr>
-            </thead>
-            <tbody id="alert-tbody"></tbody>
-          </table>
+
+        <!-- Combined P&L snapshot -->
+        <div class="perf-panel perf-panel-wide" style="margin-top:16px">
+          <div class="perf-panel-header">Combined P&amp;L Snapshot</div>
+          <div id="ov-combined" class="ov-combined-grid"></div>
         </div>
+
       </section>
 
-      <!-- Trade log with charts -->
-      <section class="alert-table-section" style="margin-top:16px">
-        <div class="perf-panel-header">
-          Trade Log
-          <span id="trade-count" class="table-count"></span>
+      <!-- ══════════════════════════════════════════════════════════════════ -->
+      <!-- TAB: Trade Log                                                     -->
+      <!-- ══════════════════════════════════════════════════════════════════ -->
+      <section class="perf-tab-content" id="tab-tradelog">
+
+        <!-- Summary cards -->
+        <div class="stat-cards">
+          <div class="stat-card">
+            <div class="stat-label">Win Rate</div>
+            <div class="stat-value" id="s-wr">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Profit Factor</div>
+            <div class="stat-value" id="s-pf">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Avg R</div>
+            <div class="stat-value" id="s-avgr">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Total Trades</div>
+            <div class="stat-value" id="s-total">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Won / Lost / Open</div>
+            <div class="stat-value" id="s-wlo">— / — / —</div>
+          </div>
         </div>
-        <div class="table-wrap">
-          <table id="trade-table">
-            <thead>
-              <tr>
-                <th>Symbol</th><th>TF</th><th>Dir</th>
-                <th>Entries</th><th>Avg Entry</th><th>Avg Exit</th>
-                <th>P&amp;L</th><th>Outcome</th><th>Date</th><th></th>
-              </tr>
-            </thead>
-            <tbody id="trade-tbody"></tbody>
-          </table>
+
+        <div class="perf-grid">
+          <div class="perf-panel">
+            <div class="perf-panel-header">Win Rate by Symbol</div>
+            <div id="chart-by-symbol" class="bar-chart"></div>
+          </div>
+          <div class="perf-panel">
+            <div class="perf-panel-header">Win Rate by Setup Type</div>
+            <div id="chart-by-type" class="bar-chart"></div>
+          </div>
+          <div class="perf-panel">
+            <div class="perf-panel-header">Win Rate by Timeframe</div>
+            <div id="chart-by-tf" class="bar-chart"></div>
+          </div>
+          <div class="perf-panel">
+            <div class="perf-panel-header">Win Rate by Direction</div>
+            <div id="chart-by-dir" class="bar-chart"></div>
+          </div>
+          <div class="perf-panel perf-panel-wide">
+            <div class="perf-panel-header">Win Rate by Hour (ET)</div>
+            <div id="tod-heatmap" class="tod-heatmap"></div>
+          </div>
         </div>
+
+        <!-- Alert table -->
+        <section class="alert-table-section">
+          <div class="perf-panel-header">
+            All Resolved Alerts
+            <span id="table-count" class="table-count"></span>
+            <a href="/api/export" class="csv-btn" download>Export JSON</a>
+          </div>
+          <div class="table-wrap">
+            <table id="alert-table">
+              <thead>
+                <tr>
+                  <th>Symbol</th><th>TF</th><th>Type</th>
+                  <th>Dir</th><th>Conf</th><th>Outcome</th>
+                  <th>Time (ET)</th>
+                </tr>
+              </thead>
+              <tbody id="alert-tbody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- Trade log with charts -->
+        <section class="alert-table-section" style="margin-top:16px">
+          <div class="perf-panel-header">
+            Manual Trade Log
+            <span id="trade-count" class="table-count"></span>
+          </div>
+          <div class="table-wrap">
+            <table id="trade-table">
+              <thead>
+                <tr>
+                  <th>Symbol</th><th>TF</th><th>Dir</th>
+                  <th>Entries</th><th>Avg Entry</th><th>Avg Exit</th>
+                  <th>P&amp;L</th><th>Outcome</th><th>Date</th><th></th>
+                </tr>
+              </thead>
+              <tbody id="trade-tbody"></tbody>
+            </table>
+          </div>
+        </section>
+
+      </section>
+
+      <!-- ══════════════════════════════════════════════════════════════════ -->
+      <!-- TAB: Prop Firms                                                    -->
+      <!-- ══════════════════════════════════════════════════════════════════ -->
+      <section class="perf-tab-content" id="tab-propfirms">
+
+        <div class="stat-cards">
+          <div class="stat-card">
+            <div class="stat-label">Firm Spend</div>
+            <div class="stat-value" id="pf-spend">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Tools &amp; Services</div>
+            <div class="stat-value" id="pf-expenses">—</div>
+          </div>
+          <div class="stat-card stat-card-green">
+            <div class="stat-label">Payouts Received</div>
+            <div class="stat-value" id="pf-payouts">—</div>
+          </div>
+          <div class="stat-card stat-card-red">
+            <div class="stat-label">Net Cost</div>
+            <div class="stat-value" id="pf-net">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Attempts</div>
+            <div class="stat-value" id="pf-attempts">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Pass Rate</div>
+            <div class="stat-value" id="pf-passrate">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Active Accounts</div>
+            <div class="stat-value" id="pf-active">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Avg Cost / Attempt</div>
+            <div class="stat-value" id="pf-avgcost">—</div>
+          </div>
+        </div>
+
+        <div class="perf-grid">
+          <div class="perf-panel">
+            <div class="perf-panel-header">Cost by Firm</div>
+            <div id="pf-by-firm" class="bar-chart"></div>
+          </div>
+          <div class="perf-panel">
+            <div class="perf-panel-header">Pass Rate by Firm</div>
+            <div id="pf-passrate-chart" class="bar-chart"></div>
+          </div>
+          <div class="perf-panel">
+            <div class="perf-panel-header">Failure Reasons</div>
+            <div id="pf-failures" class="bar-chart"></div>
+          </div>
+          <div class="perf-panel">
+            <div class="perf-panel-header">Payouts by Firm</div>
+            <div id="pf-payout-chart" class="bar-chart"></div>
+          </div>
+        </div>
+
+        <section class="alert-table-section" style="margin-top:16px">
+          <div class="perf-panel-header">Prop Accounts</div>
+          <div class="table-wrap">
+            <table id="pf-accounts-table">
+              <thead>
+                <tr>
+                  <th>Firm</th><th>Date</th><th>Size</th><th>Cost</th>
+                  <th>Phase</th><th>Status</th><th>Notes</th>
+                </tr>
+              </thead>
+              <tbody id="pf-accounts-tbody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="alert-table-section" style="margin-top:16px">
+          <div class="perf-panel-header">Payouts</div>
+          <div class="table-wrap">
+            <table id="pf-payouts-table">
+              <thead>
+                <tr><th>Firm</th><th>Date</th><th>Amount</th><th>Notes</th></tr>
+              </thead>
+              <tbody id="pf-payouts-tbody"></tbody>
+            </table>
+          </div>
+        </section>
+
+      </section>
+
+      <!-- ══════════════════════════════════════════════════════════════════ -->
+      <!-- TAB: Real Account                                                  -->
+      <!-- ══════════════════════════════════════════════════════════════════ -->
+      <section class="perf-tab-content" id="tab-realaccount">
+
+        <div class="stat-cards">
+          <div class="stat-card">
+            <div class="stat-label">Starting Balance</div>
+            <div class="stat-value" id="ra-start">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Current Balance</div>
+            <div class="stat-value" id="ra-current">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Net P&amp;L</div>
+            <div class="stat-value" id="ra-net-pnl">—</div>
+          </div>
+          <div class="stat-card stat-card-red">
+            <div class="stat-label">Total Fees Paid</div>
+            <div class="stat-value" id="ra-fees">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Trades</div>
+            <div class="stat-value" id="ra-trades">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Win Rate</div>
+            <div class="stat-value" id="ra-wr">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Gross P&amp;L</div>
+            <div class="stat-value" id="ra-gross">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Avg Fee / Trade</div>
+            <div class="stat-value" id="ra-avg-fee">—</div>
+          </div>
+        </div>
+
+        <div class="perf-grid">
+          <div class="perf-panel">
+            <div class="perf-panel-header">P&amp;L by Symbol</div>
+            <div id="ra-by-symbol" class="bar-chart"></div>
+          </div>
+          <div class="perf-panel">
+            <div class="perf-panel-header">Win Rate by Symbol</div>
+            <div id="ra-winrate-chart" class="bar-chart"></div>
+          </div>
+          <div class="perf-panel">
+            <div class="perf-panel-header">Monthly P&amp;L</div>
+            <div id="ra-monthly" class="bar-chart"></div>
+          </div>
+          <div class="perf-panel">
+            <div class="perf-panel-header">Fees by Type</div>
+            <div id="ra-fees-chart" class="bar-chart"></div>
+          </div>
+        </div>
+
+        <section class="alert-table-section" style="margin-top:16px">
+          <div class="perf-panel-header">Real Account Trades</div>
+          <div class="table-wrap">
+            <table id="ra-trades-table">
+              <thead>
+                <tr>
+                  <th>Date</th><th>Broker</th><th>Symbol</th>
+                  <th>Qty</th><th>P&amp;L</th><th>Fees</th>
+                  <th>Net</th><th>Notes</th>
+                </tr>
+              </thead>
+              <tbody id="ra-trades-tbody"></tbody>
+            </table>
+          </div>
+        </section>
+
       </section>
 
     </main>

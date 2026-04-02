@@ -357,4 +357,34 @@ All toggleable at runtime via `POST /api/features { "featureName": true|false }`
 | Trendline Break | `trendline_break` | ≥3 touches required |
 | OR Breakout | `or_breakout` | After 14:00 UTC, RTH only, first-close |
 
+## Backtest System (v10.x) — Key Facts
+
+### Engine (`server/backtest/engine.js`)
+- Primary mode: `runBacktestMTF()` — bar-by-bar replay using pre-derived TF files
+- **Current-bar filter**: `if (setup.time !== detectTs) continue` — only fires setups triggered by the bar that just closed. Prevents stale entry prices from historical candles.
+- **OR breakout dedup**: keyed `${symbol}-${date}-or_breakout-${direction}` — fires once per session per direction only.
+- **maxDrawdown**: computed from trade-by-trade running sequence, not daily equity aggregates.
+- `excludeHours` config param: array of ET hours (0–23) to skip at entry time.
+- `TF_SECONDS` map: `{ '1m':60, '5m':300, '15m':900, '30m':1800, ... }`
+- Force-close at 16:45 ET via `_forceCloseTs()` — iterates all bars, no early break.
+- 1-trade-at-a-time per symbol enforced via `lastExitTs[symbol]`.
+
+### Backtest UI (`public/backtest2.html`, `backtest2.js`, `backtest2.css`)
+- Config: date range, symbols, timeframes, setup types, min confidence, starting balance, HP toggle, max hold, fee/RT, contracts, trading hours filter
+- **Trading Hours filter**: hourly checkboxes (ET) with session presets (All / RTH Only / None); saved to localStorage
+- Summary tab: stat cards, equity curve, drawdown chart, daily P&L bars
+- Trades tab: sortable/filterable table, CSV export
+- Replay tab: 1m animated chart, full-run mode (`/api/backtest/replay/:jobId/full`)
+- **Compare tab**: up to 6 runs side by side; overlaid equity curves (x = trade#); full breakdown table (config, overall stats, by setup type, by TF, by symbol, by direction, by confidence bucket); best value highlighted green; CSV export
+
+### Backtest API Routes
+- `POST /api/backtest/run` — launch async job
+- `GET /api/backtest/status/:jobId`
+- `GET /api/backtest/jobs` — list all jobs (includes `stats` for each)
+- `GET /api/backtest/jobs/:jobId/results` — full results (trades + equity)
+- `DELETE /api/backtest/jobs/:jobId`
+- `GET /api/backtest/replay/:jobId?symbol=X&date=YYYY-MM-DD`
+- `GET /api/backtest/replay/:jobId/full?symbol=X` — all bars + alerts for full-run replay
+- `GET /api/backtest/available` — available date ranges per symbol
+
 **Next step when resuming:** integrate live Ironbeam/CQG WebSocket data feed (replace seed mode) per the data-source-agnostic interface in `server/data/snapshot.js`.

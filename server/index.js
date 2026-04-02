@@ -28,7 +28,8 @@ const { computeCorrelationMatrix } = require('./analysis/correlation');
 const { computePerformanceStats }  = require('./analysis/performanceStats');
 const { predict }                  = require('./analysis/predictor');
 const { getCalendarEvents } = require('./data/calendar');
-const { getOptionsData }                               = require('./data/options');
+const { getOptionsData }    = require('./data/options');
+const { buildMarketContext } = require('./analysis/marketContext');
 const settings              = require('../config/settings.json');
 const fs                    = require('fs');
 
@@ -1782,6 +1783,77 @@ app.get('/api/realaccount/daily-pnl', (_req, res) => {
   res.json({ date: today, trades: todayTrades.length, grossPnl: netPnl, fees: totalFees, netPnl: netPnl - totalFees });
 });
 
+// ─── BACKTEST API ────────────────────────────────────────────────────────────
+
+const {
+  launchBacktest, getJob, getJobResults, listJobs, deleteJob,
+  getReplayData, getFullRunReplayData, getAvailableDateRange,
+} = require('./backtest/engine');
+
+// GET /api/backtest/available — date ranges per symbol
+app.get('/api/backtest/available', (_req, res) => {
+  try { res.json(getAvailableDateRange()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/backtest/run — start async backtest job
+app.post('/api/backtest/run', (req, res) => {
+  const config = req.body;
+  if (!config || !config.startDate || !config.endDate) {
+    return res.status(400).json({ error: 'config.startDate and endDate required' });
+  }
+  try {
+    const jobId = launchBacktest(config);
+    res.json({ jobId });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/backtest/status/:jobId
+app.get('/api/backtest/status/:jobId', (req, res) => {
+  const job = getJob(req.params.jobId);
+  if (!job) return res.status(404).json({ error: 'Job not found' });
+  res.json({ jobId: req.params.jobId, status: job.status, progress: job.progress ?? 0, error: job.error });
+});
+
+// GET /api/backtest/results/:jobId
+app.get('/api/backtest/results/:jobId', (req, res) => {
+  const job = getJob(req.params.jobId);
+  if (!job) return res.status(404).json({ error: 'Job not found' });
+  const results = getJobResults(req.params.jobId);
+  if (!results) return res.status(404).json({ error: 'Results not yet available' });
+  res.json(results);
+});
+
+// GET /api/backtest/jobs
+app.get('/api/backtest/jobs', (_req, res) => {
+  try { res.json(listJobs()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// DELETE /api/backtest/jobs/:jobId
+app.delete('/api/backtest/jobs/:jobId', (req, res) => {
+  deleteJob(req.params.jobId);
+  res.json({ ok: true });
+});
+
+// GET /api/backtest/replay/:jobId/full?symbol=MNQ  — all days for the run
+app.get('/api/backtest/replay/:jobId/full', (req, res) => {
+  const { symbol } = req.query;
+  if (!symbol) return res.status(400).json({ error: 'symbol required' });
+  const data = getFullRunReplayData(req.params.jobId, symbol);
+  if (!data) return res.status(404).json({ error: 'No data found' });
+  res.json(data);
+});
+
+// GET /api/backtest/replay/:jobId?symbol=MNQ&date=2026-01-15
+app.get('/api/backtest/replay/:jobId', (req, res) => {
+  const { symbol, date } = req.query;
+  if (!symbol || !date) return res.status(400).json({ error: 'symbol and date required' });
+  const data = getReplayData(req.params.jobId, symbol, date);
+  if (!data) return res.status(404).json({ error: 'No replay data found' });
+  res.json(data);
+});
+
 // ---------------------------------------------------------------------------
 
 const server = http.createServer(app);
@@ -1885,13 +1957,12 @@ async function runScan() {
   }
 
   // Fetch calendar events once per scan (cached in calendar.js for 1h)
+  // Economic calendar is always-on — no feature flag needed.
   let calendarCache = {};
-  if (settings.features?.economicCalendar) {
-    for (const sym of SCAN_SYMBOLS) {
-      // Crypto symbols have no relevant ForexFactory calendar events
-      if (['BTC', 'ETH', 'XRP'].includes(sym)) { calendarCache[sym] = []; continue; }
-      try { calendarCache[sym] = await getCalendarEvents(sym); } catch { calendarCache[sym] = []; }
-    }
+  for (const sym of SCAN_SYMBOLS) {
+    // Crypto symbols have no relevant ForexFactory calendar events
+    if (['BTC', 'ETH', 'XRP', 'XLM'].includes(sym)) { calendarCache[sym] = []; continue; }
+    try { calendarCache[sym] = await getCalendarEvents(sym); } catch { calendarCache[sym] = []; }
   }
 
   for (const symbol of SCAN_SYMBOLS) {
@@ -1900,6 +1971,30 @@ async function runScan() {
     const regime15m = _regimeFor(symbol, '15m');
     const alignment = computeAlignment(regime15m, regime5m);
     const calendarEvents = calendarCache[symbol] || [];
+
+    // Build market context once per symbol (options + VIX + DXY)
+    // Uses 15m indicators as proxy for current price/ATR
+    let marketContext = null;
+    try {
+      const ind15m = (() => {
+        try {
+          const c = getCandles(symbol, '15m');
+          return computeIndicators(c, { swingLookback: settings.swingLookback,
+            impulseThreshold: settings.impulseThreshold, symbol });
+        } catch { return null; }
+      })();
+      const optData = await getOptionsData(symbol);
+      marketContext = await buildMarketContext(symbol, ind15m, optData, getCandles, corrMatrix);
+      console.log(
+        `[marketContext] ${symbol}` +
+        ` hp=${marketContext.hp.nearestLevel?.type ?? 'none'}` +
+        ` vix=${marketContext.vix.regime}` +
+        ` dxy=${marketContext.dxy.direction}`
+      );
+    } catch (err) {
+      console.warn(`[marketContext] ${symbol} failed: ${err.message}`);
+      marketContext = null;
+    }
 
     // ── Collect all setup candidates for this symbol across all TFs ──────────
     const candidates = []; // { tf, setup, regime }
@@ -1911,13 +2006,12 @@ async function runScan() {
           swingLookback:    settings.swingLookback,
           impulseThreshold: settings.impulseThreshold,
           symbol,
-          features:         settings.features || {},
         });
         const regime     = { ...classifyRegime(ind), alignment };
         const trendlines = detectTrendlines(candles, ind.atrCurrent);
         const setups     = detectSetups(candles, ind, regime, {
           rrRatio: settings.risk.rrRatio || 1.0, symbol, trendlines, calendarEvents,
-          correlationMatrix: corrMatrix,
+          correlationMatrix: corrMatrix, marketContext,
         });
 
         for (const setup of setups) {

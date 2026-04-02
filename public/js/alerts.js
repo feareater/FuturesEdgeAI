@@ -1167,29 +1167,32 @@
     const countBadge = document.getElementById('pred-count-badge');
     if (!predFeed) return;
 
-    // Open setups = untaken alerts with open or no outcome — across ALL symbols.
-    // Validity window scales with the setup's timeframe: a 15m signal is stale
-    // after ~3h; a 4h signal after ~20h. Based on ~10 candles of the setup's TF.
-    // Once that window passes the setup context has shifted and the trade isn't worth taking.
+    // Show setups for the active symbol only — user watches one symbol at a time.
+    // Validity window scales with TF: 15m signal valid ~3h, 4h signal ~20h.
     const TF_EXPIRY_SECS = { '15m': 3*3600, '30m': 5*3600, '1h': 8*3600, '2h': 12*3600, '4h': 20*3600 };
-    const newestCandleTime = allAlerts.reduce((max, a) => Math.max(max, a.setup?.time || 0), 0);
-    const openSetups = allAlerts.filter(a => {
+    const symAlerts = allAlerts.filter(a => a.symbol === activeSymbol);
+    const newestCandleTime = symAlerts.reduce((max, a) => Math.max(max, a.setup?.time || 0), 0);
+    const openSetups = symAlerts.filter(a => {
       if (takenTrades.has(_alertKey(a))) return false;
       if (a.setup?.outcome && a.setup.outcome !== 'open') return false;
       const expirySecs = TF_EXPIRY_SECS[a.timeframe] ?? 8 * 3600;
       if ((a.setup?.time ?? 0) < newestCandleTime - expirySecs) return false;
-      // Price proximity: hide if SL already breached (progress < 0) or price has
-      // traveled ≥60% from entry toward TP — entering now means chasing with poor R:R.
       if (a.priceProgress != null && (a.priceProgress < 0 || a.priceProgress >= 0.6)) return false;
       return true;
     });
 
     if (countBadge) countBadge.textContent = openSetups.length > 0 ? String(openSetups.length) : '';
 
+    // Keep the header label in sync with the active symbol
+    const predHeader = document.querySelector('#scan-predictions-section .panel-header');
+    if (predHeader && predHeader.childNodes[0]?.nodeType === Node.TEXT_NODE) {
+      predHeader.childNodes[0].textContent = `Setups · ${activeSymbol} `;
+    }
+
     _checkDailyRisk();
 
     if (openSetups.length === 0) {
-      predFeed.innerHTML = '<p class="placeholder">No predictions yet.</p>';
+      predFeed.innerHTML = `<p class="placeholder">No active setups for ${activeSymbol}.</p>`;
       return;
     }
 
@@ -1523,17 +1526,24 @@
     card.className = `pred-card ${cls}${overBudget ? ' over-budget' : ''}`;
     card.dataset.alertKey = aiKey;
 
+    const nearEventHtml = setup.nearEvent
+      ? `<span class="near-event-badge">⚠ Near Event</span>` : '';
+    const stressHtml = setup.scoreBreakdown?.context?.stressFlag
+      ? `<span class="bd-stress-flag">⚠ High VIX + Fragile</span>` : '';
+
     card.innerHTML = `
       <div class="pred-card-header">
-        <span class="pred-card-sym">${symbol}</span>
         <span class="pred-card-tf">${timeframe}</span>
         <span class="pred-card-type">${_fmtType(setup.type)}</span>
         <span class="pred-card-dir ${cls}">${arrow}</span>
         <span class="pred-card-conf">${setup.confidence}%</span>
         <span class="pred-card-age">${ageText}</span>
+        ${nearEventHtml}
       </div>
       <div class="pred-card-rationale">${setup.rationale || '—'}</div>
-      ${setup.entryGuidance ? `<div class="pred-card-guidance"><em>${setup.entryGuidance}</em></div>` : ''}
+      ${_fmtBreakdown(setup.scoreBreakdown)}
+      ${stressHtml}
+      ${setup.entryGuidance ? `<div class="pred-card-guidance">${setup.entryGuidance}</div>` : ''}
       <div class="pred-card-prices">
         <span class="pcp-label">Entry</span><span class="pcp-val">${fmtP(setup.entry ?? setup.price)}</span>
         <span class="pcp-label sl">SL</span><span class="pcp-val sl">${fmtP(setup.sl)}</span>
@@ -1541,7 +1551,6 @@
       </div>
       ${setup.suggestedContracts != null ? `<div class="pred-card-sizing">${setup.suggestedContracts} contract${setup.suggestedContracts !== 1 ? 's' : ''} · $${riskDollars != null ? riskDollars : '—'} risk</div>` : ''}
       <div class="pred-card-footer">
-        <span class="pred-card-risk ${overBudget ? 'risk-over' : 'risk-ok'}">${riskDollars != null ? '$' + riskDollars : ''}</span>
         <button class="pred-monitor-btn" data-key="${aiKey}">Monitor</button>
         <button class="pred-take-btn" data-key="${aiKey}">Take</button>
       </div>
@@ -1748,7 +1757,53 @@
     if (sd.iof    > 0) parts.push(`<span class="bd-item bd-iof">+IOF${sd.iof}</span>`);
     if (sd.bos    > 0) parts.push(`<span class="bd-item bd-bos">+BQ${sd.bos}</span>`);
     if (sd.tfStack > 0) parts.push(`<span class="bd-item bd-tfstack">+TFS${sd.tfStack}</span>`);
-    return `<div class="alert-score-bd">${parts.join('')}</div>`;
+    const baseRow = parts.length ? `<div class="alert-score-bd">${parts.join('')}</div>` : '';
+    return baseRow + _fmtContextBreakdown(sd.context);
+  }
+
+  function _fmtContextBreakdown(ctx) {
+    if (!ctx || !ctx.combinedMultiplier) return '';
+    const rows = [];
+
+    // Base → final via multiplier
+    const multSign = ctx.combinedMultiplier >= 1 ? '+' : '';
+    rows.push(
+      `<span class="bd-ctx-base">Base ${ctx.baseScore}</span>` +
+      `<span class="bd-ctx-mult">${multSign}×${ctx.combinedMultiplier.toFixed(2)}</span>`
+    );
+
+    // VIX regime badge
+    const vixColors = { low: 'bd-vix-low', normal: 'bd-vix-normal',
+                        elevated: 'bd-vix-elevated', crisis: 'bd-vix-crisis', unavailable: '' };
+    if (ctx.vixRegime && ctx.vixRegime !== 'unavailable') {
+      rows.push(`<span class="bd-vix ${vixColors[ctx.vixRegime] || ''}">VIX ${ctx.vixRegime}</span>`);
+    }
+
+    // HP nearest level
+    if (ctx.hpNearest) {
+      const dist = ctx.hpNearest.distance_atr != null ? ` ${ctx.hpNearest.distance_atr}ATR` : '';
+      rows.push(`<span class="bd-hp">${ctx.hpNearest.type}${dist}</span>`);
+    } else if (ctx.inCorridor) {
+      rows.push(`<span class="bd-hp">HP corridor</span>`);
+    }
+
+    // DEX / DXY additive bonuses
+    if (ctx.dexBonus !== 0) {
+      rows.push(`<span class="bd-ctx-bonus ${ctx.dexBonus > 0 ? 'pos' : 'neg'}">${ctx.dexBonus > 0 ? '+' : ''}${ctx.dexBonus} DEX</span>`);
+    }
+    if (ctx.dxyBonus !== 0) {
+      rows.push(`<span class="bd-ctx-bonus ${ctx.dxyBonus > 0 ? 'pos' : 'neg'}">${ctx.dxyBonus > 0 ? '+' : ''}${ctx.dxyBonus} DXY</span>`);
+    }
+    if (ctx.freshnessDecay < 0) {
+      rows.push(`<span class="bd-ctx-bonus neg">${ctx.freshnessDecay} stale</span>`);
+    }
+
+    // Stress flag warning
+    const stressHtml = ctx.stressFlag
+      ? `<span class="bd-stress-flag">&#9888; High VIX + Fragile</span>`
+      : '';
+
+    return `<div class="alert-score-ctx">${rows.join('')}${stressHtml}</div>`;
   }
 
   // ── Card rendering ─────────────────────────────────────────────────────────

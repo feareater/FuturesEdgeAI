@@ -1,6 +1,95 @@
-/* Performance analytics page styles */
+/* Performance / Stats page styles */
 
 body { overflow: auto; }
+
+/* ── Stats page tabs ─────────────────────────────────────────────────────── */
+
+.perf-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0;
+}
+
+.perf-tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-dim);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 16px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  margin-bottom: -1px;
+}
+
+.perf-tab:hover { color: var(--text); }
+.perf-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+.perf-tab-content { display: none; }
+.perf-tab-content.active { display: block; }
+
+/* ── Stat card color variants ─────────────────────────────────────────────── */
+
+.stat-card-green { border-color: rgba(76,175,80,0.4); }
+.stat-card-green .stat-value { color: var(--bull); }
+.stat-card-red   { border-color: rgba(239,68,68,0.4); }
+.stat-card-red   .stat-value { color: var(--bear); }
+
+/* ── Overview combined grid ───────────────────────────────────────────────── */
+
+.ov-combined-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ov-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 12px;
+  background: rgba(255,255,255,0.03);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+
+.ov-row-label { width: 160px; color: var(--text-dim); font-weight: 600; flex-shrink: 0; }
+.ov-row-value { width: 100px; font-size: 20px; font-weight: 700; }
+.ov-row-note  { color: var(--text-dim); font-size: 11px; }
+
+/* ── Generic data tables (prop firms / real account in stats) ────────────── */
+
+#pf-accounts-table, #pf-payouts-table, #ra-trades-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+#pf-accounts-table th, #pf-payouts-table th, #ra-trades-table th {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+#pf-accounts-table td, #pf-payouts-table td, #ra-trades-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  color: var(--text);
+}
+
+#pf-accounts-table tr:hover td,
+#pf-payouts-table tr:hover td,
+#ra-trades-table tr:hover td { background: rgba(255,255,255,0.03); }
+
+/* bar-pct wider for dollar values */
+.bar-pct { min-width: 52px; }
 
 #perf-main {
   padding: 16px;

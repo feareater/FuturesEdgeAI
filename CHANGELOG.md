@@ -4,6 +4,139 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v10.1] — 2026-04-02 — Backtest Bias Fixes, Hour Filter & Compare
+
+### Backtest Engine — Bias Fixes (`server/backtest/engine.js`)
+- **Current-bar filter**: Added `if (setup.time !== detectTs) continue` in both backtest loops. Setups only fire when the triggering candle IS the bar that just closed. Eliminates stale entry prices — prior to this fix, `setup.entry = c.close` from a candle 10–20 bars in the past was used as entry, with price already past TP, creating phantom bar-1 wins.
+- **OR breakout per-session dedup**: Changed dedup key to `${symbol}-${date}-or_breakout-${direction}` so OR breakout fires at most once per session per direction (first clean break only). Previously fired on every 1m bar above the OR level (63–88 trades/day in some sessions).
+- **maxDrawdown from trade sequence**: Replaced daily equity-based drawdown calculation with trade-by-trade running peak-to-trough. Daily netting was masking intraday losses, reporting $0 drawdown on runs with hundreds of losing trades.
+- **`seenSetupKeys` dedup key**: Changed from `${symbol}-${date}-${tf}-${type}-${direction}-${round(zoneLevel)}` to `${symbol}-${tf}-${setup.time}-${type}-${direction}`. Zone level was fractional and shifted slightly across bar iterations, allowing the same zone to re-fire with a stale price.
+
+### Backtest Engine — Hour Filter (`server/backtest/engine.js`)
+- Added `excludeHours` config parameter (array of ET hours 0–23 to skip).
+- Trades whose entry falls in an excluded hour are skipped before outcome resolution.
+
+### Backtest UI — Hour Filter (`public/backtest2.html`, `backtest2.js`, `backtest2.css`)
+- New **Trading Hours (ET)** section inside Advanced panel.
+- Three session groups: Overnight (18–8 ET), RTH (9–16), After Hours (17).
+- Each hour is a checkbox tile — unchecked = skip.
+- Preset buttons: **All**, **RTH Only**, **None**.
+- Excluded hours saved/restored with config via localStorage.
+
+### Backtest UI — Compare Tab (`public/backtest2.html`, `backtest2.js`, `backtest2.css`)
+- New **Compare** tab supporting up to 6 runs side by side.
+- Color-coded run selectors with remove buttons; populates from previous runs list.
+- **Overlaid equity curves** using TradingView Lightweight Charts, x-axis = trade number (normalizes across different date ranges).
+- **Full comparison table** with six sections:
+  - Configuration: date range, symbols, timeframes, setup types, min confidence, max hold, fee/RT, contracts, excluded hours
+  - Overall Performance: WR, PF, gross P&L, max drawdown, avg win/loss, avg R, expectancy, Sharpe, won/lost/timeout, largest win/loss
+  - By Setup Type: WR + P&L per setup (dynamic, based on what's in each run)
+  - By Timeframe: WR + P&L per timeframe
+  - By Symbol: WR + P&L per symbol (only shown when multiple symbols)
+  - By Direction: bullish vs bearish WR + P&L
+  - By Confidence: WR per confidence bucket (65–70%, 70–80%, 80–90%, 90%+)
+- Best value in each metric row highlighted in green.
+- **Export CSV** exports the full rendered table.
+- New `GET /api/backtest/jobs/:jobId/results` route used to fetch equity curves for comparison chart.
+
+### Service Worker
+- Bumped to `futuresedge-v31`.
+
+---
+
+## [v10.0] — 2026-04-02 — Historical Backtesting System
+
+### Data Pipeline (`server/data/historicalPipeline.js`)
+- Phase 1a: Zip inventory — discovers and logs all GLBX/OPRA zip file structure
+- Phase 1b: Extracts `.csv.zst` files from zips to `data/historical/raw/`
+- Phase 1c: Processes GLBX 1m futures bars → daily JSON files per symbol per TF (1m/5m/15m); front-month selection by volume; lookahead validation
+- Phase 1d: Fetches QQQ/SPY daily closes from Yahoo Finance v8 API
+- Phase 1e: Processes OPRA definition + statistics CSVs → per-date options OI files; filters ±25% spot, ≤45 DTE, OI > 0
+- Phase 1f: Runs Black-Scholes HP computation for each date → `computed/YYYY-MM-DD.json`
+- Data coverage: 64 trading days (2025-12-31 – 2026-03-31), MNQ/MES/MGC/MCL, QQQ/SPY options
+- Uses `@mongodb-js/zstd` for zstd decompression and `adm-zip` for zip reading (Node 24 native zstd had multi-frame issues)
+- Standalone script — runs independently of the server
+
+### HP Computation (`server/data/hpCompute.js`)
+- Pure Black-Scholes implementation in JavaScript (no external libraries)
+- normalCDF via Horner method (7-decimal accuracy), Black-Scholes delta/gamma
+- IV approximation: realized vol proxy from 20-day log returns × term structure factor
+- Computes: GEX/DEX, max pain, call/put walls, GEX flip, OI walls, hedge pressure zones, resilience score
+- Scales all levels to futures price space via historical ETF→futures ratio
+- Skip-if-exists logic + `--recompute` flag
+
+### Backtest Engine (`server/backtest/engine.js`)
+- Stateless bar-by-bar replay — `runBacktestMTF()` uses pre-derived 5m/15m/30m files
+- CRITICAL: `visibleBars = bars.slice(0, i+1)` — zero lookahead bias
+- Outcome resolution via 1m bars: SL/TP touch detection, timeout after configurable max bars
+- P&L calculation: point value × contracts − fee per RT
+- Full statistics package: WR, PF, avg R, Sharpe, max drawdown, expectancy
+- Breakdown by symbol, setup type, timeframe, hour, confidence bucket, HP proximity, resilience label
+- `buildMarketContextFromHP()` — applies v9.0 HP scoring from historical snapshots
+- Async job system: `launchBacktest()` → jobId; poll `/api/backtest/status/:id`
+- Results saved to `data/backtest/results/{jobId}.json` (immutable)
+
+### API Routes (added to `server/index.js`)
+- `POST /api/backtest/run` — launch async backtest, returns jobId
+- `GET /api/backtest/status/:jobId` — poll status
+- `GET /api/backtest/results/:jobId` — full results JSON
+- `GET /api/backtest/jobs` — list all jobs
+- `DELETE /api/backtest/jobs/:jobId` — delete job + results
+- `GET /api/backtest/replay/:jobId?symbol=MNQ&date=2026-01-15` — replay data for chart
+
+### Backtest UI (`public/backtest2.html` + `backtest2.js` + `backtest2.css`)
+- Config panel: date range, symbols, timeframes, setup types, min confidence, HP toggle, advanced options
+- Summary tab: 9 stat cards, equity curve (TradingView Lightweight Charts), 7 breakdown bar charts
+- Trades tab: sortable/filterable table, click-to-replay, CSV export
+- Replay tab: animated 1m chart with playback controls (play/pause/step/skip-to-alert), speed selector (1x-500x), HP level lines, running P&L
+- Config saved/restored from localStorage
+- Previous runs panel with quick load
+
+### Integration
+- `buildMarketContextFromHP()` maps historical HP snapshots to v9.0 `marketContext` shape
+- `applyMarketContext()` from `setups.js` runs on historical setups → full HP-adjusted confidence in backtest results
+- Nav "Backtest" link added to all pages
+- Service worker bumped to v26, backtest2 assets added to SHELL_ASSETS
+
+---
+
+## [v9.0] — 2026-04-01 — Three-Layer Confidence Scoring (HP × VIX × DXY)
+
+### New Module: `server/analysis/marketContext.js`
+- `buildMarketContext(symbol, indicators, options, getCandles, corrMatrix)` — async, builds a per-symbol context object once per scan cycle
+- **HP sub-object**: nearest HP level (type, price, distance_atr), pressureDirection (support/resistance/neutral), inCorridor flag with corridorBounds, freshness decay pts, base multiplier
+- **VIX sub-object**: live level, regime (low/normal/elevated/crisis), direction (rising/falling/flat), stressFlag
+- **DXY sub-object**: direction, correlationWithSymbol from rolling matrix, instrument-specific alignment bonuses (long/short)
+- **Options sub-object**: dexScore, dexBias, resilienceLabel, stressFlag mirror
+- All sub-objects degrade gracefully to safe defaults when data is unavailable
+
+### Setup Scoring: `server/analysis/setups.js`
+- New exported function `applyMarketContext(baseScore, setup, marketContext)`
+- **HP multiplier**: at level ≤0.3 ATR → 1.20 (aligned), 1.05 (neutral), 0.85 (opposing); near level 0.3–0.75 ATR → 1.10; corridor → 1.08 reversal / 0.88 breakout; no nearby → 1.00
+- **Resilience multiplier**: resilient → ×1.15 reversal / ×0.90 breakout; fragile → ×0.90 reversal / ×1.15 breakout
+- **VIX multiplier**: low → ×1.10 breakout; elevated → ×1.10 reversal / ×0.90 breakout; crisis → ×0.90 reversal / ×0.85 breakout; direction nudge ±0.05
+- Combined multiplier clamped to 0.80–1.30
+- **Additive bonuses**: DEX ±3–8 pts (direction-aware), DXY ±3–8 pts (instrument-gated), freshness decay 0/−5/−10/−15 pts (halved on 0DTE days)
+- `scoreBreakdown.context` field added to every setup object with full breakdown
+- Applied after all base scoring and calendar gating in `detectSetups()`
+
+### Scan Engine: `server/index.js`
+- `buildMarketContext` called once per symbol per scan cycle before the per-TF loop
+- `marketContext` passed to `detectSetups` via `opts.marketContext`
+- Economic calendar fetch is now always-on (removed stale `settings.features?.economicCalendar` guard)
+- `features` key removed from `computeIndicators` opts (no longer in settings)
+
+### Frontend: `public/js/alerts.js` + `dashboard.css`
+- `_fmtContextBreakdown(ctx)` renders context row below base score breakdown
+- Shows: base score, combined multiplier (×N.NN), VIX regime badge (color-coded), HP nearest level + distance, DEX/DXY bonuses if non-zero, freshness decay if negative, stress flag warning if high VIX + fragile structure
+
+### Prerequisites resolved
+- `server/data/snapshot.js`: `MACRO_SYMBOLS` set added (DXY, VIX, QQQ, SPY, GLD, USO, SLV); exported alongside CRYPTO_SYMBOLS
+- `server/analysis/indicators.js`: VP/OR/sessionLevels skip macro symbols (`!isMacro` guard)
+- `server/data/options.js`: `lastFetchedAt: Date.now()` added to result before caching; available in all return paths via object spread
+
+---
+
 ## [v8.0] — 2026-03-31 — QQQ Options Intelligence + Pine Script Export
 
 ### Added — CBOE Options Data Source

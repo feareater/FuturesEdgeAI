@@ -219,6 +219,41 @@ html, body {
   gap: 4px;
 }
 
+/* ── Dashboard mode toggle (Futures / Crypto) ──────────────────────────── */
+
+.dash-mode-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.dash-mode-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: var(--radius);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+  white-space: nowrap;
+}
+
+.dash-mode-btn:hover { border-color: var(--accent); color: var(--text); }
+
+.dash-mode-btn.active {
+  background: rgba(76,175,80,0.18);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ── Symbol groups ──────────────────────────────────────────────────────── */
+
 .sym-groups {
   display: flex;
   align-items: center;
@@ -929,6 +964,61 @@ html, body {
 .bd-item.bd-iof    { color: #ffb300;       opacity: 1; }
 .bd-item.bd-bos    { color: #26c6da;       opacity: 1; } /* BOS-qualified zone — teal */
 .bd-item.bd-tfstack{ color: #ffd54f;       opacity: 1; } /* multi-TF zone stack — gold */
+
+/* ── Market context breakdown row ────────────────────────────────────── */
+
+.alert-score-ctx {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px;
+  margin-bottom: 3px;
+  padding-top: 2px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+
+.bd-ctx-base {
+  font-size: 9px;
+  color: var(--text-dim);
+  opacity: 0.75;
+}
+
+.bd-ctx-mult {
+  font-size: 9px;
+  font-weight: 700;
+  color: #80cbc4;  /* teal — multiplier */
+  margin-right: 2px;
+}
+
+.bd-vix {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 0 3px;
+  border-radius: 2px;
+}
+.bd-vix-low      { background: rgba(102,187,106,0.20); color: #66bb6a; }
+.bd-vix-normal   { background: rgba(255,255,255,0.08); color: var(--text-dim); }
+.bd-vix-elevated { background: rgba(255,167,38,0.20);  color: #ffa726; }
+.bd-vix-crisis   { background: rgba(239,83,80,0.25);   color: #ef5350; }
+
+.bd-hp {
+  font-size: 9px;
+  color: #ce93d8;  /* purple — HP level */
+  opacity: 0.9;
+}
+
+.bd-ctx-bonus {
+  font-size: 9px;
+}
+.bd-ctx-bonus.pos { color: #66bb6a; }
+.bd-ctx-bonus.neg { color: #ef9a9a; }
+
+.bd-stress-flag {
+  font-size: 9px;
+  font-weight: 600;
+  color: #ffa726;
+  margin-left: 2px;
+}
 
 /* ── Alert card: on-demand AI button ─────────────────────────────────── */
 
