@@ -28,7 +28,7 @@
 require('dotenv').config();
 const fs    = require('fs');
 const path  = require('path');
-const AdmZip = require('adm-zip');
+const unzipper = require('unzipper');
 const { decompress } = require('@mongodb-js/zstd');
 const { computeHP } = require('./hpCompute');
 const {
@@ -98,6 +98,29 @@ function writeJSON(filePath, data) {
 function readJSON(filePath) {
   if (!fs.existsSync(filePath)) return null;
   try { return JSON.parse(fs.readFileSync(filePath, 'utf8')); } catch { return null; }
+}
+
+/**
+ * Stream a zip file entry by entry. Calls onEntry(entry) for each entry.
+ * entry.path = entry name; await entry.buffer() = full entry contents as Buffer.
+ * Uses unzipper to avoid loading the whole archive into memory (supports >2 GiB).
+ */
+async function streamZip(zipPath, onEntry) {
+  const directory = await unzipper.Open.file(zipPath);
+  for (const entry of directory.files) {
+    await onEntry(entry);
+  }
+}
+
+/**
+ * Read a single named entry from a zip without loading the whole archive.
+ * Returns Buffer or null.
+ */
+async function readZipEntry(zipPath, entryName) {
+  const directory = await unzipper.Open.file(zipPath);
+  const entry = directory.files.find(f => f.path === entryName);
+  if (!entry) return null;
+  return entry.buffer();
 }
 
 function elapsed(start) {
@@ -286,15 +309,13 @@ async function phase1a() {
   log('\n── CME (GLBX) ──');
   for (const zipInfo of glbxZips) {
     log(`\n[ZIP] ${zipInfo.name} (${(zipInfo.size / 1e6).toFixed(1)} MB)`);
-    const zip = new AdmZip(zipInfo.path);
-    const entries = zip.getEntries();
 
-    // Read metadata.json from zip
+    // Read metadata.json from zip (streaming — safe for >2 GiB files)
     let symbols = [], dateRange = null, schema = null;
-    const metaEntry = entries.find(e => e.entryName === 'metadata.json');
-    if (metaEntry) {
-      try {
-        const meta = JSON.parse(metaEntry.getData().toString('utf8'));
+    try {
+      const metaBuf = await readZipEntry(zipInfo.path, 'metadata.json');
+      if (metaBuf) {
+        const meta = JSON.parse(metaBuf.toString('utf8'));
         schema  = meta.query?.schema;
         symbols = meta.query?.symbols || [];
         const startNs = meta.query?.start;
@@ -307,15 +328,17 @@ async function phase1a() {
         }
         log(`  Schema: ${schema}  Symbols: ${symbols.join(', ')}`);
         if (dateRange) log(`  Date range: ${dateRange.start} → ${dateRange.end}`);
-      } catch (e2) { warn(`metadata.json parse error: ${e2.message}`); }
-    }
+      }
+    } catch (e2) { warn(`metadata.json parse error: ${e2.message}`); }
 
     // Inspect first CSV.ZST to confirm column layout + actual tickers in data
-    const csvEntries = entries.filter(e => e.entryName.endsWith('.csv.zst'));
     let sampleTickers = [];
-    if (csvEntries.length > 0) {
-      try {
-        const buf = csvEntries[0].getData();
+    let sampledCsv = false;
+    try {
+      await streamZip(zipInfo.path, async (entry) => {
+        if (sampledCsv || !entry.path.endsWith('.csv.zst')) return;
+        sampledCsv = true;
+        const buf  = await entry.buffer();
         const text = (await decompress(buf)).toString('utf8');
         const lines = text.split('\n').filter(l => l.trim());
         if (lines.length > 1) {
@@ -323,7 +346,6 @@ async function phase1a() {
           const symIdx  = headers.indexOf('symbol');
           log(`  Columns (${headers.length}): ${headers.join(', ')}`);
           if (symIdx >= 0) {
-            // Sample up to 100 rows to find unique symbol patterns
             const seen = new Set();
             for (let i = 1; i < Math.min(101, lines.length); i++) {
               const parts = lines[i].split(',');
@@ -333,8 +355,8 @@ async function phase1a() {
             log(`  Sample tickers (first 100 rows): ${sampleTickers.join(', ')}`);
           }
         }
-      } catch (e2) { warn(`Could not inspect CSV: ${e2.message}`); }
-    }
+      });
+    } catch (e2) { warn(`Could not inspect CSV: ${e2.message}`); }
 
     // Accumulate per dbRoot
     for (const sym of symbols) {
@@ -353,13 +375,12 @@ async function phase1a() {
   log('\n── OPRA ──');
   for (const zipInfo of opraZips) {
     log(`\n[ZIP] ${zipInfo.name} (underlying: ${zipInfo.underlying}, ${(zipInfo.size / 1e6).toFixed(1)} MB)`);
-    const zip = new AdmZip(zipInfo.path);
 
     let dateRange = null;
-    const metaEntry = zip.getEntries().find(e => e.entryName === 'metadata.json');
-    if (metaEntry) {
-      try {
-        const meta = JSON.parse(metaEntry.getData().toString('utf8'));
+    try {
+      const metaBuf = await readZipEntry(zipInfo.path, 'metadata.json');
+      if (metaBuf) {
+        const meta = JSON.parse(metaBuf.toString('utf8'));
         const startNs = meta.query?.start;
         const endNs   = meta.query?.end;
         if (startNs && endNs) {
@@ -369,8 +390,8 @@ async function phase1a() {
           };
           log(`  Date range: ${dateRange.start} → ${dateRange.end}`);
         }
-      } catch (_) {}
-    }
+      }
+    } catch (_) {}
 
     const etf = zipInfo.underlying;
     if (!manifest.opra[etf]) manifest.opra[etf] = { zipCount: 0, dateRange: null };
@@ -402,16 +423,17 @@ async function phase1b() {
     const destDir = path.join(RAW_DIR, 'GLBX');
     ensureDir(destDir);
     log(`\n[EXTRACT] ${zipInfo.name}`);
-    const zip = new AdmZip(zipInfo.path);
-    for (const entry of zip.getEntries()) {
-      if (entry.entryName.includes('ohlcv-1s')) { log(`  SKIP (1s data): ${entry.entryName}`); continue; }
-      const dest = path.join(destDir, entry.entryName);
-      if (fs.existsSync(dest)) { log(`  SKIP (exists): ${entry.entryName}`); continue; }
-      if (DRY_RUN) { log(`  [DRY] would extract: ${entry.entryName}`); continue; }
-      log(`  Extracting: ${entry.entryName} (${(entry.header.compressedSize / 1e6).toFixed(2)} MB)`);
-      fs.writeFileSync(dest, entry.getData());
+    await streamZip(zipInfo.path, async (entry) => {
+      if (entry.path.includes('ohlcv-1s')) { log(`  SKIP (1s data): ${entry.path}`); return; }
+      if (entry.type === 'Directory') return;
+      const dest = path.join(destDir, entry.path);
+      if (fs.existsSync(dest)) { log(`  SKIP (exists): ${entry.path}`); return; }
+      if (DRY_RUN) { log(`  [DRY] would extract: ${entry.path}`); return; }
+      log(`  Extracting: ${entry.path}`);
+      ensureDir(path.dirname(dest));
+      fs.writeFileSync(dest, await entry.buffer());
       extracted++;
-    }
+    });
   }
 
   // Extract OPRA zips → raw/OPRA/{underlying}/
@@ -421,15 +443,16 @@ async function phase1b() {
     const destDir = path.join(RAW_DIR, 'OPRA', zipInfo.underlying);
     ensureDir(destDir);
     log(`\n[EXTRACT] ${zipInfo.name} → raw/OPRA/${zipInfo.underlying}/`);
-    const zip = new AdmZip(zipInfo.path);
-    for (const entry of zip.getEntries()) {
-      const dest = path.join(destDir, entry.entryName);
-      if (fs.existsSync(dest)) { log(`  SKIP (exists): ${entry.entryName}`); continue; }
-      if (DRY_RUN) { log(`  [DRY] would extract: ${entry.entryName}`); continue; }
-      log(`  Extracting: ${entry.entryName}`);
-      fs.writeFileSync(dest, entry.getData());
+    await streamZip(zipInfo.path, async (entry) => {
+      if (entry.type === 'Directory') return;
+      const dest = path.join(destDir, entry.path);
+      if (fs.existsSync(dest)) { log(`  SKIP (exists): ${entry.path}`); return; }
+      if (DRY_RUN) { log(`  [DRY] would extract: ${entry.path}`); return; }
+      log(`  Extracting: ${entry.path}`);
+      ensureDir(path.dirname(dest));
+      fs.writeFileSync(dest, await entry.buffer());
       extracted++;
-    }
+    });
   }
 
   log(`\n[1b COMPLETE] ${elapsed(t0)} — ${extracted} files extracted`);
