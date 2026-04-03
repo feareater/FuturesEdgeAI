@@ -315,14 +315,16 @@ Update via `POST /api/settings/span` or the SPAN Margins panel in the dashboard 
 ### Confidence Modifier (`scoreDDBandProximity` in setups.js)
 | Label | Score | Meaning |
 |---|---|---|
-| `room_to_run` | +8 | Entry well inside DD band, target outside it |
+| `room_to_run` | +8 | Entry well inside DD band — good room to target |
 | `approaching_dd` | +4 | Near DD band but not at it |
 | `neutral` | 0 | Ambiguous position |
-| `outside_dd` | −7 | Price already outside DD band |
-| `beyond_dd` | −12 | Price significantly extended |
-| `at_span_extreme` | −20 | Price at or beyond SPAN level |
+| `outside_dd_upper` / `outside_dd_lower` | −7 | Price already outside DD band (directional) |
+| `beyond_dd_upper` / `beyond_dd_lower` | −12 | Price significantly extended, close to SPAN |
+| `at_span_extreme` | −20 | Price at or beyond SPAN level — extreme extension |
+| `pdh_beyond_dd` | −12 | PDH breakout special case: prior high itself beyond DD band |
 
 - `setup.ddBandLabel` and `setup.scoreBreakdown.ddBand` on every scored setup
+- Point values used: MNQ=2, MES=5, MGC=10, MCL=100 (USD per point)
 
 ### Chart Layer
 - `ChartAPI.setDDBands(dd)` — 5 price lines: DD upper/lower (solid orange 0.85 opacity), SPAN upper/lower (dashed orange 0.45), prior close (dotted gray 0.40)
@@ -353,6 +355,9 @@ Update via `POST /api/settings/span` or the SPAN Margins panel in the dashboard 
 
 ### Backtest UI (`public/backtest2.html`, `backtest2.js`, `backtest2.css`)
 - 5 tabs: Summary / Trades / Replay / Compare / **Optimize**
+- **Run labels**: stored in localStorage `bt2_job_labels`; `_getJobLabel(jobId, config)` resolves override → config.label → auto-name (`symbols · MM-DD → MM-DD`). Pre-run label input + post-run inline rename (✏ button).
+- **Config restore**: `_populateConfigFromJob(cfg)` restores all fields (including hours checkboxes) when loading a previous job.
+- **Compare tab**: fixed equity curve URL (`/api/backtest/results/:id`); selectors show run label; fixed dark-on-dark styling.
 - **Optimize tab** — client-side analysis of `_currentResults.trades`, no API call
   - Confidence sub-tab: threshold floors 60–90%, optimal floor (best PF where n≥10), MTF impact
   - Regime sub-tab: direction + HP proximity; regime/calendar not on trade records

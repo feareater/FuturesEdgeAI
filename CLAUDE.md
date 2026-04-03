@@ -273,7 +273,13 @@ Default view (Reset to Default): all layers ON.
 
 ## Alert Object Schema — DD Band additions (v11.0)
 
-`setup.ddBandLabel` — one of: `room_to_run`, `approaching_dd`, `neutral`, `outside_dd`, `beyond_dd`, `at_span_extreme`
+`setup.ddBandLabel` — one of:
+- `room_to_run` (+8), `approaching_dd` (+4), `neutral` (0)
+- `outside_dd_upper` / `outside_dd_lower` (−7)
+- `beyond_dd_upper` / `beyond_dd_lower` (−12)
+- `at_span_extreme` (−20)
+- `pdh_beyond_dd` (−12, PDH breakout special case)
+
 `setup.scoreBreakdown.ddBand` — confidence point adjustment (−20 to +8)
 
 ## SPAN Margins (`config/settings.json → spanMargin`)

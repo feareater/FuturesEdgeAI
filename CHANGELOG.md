@@ -8,12 +8,21 @@ All notable changes to this project are documented here, newest first.
 
 ### New: DD Band / SPAN margin-derived price levels
 - `riskInterval = CME initial margin ÷ point value` (futures); `priorClose × (0.30 / √252)` (crypto)
+- Point values: MNQ=2, MES=5, MGC=10, MCL=100 (USD per point)
+- Crypto symbols with DD Band support: BTC, ETH, XRP, XLM
 - Five levels per symbol: `priorClose`, `ddBandUpper`, `ddBandLower`, `spanUpper`, `spanLower`
 - `computeDDBands()` added to `server/analysis/indicators.js` (exported); used in scan, backtest engine, `/api/ddbands`
 - SPAN margins stored in `config/settings.json → spanMargin` block: MNQ=1320, MES=660, MGC=1650, MCL=1200
 
 ### New: `scoreDDBandProximity()` confidence modifier in `server/analysis/setups.js`
-- `room_to_run` +8, `approaching_dd` +4, `neutral` 0, `outside_dd` −7, `beyond_dd` −12, `at_span_extreme` −20
+- Labels and scores (directional — upper/lower variants exist for outside/beyond):
+  - `room_to_run` → +8 (price well inside DD band, target has room)
+  - `approaching_dd` → +4 (near DD band but not at it)
+  - `neutral` → 0 (ambiguous)
+  - `outside_dd_upper` / `outside_dd_lower` → −7 (price already outside band)
+  - `beyond_dd_upper` / `beyond_dd_lower` → −12 (price significantly extended, close to SPAN)
+  - `at_span_extreme` → −20 (price at or beyond SPAN level)
+  - `pdh_beyond_dd` → −12 special case for PDH breakouts where prior day's high is beyond the DD band
 - `setup.ddBandLabel` and `setup.scoreBreakdown.ddBand` added to every scored setup
 
 ### New: Chart layer — DD Bands (`public/js/chart.js`, `layers.js`)
@@ -51,6 +60,28 @@ All notable changes to this project are documented here, newest first.
 - New API routes: `GET /api/ddbands`, `POST /api/settings/span`
 - `/api/ddbands` now includes `currentPrice` for widget position badge
 - Service worker: `futuresedge-v34` → `futuresedge-v35`
+
+---
+
+## [v10.3.1] — 2026-04-03 — Backtest2 UX: Run Labels, Compare Fixes, Config Restore
+
+### Run labels for backtest jobs (`public/js/backtest2.js`)
+- `_jobLabels` object in localStorage (`bt2_job_labels`) stores rename overrides keyed by jobId
+- `_getJobLabel(jobId, config)` resolves: override → `config.label` → auto-generated name (`symbols · MM-DD → MM-DD`)
+- Optional label input (`#bt2-run-label`) shown in config panel before running — saved into `config.label`
+- Inline rename button (✏) on each job row in the Previous Runs list — click to rename in-place
+- Job delete also clears the label override from localStorage
+
+### Compare tab fixes (`public/js/backtest2.js`, `backtest2.css`)
+- Fixed broken equity curve fetch URL: `/api/backtest/jobs/${jobId}/results` → `/api/backtest/results/${jobId}`
+- Compare selector dropdowns now display run label/name instead of raw job ID
+- Fixed selector styling: `background: var(--bg-panel)`, `color: var(--text)`, `border: 1px solid var(--border)` — previously unreadable dark-on-dark
+
+### Config panel restore when loading a previous job (`public/js/backtest2.js`)
+- `_populateConfigFromJob(cfg)` restores all config fields when clicking a previous job:
+  - Date range, symbols, timeframes, setup types, confidence, balance, contracts, fee, max hold
+  - Trading hours checkboxes (calls `setExcludeHours(cfg.excludeHours || [])`)
+  - Run label input pre-populated (so a rename is obvious)
 
 ---
 
