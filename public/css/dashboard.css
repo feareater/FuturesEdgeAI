@@ -1085,6 +1085,33 @@ html, body {
 .ws-disconnected { background: var(--bear); }
 .ws-connecting   { background: #ffb300; }
 
+/* ── Data source status pill ─────────────────────────────────────────────── */
+
+.data-source-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+.data-source-pill::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.data-source-live    { background: rgba(38,166,154,0.15); color: #26a69a; border: 1px solid rgba(38,166,154,0.35); }
+.data-source-live::before    { background: #26a69a; }
+.data-source-delayed { background: rgba(255,179,0,0.15);  color: #ffb300; border: 1px solid rgba(255,179,0,0.35); }
+.data-source-delayed::before { background: #ffb300; }
+.data-source-seed    { background: rgba(144,164,174,0.15); color: #90a4ae; border: 1px solid rgba(144,164,174,0.3); }
+.data-source-seed::before    { background: #90a4ae; }
+
 /* ── Alert placeholder variants ──────────────────────────────────────────── */
 
 .placeholder.error { color: var(--bear); }

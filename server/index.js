@@ -7,7 +7,8 @@ const path    = require('path');
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const { authenticate }      = require('./auth/tradovate');
-const { getCandles }        = require('./data/snapshot');
+const { getCandles, writeLiveCandle } = require('./data/snapshot');
+const { getLiveFeedStatus } = require('./data/databento');
 const { computeIndicators, computeDDBands } = require('./analysis/indicators');
 const { classifyRegime, computeAlignment } = require('./analysis/regime');
 const { detectSetups }      = require('./analysis/setups');
@@ -242,6 +243,22 @@ app.post('/api/settings', async (req, res) => {
   }
 
   res.json({ status: 'ok', risk: settings.risk });
+});
+
+// POST /api/features — hot-toggle a feature flag without restart
+// Body: { "featureName": true|false }
+app.post('/api/features', (req, res) => {
+  const updates = req.body || {};
+  if (!settings.features) settings.features = {};
+  for (const [key, val] of Object.entries(updates)) {
+    settings.features[key] = Boolean(val);
+  }
+  try {
+    fs.writeFileSync('./config/settings.json', JSON.stringify(settings, null, 2));
+    res.json({ ok: true, features: settings.features });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // GET /api/alerts?limit=20&minConfidence=0&symbol=MNQ&timeframe=5m&start=ISO&end=ISO
@@ -1334,6 +1351,29 @@ app.get('/api/ddbands', (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// GET /api/datastatus — live feed health (source, lag, WS connected, last bar times)
+app.get('/api/datastatus', (_req, res) => {
+  const liveMode = settings.features?.liveData === true;
+  if (!liveMode) {
+    return res.json({
+      source:      'seed',
+      wsConnected: false,
+      lagSeconds:  null,
+      lastBarTime: null,
+      symbols:     [],
+    });
+  }
+  const st = getLiveFeedStatus();
+  res.json({
+    source:      'live',
+    wsConnected: st.connected,
+    lagSeconds:  st.lagSeconds,
+    lastBarTime: st.lastPollTime,
+    lastBarTimes: st.lastBarTimes,
+    symbols:     st.symbols,
+  });
 });
 
 // POST /api/settings/span — update SPAN margin values without editing JSON manually

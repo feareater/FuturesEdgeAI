@@ -20,7 +20,7 @@
     "MES": 660,
     "MGC": 1650,
     "MCL": 1200,
-    "cryptoVolAnnualized": 0.30
+    "cryptoVolAnnualized": 0.3
   },
   "features": {
     "volumeProfile": true,
@@ -33,7 +33,8 @@
     "alertReplay": true,
     "soundAlerts": false,
     "pushNotifications": false,
-    "ddBands": true
+    "ddBands": true,
+    "liveData": false
   },
   "swingLookback": 10,
   "impulseThreshold": 1.5,

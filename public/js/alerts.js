@@ -395,6 +395,41 @@
   // QQQ options expire Mon/Wed/Fri — these are 0DTE days for equity index futures (MNQ/MES)
   function _isZeroDTE() { const d = new Date().getDay(); return [1, 3, 5].includes(d); }
 
+  async function _pollDataStatus() {
+    const pill = document.getElementById('data-source-pill');
+    if (!pill) return;
+    try {
+      const res = await fetch('/api/datastatus');
+      if (!res.ok) return;
+      const s = await res.json();
+      if (s.source === 'seed') {
+        pill.textContent = 'SEED';
+        pill.className   = 'data-source-pill data-source-seed';
+        pill.style.display = '';
+        pill.title = 'Using seed data (Yahoo Finance snapshot)';
+        return;
+      }
+      // live mode
+      const lag = s.lagSeconds ?? 9999;
+      if (s.wsConnected && lag < 120) {
+        pill.textContent = 'LIVE';
+        pill.className   = 'data-source-pill data-source-live';
+        pill.title       = `Live data · lag ${lag}s`;
+      } else if (lag < 300) {
+        pill.textContent = 'DELAYED';
+        pill.className   = 'data-source-pill data-source-delayed';
+        pill.title       = `Live data delayed · lag ${lag}s`;
+      } else {
+        pill.textContent = 'SEED';
+        pill.className   = 'data-source-pill data-source-seed';
+        pill.title       = 'Live feed disconnected — using seed data';
+      }
+      pill.style.display = '';
+    } catch {
+      // silently fail — pill just stays hidden
+    }
+  }
+
   async function _fetchDDBands(symbol) {
     try {
       const res = await fetch(`/api/ddbands?symbol=${symbol}`);
@@ -993,6 +1028,8 @@
     _fetchForexRate();
     _fetchPrediction();
     setInterval(_fetchForexRate, 10 * 60 * 1000); // refresh every 10 min
+    _pollDataStatus();
+    setInterval(_pollDataStatus, 30_000); // refresh data source pill every 30s
 
     // Populate SPAN margin inputs from server settings
     fetch('/api/settings').then(r => r.json()).then(s => {

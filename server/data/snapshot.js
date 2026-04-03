@@ -7,12 +7,18 @@
 //   seed      → reads from data/seed/*.json  (run seedFetch.js first)
 //   ironbeam  → Ironbeam REST + WebSocket (Phase 3+)
 //   databento → Databento HTTP API        (Phase 3+)
+//
+// Live mode (features.liveData: true):
+//   writeLiveCandle(symbol, candle) — called by databento.js on each 1m bar close
+//   getCandles() returns from in-memory liveCandles store for futures symbols
+//   Hot-toggle: POST /api/features { "liveData": true } — no restart needed
 
 const fs   = require('fs');
 const path = require('path');
 
 const DATA_SOURCE  = process.env.DATA_SOURCE ?? 'seed';
 const SEED_DIR     = path.join(__dirname, '..', '..', 'data', 'seed');
+const SETTINGS_FILE = path.join(__dirname, '..', '..', 'config', 'settings.json');
 
 const VALID_SYMBOLS    = ['MNQ', 'MGC', 'MES', 'MCL', 'BTC', 'ETH', 'XRP', 'XLM', 'SIL', 'DXY', 'VIX', 'QQQ', 'SPY'];
 const VALID_TIMEFRAMES = ['1m', '2m', '3m', '5m', '15m', '30m', '1h', '2h', '4h'];
@@ -20,6 +26,32 @@ const CRYPTO_SYMBOLS   = new Set(['BTC', 'ETH', 'XRP', 'XLM']);
 // Macro/reference symbols — context-only data sources. Must never trigger setup detection,
 // volume profile, opening range, or session level computation.
 const MACRO_SYMBOLS    = new Set(['DXY', 'VIX', 'QQQ', 'SPY', 'GLD', 'USO', 'SLV']);
+// Futures symbols supported by the Databento live feed
+const LIVE_FUTURES     = new Set(['MNQ', 'MES', 'MGC', 'MCL']);
+
+// ---------------------------------------------------------------------------
+// Live in-memory candle store (populated by writeLiveCandle from databento.js)
+// Key: `${symbol}:${tf}`, Value: candle[] sorted ascending
+// In B2: only 1m bars are stored. B3 adds aggregated 5m/15m/30m.
+// ---------------------------------------------------------------------------
+
+const liveCandles    = new Map();   // live bar store
+const MAX_LIVE_BARS  = 500;         // ~8 hours of 1m bars per symbol
+
+// Settings cache — re-read every 5s so POST /api/features hot-toggle works
+let _settingsCache   = null;
+let _settingsCacheTs = 0;
+
+function _isLiveMode() {
+  const now = Date.now();
+  if (now - _settingsCacheTs > 5_000) {
+    try {
+      _settingsCache = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
+    } catch {}
+    _settingsCacheTs = now;
+  }
+  return _settingsCache?.features?.liveData === true;
+}
 
 // ---------------------------------------------------------------------------
 // Public interface — these signatures stay constant regardless of data source
@@ -33,6 +65,11 @@ const MACRO_SYMBOLS    = new Set(['DXY', 'VIX', 'QQQ', 'SPY', 'GLD', 'USO', 'SLV
  */
 function getCandles(symbol, timeframe) {
   _validate(symbol, timeframe);
+
+  // Live gate: futures symbols use the in-memory live store when liveData is enabled
+  if (_isLiveMode() && LIVE_FUTURES.has(symbol)) {
+    return liveCandles.get(`${symbol}:${timeframe}`) ?? [];
+  }
 
   switch (DATA_SOURCE) {
     case 'seed':      return _fromSeed(symbol, timeframe);
@@ -116,5 +153,38 @@ function _validate(symbol, timeframe) {
 }
 
 // ---------------------------------------------------------------------------
+// Live candle writer — called by databento.js on each 1m bar close
+// ---------------------------------------------------------------------------
 
-module.exports = { getCandles, getAllTimeframes, VALID_SYMBOLS, VALID_TIMEFRAMES, CRYPTO_SYMBOLS, MACRO_SYMBOLS };
+/**
+ * Store an incoming live 1m bar.
+ * B3 will extend this to also emit aggregated 5m/15m/30m bars when windows close.
+ *
+ * @param {string} symbol  Internal symbol, e.g. 'MNQ'
+ * @param {Object} candle  Normalized { time, open, high, low, close, volume }
+ * @returns {Array}  List of completed higher-TF bar objects { tf, candle } — always [] in B2
+ */
+function writeLiveCandle(symbol, candle) {
+  if (!LIVE_FUTURES.has(symbol)) return [];
+
+  // Store 1m bar
+  const key1m = `${symbol}:1m`;
+  const bars = liveCandles.get(key1m) ?? [];
+
+  // Avoid duplicate (same timestamp already stored)
+  if (bars.length > 0 && bars[bars.length - 1].time === candle.time) return [];
+
+  bars.push(candle);
+
+  // Trim to max window size (drop oldest bars)
+  if (bars.length > MAX_LIVE_BARS) bars.splice(0, bars.length - MAX_LIVE_BARS);
+
+  liveCandles.set(key1m, bars);
+
+  // B3 will add aggregation here and return completed higher-TF bars
+  return [];
+}
+
+// ---------------------------------------------------------------------------
+
+module.exports = { getCandles, getAllTimeframes, writeLiveCandle, VALID_SYMBOLS, VALID_TIMEFRAMES, CRYPTO_SYMBOLS, MACRO_SYMBOLS };
