@@ -3,63 +3,87 @@
  * historicalPipeline.js — FuturesEdge AI Historical Data Pipeline
  *
  * Phases:
- *   1a. Inventory zip files
- *   1b. Extract raw files
- *   1c. Process futures OHLCV → daily JSON files
- *   1d. Fetch ETF daily closes (Yahoo Finance)
- *   1e. Process OPRA options data
- *   1f. Compute HP levels (Black-Scholes)
+ *   1a. Inventory zip files and write manifest.json
+ *   1b. Extract raw files (GLBX → raw/GLBX/, OPRA → raw/OPRA/{underlying}/)
+ *   1c. Process futures OHLCV → daily JSON files (all 16 symbols)
+ *   1d. Fetch ETF daily closes — QQQ/SPY/GLD/USO/IWM/SLV (Yahoo Finance)
+ *   1e. Process OPRA options data for all 6 underlyings
+ *   1f. Compute HP levels (Black-Scholes) for all 6 OPRA underlyings
  *
  * Usage:
  *   node server/data/historicalPipeline.js [flags]
- *   --inventory-only   run 1a only
- *   --futures-only     run 1c only
- *   --options-only     run 1d–1f only
- *   --recompute        force recomputation of HP levels
- *   --symbol MNQ       process only this symbol
- *   --dry-run          log actions without writing files
+ *
+ *   --phase 1a|1b|1c|1d|1e|1f  Run only this phase (run all if omitted)
+ *   --inventory-only            Alias for --phase 1a
+ *   --futures-only              Alias for --phase 1b + 1c
+ *   --options-only              Alias for --phase 1d + 1e + 1f
+ *   --recompute                 Force recomputation of HP levels
+ *   --recompute-from YYYY-MM-DD Recompute HP from this date forward
+ *   --symbol MNQ                Process only this futures symbol (phase 1c)
+ *   --from-date YYYY-MM-DD      Skip processing dates before this date
+ *   --verify                    Check output coverage and write verification.json
+ *   --dry-run                   Log actions without writing files
  */
 
 require('dotenv').config();
 const fs    = require('fs');
 const path  = require('path');
-const zlib  = require('zlib');
 const AdmZip = require('adm-zip');
 const { decompress } = require('@mongodb-js/zstd');
-const { computeHP, estimateATMIV } = require('./hpCompute');
+const { computeHP } = require('./hpCompute');
+const {
+  ALL_SYMBOLS,
+  DATABENTO_ROOT_TO_INTERNAL,
+  OPRA_UNDERLYINGS,
+} = require('./instruments');
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
-const ROOT    = path.resolve(__dirname, '../../');
-const DATA    = path.join(ROOT, 'data', 'historical');
-const RAW_DIR = path.join(DATA, 'raw');
-const FUT_DIR = path.join(DATA, 'futures');
-const OPT_DIR = path.join(DATA, 'options');
-const BT_DIR  = path.join(ROOT, 'data', 'backtest');
+const ROOT         = path.resolve(__dirname, '../../');
+const DATA         = path.join(ROOT, 'data', 'historical');
+const RAW_DIR      = path.join(DATA, 'raw');
+const FUT_DIR      = path.join(DATA, 'futures');
+const OPT_DIR      = path.join(DATA, 'options');
+const HIST_DATA    = path.join(ROOT, 'Historical_data');
+const CME_ZIP_DIR  = path.join(HIST_DATA, 'CME');      // GLBX zip files
+const OPRA_ZIP_DIR = path.join(HIST_DATA, 'OPRA');     // per-underlying OPRA zips
+const ERRORS_LOG   = path.join(DATA, 'errors.log');
 
-const ZIP_DIR = ROOT; // zips are in project root
+// ─── CLI args ────────────────────────────────────────────────────────────────
 
-const FUTURES_SYMBOLS = ['MNQ', 'MES', 'MGC', 'MCL'];
-const ETF_PROXY = { MNQ: 'QQQ', MES: 'SPY', MGC: 'GLD', MCL: 'USO' };
-const FUTURES_PROXY_MAP = { QQQ: 'MNQ', SPY: 'MES' }; // for HP computation (only QQQ/SPY have OPRA)
-
-// Parse CLI args
-const args = process.argv.slice(2);
-const HAS  = (flag) => args.includes(flag);
-const ARG  = (flag) => { const i = args.indexOf(flag); return i >= 0 ? args[i + 1] : null; };
+const args   = process.argv.slice(2);
+const HAS    = (flag) => args.includes(flag);
+const ARG    = (flag) => { const i = args.indexOf(flag); return i >= 0 ? args[i + 1] : null; };
 
 const DRY_RUN        = HAS('--dry-run')        || process.env.DRY_RUN === 'true';
-const INVENTORY_ONLY = HAS('--inventory-only');
-const FUTURES_ONLY   = HAS('--futures-only');
-const OPTIONS_ONLY   = HAS('--options-only');
 const RECOMPUTE      = HAS('--recompute');
 const SYMBOL_FILTER  = ARG('--symbol')?.toUpperCase() || null;
+const FROM_DATE      = ARG('--from-date') || null;
+const RECOMPUTE_FROM = ARG('--recompute-from') || null;
+const VERIFY_ONLY    = HAS('--verify');
+
+// Phase selector — --phase 1c overrides legacy flags
+const PHASE_ARG      = ARG('--phase');
+const INVENTORY_ONLY = HAS('--inventory-only') || PHASE_ARG === '1a';
+const FUTURES_ONLY   = HAS('--futures-only')   || PHASE_ARG === '1b' || PHASE_ARG === '1c';
+const OPTIONS_ONLY   = HAS('--options-only')   || ['1d','1e','1f'].includes(PHASE_ARG);
+const SINGLE_PHASE   = PHASE_ARG; // e.g. '1c' → run ONLY that phase
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function log(msg)  { console.log(msg); }
 function warn(msg) { console.warn('[WARN]', msg); }
 function err(msg)  { console.error('[ERR]', msg); }
+
+function errLog(msg) {
+  console.error('[ERR]', msg);
+  if (!DRY_RUN) {
+    try {
+      fs.mkdirSync(path.dirname(ERRORS_LOG), { recursive: true });
+      fs.appendFileSync(ERRORS_LOG, `${new Date().toISOString()} ${msg}\n`);
+    } catch (_) {}
+  }
+}
 
 function ensureDir(dir) {
   if (!DRY_RUN) fs.mkdirSync(dir, { recursive: true });
@@ -73,81 +97,78 @@ function writeJSON(filePath, data) {
 
 function readJSON(filePath) {
   if (!fs.existsSync(filePath)) return null;
-  return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  try { return JSON.parse(fs.readFileSync(filePath, 'utf8')); } catch { return null; }
 }
 
 function elapsed(start) {
   return ((Date.now() - start) / 1000).toFixed(1) + 's';
 }
 
-/** Find all zip files in project root matching GLBX* or OPRA* */
-function findZips() {
-  const entries = fs.readdirSync(ZIP_DIR);
-  return entries
-    .filter(f => (f.startsWith('GLBX') || f.startsWith('OPRA')) && f.endsWith('.zip'))
-    .map(f => ({ name: f, path: path.join(ZIP_DIR, f), size: fs.statSync(path.join(ZIP_DIR, f)).size }));
+// Estimate time remaining
+function eta(done, total, elapsedMs) {
+  if (done === 0) return '?';
+  const msPerItem = elapsedMs / done;
+  const remaining = Math.round((total - done) * msPerItem / 1000);
+  if (remaining < 60)  return `${remaining}s`;
+  if (remaining < 3600) return `${Math.round(remaining / 60)}m`;
+  return `${(remaining / 3600).toFixed(1)}h`;
 }
 
-/** Extract a single entry from a zip as Buffer */
-function zipEntryBuffer(zipPath, entryName) {
-  const zip = new AdmZip(zipPath);
-  const entry = zip.getEntry(entryName);
-  if (!entry) throw new Error(`Entry not found: ${entryName} in ${path.basename(zipPath)}`);
-  return entry.getData();
-}
+/** Sleep for ms milliseconds */
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-/** Decompress a .zst Buffer to string */
-async function decompressZst(buf) {
-  const out = await decompress(buf);
-  return out.toString('utf8');
-}
+// ─── Zip discovery ───────────────────────────────────────────────────────────
 
-/**
- * Parse CSV text into array of objects using first line as header.
- * Returns { headers, rows }
- */
-function parseCSV(text) {
-  const lines = text.split('\n');
-  if (lines.length === 0) return { headers: [], rows: [] };
-  const headers = lines[0].split(',');
-  const rows = [];
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-    const parts = line.split(',');
-    const row = {};
-    for (let j = 0; j < headers.length; j++) {
-      row[headers[j]] = parts[j] ?? '';
-    }
-    rows.push(row);
+/** Find all GLBX zip files in Historical_data/CME/ */
+function findGLBXZips() {
+  if (!fs.existsSync(CME_ZIP_DIR)) {
+    warn(`CME zip directory not found: ${CME_ZIP_DIR}`);
+    return [];
   }
-  return { headers, rows };
+  return fs.readdirSync(CME_ZIP_DIR)
+    .filter(f => f.startsWith('GLBX') && f.endsWith('.zip'))
+    .map(f => ({ name: f, path: path.join(CME_ZIP_DIR, f), size: fs.statSync(path.join(CME_ZIP_DIR, f)).size }));
 }
 
+/** Find all OPRA zip files for a specific underlying in Historical_data/OPRA/{underlying}/ */
+function findOPRAZips(underlying) {
+  const dir = path.join(OPRA_ZIP_DIR, underlying);
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir)
+    .filter(f => f.startsWith('OPRA') && f.endsWith('.zip'))
+    .map(f => ({ name: f, path: path.join(dir, f), underlying, size: fs.statSync(path.join(dir, f)).size }));
+}
+
+/** Find all OPRA zips across all underlyings */
+function findAllOPRAZips() {
+  const result = [];
+  for (const { etf } of OPRA_UNDERLYINGS) {
+    result.push(...findOPRAZips(etf));
+  }
+  return result;
+}
+
+// ─── Date helpers ────────────────────────────────────────────────────────────
+
 /**
- * Convert ISO timestamp to US/Eastern date string 'YYYY-MM-DD'
- * applying CME convention: bars at or after 18:00 ET belong to the next calendar day.
+ * Convert ISO timestamp to US/Eastern trading date 'YYYY-MM-DD'
+ * CME convention: bars at or after 18:00 ET belong to the next calendar day.
  */
 function isoToTradingDate(isoStr) {
   const ms = Date.parse(isoStr);
   if (isNaN(ms)) return null;
 
-  // Determine ET offset: EST = UTC-5, EDT = UTC-4
-  // DST 2026: starts March 8 02:00 ET, ends Nov 1 02:00 ET
   const d = new Date(ms);
   const year = d.getUTCFullYear();
-  // DST start: second Sunday of March
-  const dstStart = nthSundayOfMonth(year, 2, 2); // March = month 2 (0-indexed)
-  // DST end: first Sunday of November
-  const dstEnd = nthSundayOfMonth(year, 10, 1);   // November = month 10
-  const isDST = ms >= dstStart && ms < dstEnd;
+  const dstStart = nthSundayOfMonth(year, 2, 2);   // March, 2nd Sunday
+  const dstEnd   = nthSundayOfMonth(year, 10, 1);  // November, 1st Sunday
+  const isDST    = ms >= dstStart && ms < dstEnd;
   const offsetHours = isDST ? 4 : 5;
 
-  const etMs = ms - offsetHours * 3600000;
+  const etMs   = ms - offsetHours * 3600000;
   const etDate = new Date(etMs);
   const etHour = etDate.getUTCHours();
 
-  // CME convention: >= 18:00 ET → next calendar day
   if (etHour >= 18) {
     const nextDay = new Date(etMs + 86400000);
     return nextDay.toISOString().substring(0, 10);
@@ -155,23 +176,92 @@ function isoToTradingDate(isoStr) {
   return etDate.toISOString().substring(0, 10);
 }
 
-/** Returns Unix ms of the nth occurrence of dayOfWeek (0=Sun) in given month */
+/** Returns Unix ms of the nth Sunday of given month (0-indexed) */
 function nthSundayOfMonth(year, month, n) {
   let count = 0;
   for (let day = 1; day <= 31; day++) {
     const d = new Date(Date.UTC(year, month, day));
     if (d.getUTCMonth() !== month) break;
-    if (d.getUTCDay() === 0) { // Sunday
+    if (d.getUTCDay() === 0) {
       count++;
-      if (count === n) return d.getTime() + 2 * 3600000; // 02:00 UTC = ~midnight ET when DST starts
+      if (count === n) return d.getTime() + 2 * 3600000;
     }
   }
   return Infinity;
 }
 
-/** ts ISO string → Unix seconds */
-function isoToUnixSec(isoStr) {
-  return Math.floor(Date.parse(isoStr) / 1000);
+function isoToUnixSec(isoStr) { return Math.floor(Date.parse(isoStr) / 1000); }
+
+// ─── Symbol detection ────────────────────────────────────────────────────────
+
+/**
+ * Extract internal symbol from a Databento CSV symbol field.
+ * Handles both continuous format (MNQ.c.0, GC.c.0) and
+ * individual contract format (MNQM6, GCM6, M2KH5).
+ * Returns null if not a recognised symbol.
+ */
+function csvSymbolToInternal(rawSymbol) {
+  if (!rawSymbol) return null;
+  // Skip spreads
+  if (rawSymbol.includes('-')) return null;
+
+  let dbRoot = null;
+
+  // Continuous format: ROOT.c.N  e.g. MNQ.c.0, GC.c.0, M2K.c.0
+  const contMatch = rawSymbol.match(/^([A-Z][A-Z0-9]{1,4})\.c\.\d+$/);
+  if (contMatch) {
+    dbRoot = contMatch[1];
+  } else {
+    // Individual contract format: ROOT + month letter + year digit(s)
+    // Handles: MNQM6, GCM6, M2KH5, ZTH5, UBH5, MBTH5
+    const indivMatch = rawSymbol.match(/^([A-Z][A-Z0-9]{1,4})[FGHJKMNQUVXZ]\d+$/);
+    if (indivMatch) dbRoot = indivMatch[1];
+  }
+
+  if (!dbRoot) return null;
+  return DATABENTO_ROOT_TO_INTERNAL[dbRoot] || null;
+}
+
+// ─── Aggregation helper ───────────────────────────────────────────────────────
+
+/** Aggregate 1m bars into N-minute bars */
+function aggregateBars(bars1m, minutes) {
+  if (bars1m.length === 0) return [];
+  const result = [];
+  const tfSec = minutes * 60;
+  // Use window-aligned aggregation (same logic as snapshot.js live mode)
+  let windowStart = Math.floor(bars1m[0].ts / tfSec) * tfSec;
+  let bucket = [];
+
+  for (const bar of bars1m) {
+    const barWindow = Math.floor(bar.ts / tfSec) * tfSec;
+    if (barWindow !== windowStart) {
+      if (bucket.length > 0) {
+        result.push({
+          ts:     windowStart,
+          open:   bucket[0].open,
+          high:   Math.max(...bucket.map(b => b.high)),
+          low:    Math.min(...bucket.map(b => b.low)),
+          close:  bucket[bucket.length - 1].close,
+          volume: bucket.reduce((s, b) => s + b.volume, 0),
+        });
+      }
+      windowStart = barWindow;
+      bucket = [];
+    }
+    bucket.push(bar);
+  }
+  if (bucket.length > 0) {
+    result.push({
+      ts:     windowStart,
+      open:   bucket[0].open,
+      high:   Math.max(...bucket.map(b => b.high)),
+      low:    Math.min(...bucket.map(b => b.low)),
+      close:  bucket[bucket.length - 1].close,
+      volume: bucket.reduce((s, b) => s + b.volume, 0),
+    });
+  }
+  return result;
 }
 
 // ─── PHASE 1a: INVENTORY ─────────────────────────────────────────────────────
@@ -182,111 +272,117 @@ async function phase1a() {
   log(' PHASE 1a — ZIP INVENTORY');
   log('══════════════════════════════════════════════════════');
 
-  const zips = findZips();
-  log(`Found ${zips.length} zip files`);
+  const glbxZips = findGLBXZips();
+  const opraZips = findAllOPRAZips();
+  log(`Found ${glbxZips.length} GLBX zip(s) and ${opraZips.length} OPRA zip(s)`);
 
-  const inventory = { generatedAt: new Date().toISOString(), zips: [] };
+  const manifest = {
+    generatedAt: new Date().toISOString(),
+    cme: {},
+    opra: {},
+  };
 
-  for (const zipInfo of zips) {
+  // ── Inventory GLBX zips ──────────────────────────────────────────────────
+  log('\n── CME (GLBX) ──');
+  for (const zipInfo of glbxZips) {
     log(`\n[ZIP] ${zipInfo.name} (${(zipInfo.size / 1e6).toFixed(1)} MB)`);
     const zip = new AdmZip(zipInfo.path);
     const entries = zip.getEntries();
 
-    const zipRecord = {
-      filename: zipInfo.name,
-      sizeMB: +(zipInfo.size / 1e6).toFixed(1),
-      entries: [],
-      dataType: null,
-      schema: null,
-      dateRange: null,
-      symbols: [],
-      totalRecords: null,
-    };
-
-    // Read metadata.json
+    // Read metadata.json from zip
+    let symbols = [], dateRange = null, schema = null;
     const metaEntry = entries.find(e => e.entryName === 'metadata.json');
     if (metaEntry) {
-      const meta = JSON.parse(metaEntry.getData().toString('utf8'));
-      zipRecord.dataType = meta.query?.dataset;
-      zipRecord.schema   = meta.query?.schema;
-      zipRecord.symbols  = meta.query?.symbols || [];
-      const startNs = meta.query?.start;
-      const endNs   = meta.query?.end;
-      if (startNs && endNs) {
-        zipRecord.dateRange = {
-          start: new Date(Number(BigInt(startNs) / 1_000_000n)).toISOString().substring(0, 10),
-          end:   new Date(Number(BigInt(endNs)   / 1_000_000n)).toISOString().substring(0, 10),
-        };
-      }
+      try {
+        const meta = JSON.parse(metaEntry.getData().toString('utf8'));
+        schema  = meta.query?.schema;
+        symbols = meta.query?.symbols || [];
+        const startNs = meta.query?.start;
+        const endNs   = meta.query?.end;
+        if (startNs && endNs) {
+          dateRange = {
+            start: new Date(Number(BigInt(startNs) / 1_000_000n)).toISOString().substring(0, 10),
+            end:   new Date(Number(BigInt(endNs)   / 1_000_000n)).toISOString().substring(0, 10),
+          };
+        }
+        log(`  Schema: ${schema}  Symbols: ${symbols.join(', ')}`);
+        if (dateRange) log(`  Date range: ${dateRange.start} → ${dateRange.end}`);
+      } catch (e2) { warn(`metadata.json parse error: ${e2.message}`); }
     }
 
-    for (const e of entries) {
-      const entryRec = { name: e.entryName, sizeCompressed: e.header.compressedSize, sizeUncompressed: e.header.size };
-      zipRecord.entries.push(entryRec);
-      log(`  ${e.entryName}  (${(e.header.compressedSize / 1e6).toFixed(2)} MB compressed)`);
-    }
-
-    // For CSV.ZST entries: decompress first one to inspect headers + date range
+    // Inspect first CSV.ZST to confirm column layout + actual tickers in data
     const csvEntries = entries.filter(e => e.entryName.endsWith('.csv.zst'));
+    let sampleTickers = [];
     if (csvEntries.length > 0) {
-      log(`  Sampling CSV structure from: ${csvEntries[0].entryName}`);
       try {
         const buf = csvEntries[0].getData();
-        const decompressed = await decompress(buf);
-        const text = decompressed.toString('utf8');
+        const text = (await decompress(buf)).toString('utf8');
         const lines = text.split('\n').filter(l => l.trim());
-
-        if (lines.length > 0) {
-          zipRecord.csvColumns = lines[0].split(',');
-          log(`  Columns (${zipRecord.csvColumns.length}): ${zipRecord.csvColumns.join(', ')}`);
-        }
-
         if (lines.length > 1) {
-          const firstRow = lines[1].split(',');
-          const lastRow  = lines[lines.length - 1].split(',');
-          const tsCol = 0; // ts_event is always first
-          zipRecord.sampleFirstRow  = lines[1];
-          zipRecord.sampleLastRow   = lines[lines.length - 1];
-          zipRecord.sampleFirstDate = (firstRow[tsCol] || '').substring(0, 10);
-          zipRecord.sampleLastDate  = (lastRow[tsCol]  || '').substring(0, 10);
-          log(`  First row date: ${zipRecord.sampleFirstDate}`);
-          log(`  Last  row date: ${zipRecord.sampleLastDate}`);
-          log(`  Record count (this file): ${lines.length - 1}`);
-
-          // If single CSV: this is the total
-          if (csvEntries.length === 1) {
-            zipRecord.totalRecords = lines.length - 1;
+          const headers = lines[0].split(',');
+          const symIdx  = headers.indexOf('symbol');
+          log(`  Columns (${headers.length}): ${headers.join(', ')}`);
+          if (symIdx >= 0) {
+            // Sample up to 100 rows to find unique symbol patterns
+            const seen = new Set();
+            for (let i = 1; i < Math.min(101, lines.length); i++) {
+              const parts = lines[i].split(',');
+              seen.add(parts[symIdx]);
+            }
+            sampleTickers = [...seen];
+            log(`  Sample tickers (first 100 rows): ${sampleTickers.join(', ')}`);
           }
         }
-
-        // If multiple CSV files (OPRA daily split): sample first + last
-        if (csvEntries.length > 1) {
-          log(`  ${csvEntries.length} daily CSVs — sampling last file for end date`);
-          const lastEntry = csvEntries[csvEntries.length - 1];
-          const lastBuf = lastEntry.getData();
-          const lastDecomp = await decompress(lastBuf);
-          const lastText = lastDecomp.toString('utf8');
-          const lastLines = lastText.split('\n').filter(l => l.trim());
-          if (lastLines.length > 1) {
-            const lr = lastLines[lastLines.length - 1].split(',');
-            zipRecord.sampleLastDate = (lr[0] || '').substring(0, 10);
-          }
-          zipRecord.totalRecords = `~${csvEntries.length} files`;
-        }
-      } catch (e2) {
-        warn(`Could not inspect CSV: ${e2.message}`);
-      }
+      } catch (e2) { warn(`Could not inspect CSV: ${e2.message}`); }
     }
 
-    inventory.zips.push(zipRecord);
+    // Accumulate per dbRoot
+    for (const sym of symbols) {
+      const dbRoot = sym.replace(/\.c\.\d+$/, '');
+      const internal = DATABENTO_ROOT_TO_INTERNAL[dbRoot] || dbRoot;
+      if (!manifest.cme[internal]) {
+        manifest.cme[internal] = { databento: sym, zipCount: 0, dateRange: null, sampleTickers: [] };
+      }
+      manifest.cme[internal].zipCount++;
+      if (dateRange) manifest.cme[internal].dateRange = dateRange;
+      if (sampleTickers.length) manifest.cme[internal].sampleTickers = sampleTickers;
+    }
   }
 
-  const outPath = path.join(DATA, 'import_inventory.json');
-  log(`\n[SAVE] import_inventory.json`);
-  writeJSON(outPath, inventory);
+  // ── Inventory OPRA zips ──────────────────────────────────────────────────
+  log('\n── OPRA ──');
+  for (const zipInfo of opraZips) {
+    log(`\n[ZIP] ${zipInfo.name} (underlying: ${zipInfo.underlying}, ${(zipInfo.size / 1e6).toFixed(1)} MB)`);
+    const zip = new AdmZip(zipInfo.path);
 
+    let dateRange = null;
+    const metaEntry = zip.getEntries().find(e => e.entryName === 'metadata.json');
+    if (metaEntry) {
+      try {
+        const meta = JSON.parse(metaEntry.getData().toString('utf8'));
+        const startNs = meta.query?.start;
+        const endNs   = meta.query?.end;
+        if (startNs && endNs) {
+          dateRange = {
+            start: new Date(Number(BigInt(startNs) / 1_000_000n)).toISOString().substring(0, 10),
+            end:   new Date(Number(BigInt(endNs)   / 1_000_000n)).toISOString().substring(0, 10),
+          };
+          log(`  Date range: ${dateRange.start} → ${dateRange.end}`);
+        }
+      } catch (_) {}
+    }
+
+    const etf = zipInfo.underlying;
+    if (!manifest.opra[etf]) manifest.opra[etf] = { zipCount: 0, dateRange: null };
+    manifest.opra[etf].zipCount++;
+    if (dateRange) manifest.opra[etf].dateRange = dateRange;
+  }
+
+  const outPath = path.join(DATA, 'manifest.json');
+  writeJSON(outPath, manifest);
+  log(`\n[SAVE] manifest.json — ${Object.keys(manifest.cme).length} CME symbols, ${Object.keys(manifest.opra).length} OPRA underlyings`);
   log(`\n[1a COMPLETE] ${elapsed(t0)}`);
-  return inventory;
+  return manifest;
 }
 
 // ─── PHASE 1b: EXTRACT RAW FILES ─────────────────────────────────────────────
@@ -297,35 +393,40 @@ async function phase1b() {
   log(' PHASE 1b — EXTRACT RAW FILES');
   log('══════════════════════════════════════════════════════');
 
-  const zips = findZips();
   let extracted = 0;
 
-  for (const zipInfo of zips) {
-    const isGLBX = zipInfo.name.startsWith('GLBX');
-    const isOPRA = zipInfo.name.startsWith('OPRA');
-    const destDir = isGLBX ? path.join(RAW_DIR, 'GLBX') : path.join(RAW_DIR, 'OPRA');
+  // Extract GLBX zips → raw/GLBX/
+  const glbxZips = findGLBXZips();
+  log(`\n── Extracting ${glbxZips.length} GLBX zip(s) → raw/GLBX/ ──`);
+  for (const zipInfo of glbxZips) {
+    const destDir = path.join(RAW_DIR, 'GLBX');
     ensureDir(destDir);
-
-    log(`\n[EXTRACT] ${zipInfo.name} → raw/${isGLBX ? 'GLBX' : 'OPRA'}/`);
+    log(`\n[EXTRACT] ${zipInfo.name}`);
     const zip = new AdmZip(zipInfo.path);
-    const entries = zip.getEntries();
-
-    for (const entry of entries) {
-      // Skip 1-second OHLCV data — too large, not needed for backtest
-      if (entry.entryName.includes('ohlcv-1s')) {
-        log(`  SKIP (1s data not needed): ${entry.entryName}`);
-        continue;
-      }
+    for (const entry of zip.getEntries()) {
+      if (entry.entryName.includes('ohlcv-1s')) { log(`  SKIP (1s data): ${entry.entryName}`); continue; }
       const dest = path.join(destDir, entry.entryName);
-      if (fs.existsSync(dest)) {
-        log(`  SKIP (exists): ${entry.entryName}`);
-        continue;
-      }
-      if (DRY_RUN) {
-        log(`  [DRY] would extract: ${entry.entryName}`);
-        continue;
-      }
+      if (fs.existsSync(dest)) { log(`  SKIP (exists): ${entry.entryName}`); continue; }
+      if (DRY_RUN) { log(`  [DRY] would extract: ${entry.entryName}`); continue; }
       log(`  Extracting: ${entry.entryName} (${(entry.header.compressedSize / 1e6).toFixed(2)} MB)`);
+      fs.writeFileSync(dest, entry.getData());
+      extracted++;
+    }
+  }
+
+  // Extract OPRA zips → raw/OPRA/{underlying}/
+  const opraZips = findAllOPRAZips();
+  log(`\n── Extracting ${opraZips.length} OPRA zip(s) → raw/OPRA/{underlying}/ ──`);
+  for (const zipInfo of opraZips) {
+    const destDir = path.join(RAW_DIR, 'OPRA', zipInfo.underlying);
+    ensureDir(destDir);
+    log(`\n[EXTRACT] ${zipInfo.name} → raw/OPRA/${zipInfo.underlying}/`);
+    const zip = new AdmZip(zipInfo.path);
+    for (const entry of zip.getEntries()) {
+      const dest = path.join(destDir, entry.entryName);
+      if (fs.existsSync(dest)) { log(`  SKIP (exists): ${entry.entryName}`); continue; }
+      if (DRY_RUN) { log(`  [DRY] would extract: ${entry.entryName}`); continue; }
+      log(`  Extracting: ${entry.entryName}`);
       fs.writeFileSync(dest, entry.getData());
       extracted++;
     }
@@ -342,32 +443,46 @@ async function phase1c() {
   log(' PHASE 1c — PROCESS FUTURES OHLCV');
   log('══════════════════════════════════════════════════════');
 
-  // Find GLBX 1m CSV.ZST files (skip 1s — too large, not needed for backtest)
   const glbxDir = path.join(RAW_DIR, 'GLBX');
   const glbxFiles = fs.existsSync(glbxDir)
     ? fs.readdirSync(glbxDir).filter(f => f.includes('ohlcv-1m') && f.endsWith('.csv.zst'))
     : [];
 
   if (glbxFiles.length === 0) {
-    warn('No GLBX 1m CSV files found in raw/GLBX — run phase 1b first or check zip extraction');
+    warn('No GLBX 1m CSV.ZST files in raw/GLBX — run phase 1b first');
     return;
   }
-
   log(`Found ${glbxFiles.length} GLBX 1m file(s)`);
 
-  // Symbols to process
-  const targetSymbols = SYMBOL_FILTER ? [SYMBOL_FILTER] : FUTURES_SYMBOLS;
+  const targetSymbols = SYMBOL_FILTER ? [SYMBOL_FILTER] : ALL_SYMBOLS;
+
+  // Pre-compute which dates already exist for each symbol (for skip-if-exists + memory savings)
+  const existingDates = {};
+  for (const sym of targetSymbols) {
+    existingDates[sym] = new Set();
+    if (!RECOMPUTE) {
+      const dir1m = path.join(FUT_DIR, sym, '1m');
+      if (fs.existsSync(dir1m)) {
+        for (const f of fs.readdirSync(dir1m)) {
+          if (f.endsWith('.json')) existingDates[sym].add(f.replace('.json', ''));
+        }
+      }
+    }
+    const n = existingDates[sym].size;
+    if (n > 0) log(`  ${sym}: ${n} dates already processed — will skip`);
+  }
 
   // Accumulate bars per symbol per trading date
-  // sym → date → [bar, ...]
-  const symbolDateBars = {};
-  for (const sym of targetSymbols) symbolDateBars[sym] = {};
-
-  // Volume tracker: sym → date → contract → totalVolume (for front-month selection)
+  // sym → date → contractKey → [bar, ...]
+  const symbolDateBars   = {};
   const symbolDateVolume = {};
-  for (const sym of targetSymbols) symbolDateVolume[sym] = {};
+  for (const sym of targetSymbols) {
+    symbolDateBars[sym]   = {};
+    symbolDateVolume[sym] = {};
+  }
 
   let totalBarsRead = 0;
+  let unrecognised  = 0;
 
   for (const fname of glbxFiles) {
     const fpath = path.join(glbxDir, fname);
@@ -375,162 +490,177 @@ async function phase1c() {
     const t1 = Date.now();
 
     const compressed = fs.readFileSync(fpath);
-    log(`  Decompressing...`);
-    const buf = await decompress(compressed);
-    log(`  Decompressed: ${(buf.length / 1e6).toFixed(1)} MB`);
-
+    log('  Decompressing...');
+    const buf  = await decompress(compressed);
     const text = buf.toString('utf8');
     const lines = text.split('\n');
     log(`  Parsing ${(lines.length - 1).toLocaleString()} rows...`);
+
+    if (lines.length < 2) { warn('Empty file'); continue; }
+
+    const headers  = lines[0].split(',');
+    const idxTs    = headers.indexOf('ts_event');   // or 0 as fallback
+    const idxOpen  = headers.indexOf('open');
+    const idxHigh  = headers.indexOf('high');
+    const idxLow   = headers.indexOf('low');
+    const idxClose = headers.indexOf('close');
+    const idxVol   = headers.indexOf('volume');
+    const idxSym   = headers.indexOf('symbol');
+
+    // Fallback to positional if named cols not found (older schema)
+    const tsCol    = idxTs    >= 0 ? idxTs    : 0;
+    const openCol  = idxOpen  >= 0 ? idxOpen  : 4;
+    const highCol  = idxHigh  >= 0 ? idxHigh  : 5;
+    const lowCol   = idxLow   >= 0 ? idxLow   : 6;
+    const closeCol = idxClose >= 0 ? idxClose : 7;
+    const volCol   = idxVol   >= 0 ? idxVol   : 8;
+    const symCol   = idxSym   >= 0 ? idxSym   : 9;
 
     for (let i = 1; i < lines.length; i++) {
       const line = lines[i].trim();
       if (!line) continue;
 
       const parts = line.split(',');
-      // ts_event, rtype, publisher_id, instrument_id, open, high, low, close, volume, symbol
-      if (parts.length < 10) continue;
+      if (parts.length <= symCol) continue;
 
-      const rawSymbol = parts[9];
-      // Skip spreads (contain '-')
-      if (rawSymbol.includes('-')) continue;
+      const rawSymbol = parts[symCol];
+      const internal  = csvSymbolToInternal(rawSymbol);
+      if (!internal) { unrecognised++; continue; }
+      if (!targetSymbols.includes(internal)) continue;
 
-      // Extract root symbol (strip contract month code: e.g. MNQM6 → MNQ, MCLK6 → MCL)
-      // Pattern: 3-4 uppercase letters + month letter + year digit(s)
-      const rootMatch = rawSymbol.match(/^([A-Z]{2,4})[FGHJKMNQUVXZ]\d+$/);
-      if (!rootMatch) continue;
-      const root = rootMatch[1];
-
-      if (!targetSymbols.includes(root)) continue;
-
-      const tsEvent  = parts[0];
-      const open     = parseFloat(parts[4]);
-      const high     = parseFloat(parts[5]);
-      const low      = parseFloat(parts[6]);
-      const close    = parseFloat(parts[7]);
-      const volume   = parseInt(parts[8]) || 0;
-
-      if (isNaN(open) || isNaN(close)) continue;
-
+      const tsEvent = parts[tsCol];
       const tradingDate = isoToTradingDate(tsEvent);
       if (!tradingDate) continue;
 
-      // Track volume per contract for front-month selection
-      if (!symbolDateVolume[root][tradingDate]) symbolDateVolume[root][tradingDate] = {};
-      symbolDateVolume[root][tradingDate][rawSymbol] =
-        (symbolDateVolume[root][tradingDate][rawSymbol] || 0) + volume;
+      // Skip if already processed (saves memory, enables resumability)
+      if (!RECOMPUTE && existingDates[internal].has(tradingDate)) continue;
+      // Skip dates before --from-date
+      if (FROM_DATE && tradingDate < FROM_DATE) continue;
 
-      // Store bar with contract info
-      if (!symbolDateBars[root][tradingDate]) symbolDateBars[root][tradingDate] = {};
-      if (!symbolDateBars[root][tradingDate][rawSymbol]) symbolDateBars[root][tradingDate][rawSymbol] = [];
-      symbolDateBars[root][tradingDate][rawSymbol].push({
-        ts: isoToUnixSec(tsEvent),
-        open, high, low, close, volume
+      const open   = parseFloat(parts[openCol]);
+      const high   = parseFloat(parts[highCol]);
+      const low    = parseFloat(parts[lowCol]);
+      const close  = parseFloat(parts[closeCol]);
+      const volume = parseInt(parts[volCol]) || 0;
+
+      if (isNaN(open) || isNaN(close)) continue;
+
+      // Track volume per contract for front-month selection (no-op for continuous format)
+      const contractKey = rawSymbol;
+      if (!symbolDateVolume[internal][tradingDate]) symbolDateVolume[internal][tradingDate] = {};
+      symbolDateVolume[internal][tradingDate][contractKey] =
+        (symbolDateVolume[internal][tradingDate][contractKey] || 0) + volume;
+
+      if (!symbolDateBars[internal][tradingDate]) symbolDateBars[internal][tradingDate] = {};
+      if (!symbolDateBars[internal][tradingDate][contractKey]) symbolDateBars[internal][tradingDate][contractKey] = [];
+      symbolDateBars[internal][tradingDate][contractKey].push({
+        ts: isoToUnixSec(tsEvent), open, high, low, close, volume,
       });
       totalBarsRead++;
     }
+
     log(`  Done in ${elapsed(t1)}`);
   }
 
-  log(`\nTotal bars read: ${totalBarsRead.toLocaleString()}`);
+  log(`\nTotal bars read: ${totalBarsRead.toLocaleString()}  (${unrecognised} unrecognised symbols ignored)`);
+  if (unrecognised > 100_000) {
+    warn(`High unrecognised count — check DATABENTO_ROOT_TO_INTERNAL mapping in instruments.js`);
+  }
 
-  // Write daily files per symbol, using front-month selection
+  // Write daily files per symbol
   let filesWritten = 0;
   let validationErrors = 0;
+  const symbolSummary = {};
 
   for (const sym of targetSymbols) {
     const symDates = Object.keys(symbolDateBars[sym]).sort();
     if (symDates.length === 0) {
-      warn(`No data for ${sym}`);
+      warn(`No NEW data for ${sym} (all dates may already be processed)`);
       continue;
     }
-
-    log(`\n[WRITE] ${sym}: ${symDates.length} trading days`);
+    log(`\n[WRITE] ${sym}: ${symDates.length} new trading days to write`);
     let totalBars1m = 0;
-    const manifestDates = [];
+    const written = [];
+    let errors = 0;
+    const batchStart = Date.now();
 
-    for (const date of symDates) {
-      // Select front-month contract: highest cumulative volume
-      const volMap = symbolDateVolume[sym][date];
-      const frontMonth = Object.keys(volMap).reduce((best, c) => volMap[c] > volMap[best] ? c : best);
-      const bars = (symbolDateBars[sym][date][frontMonth] || []).sort((a, b) => a.ts - b.ts);
+    for (let di = 0; di < symDates.length; di++) {
+      const date = symDates[di];
 
-      if (bars.length === 0) continue;
-
-      // VALIDATION: confirm all bars belong to this trading date
-      let hasError = false;
-      for (const bar of bars) {
-        const barDate = isoToTradingDate(new Date(bar.ts * 1000).toISOString());
-        if (barDate !== date) {
-          warn(`Lookahead check: bar ${new Date(bar.ts * 1000).toISOString()} assigned to ${date} but re-computes to ${barDate}`);
-          hasError = true;
-          validationErrors++;
-        }
+      // Progress every 100 dates
+      if (di > 0 && di % 100 === 0) {
+        const pct  = ((di / symDates.length) * 100).toFixed(0);
+        const etaStr = eta(di, symDates.length, Date.now() - batchStart);
+        log(`  [${sym}] ${di}/${symDates.length} (${pct}%) — ETA ${etaStr}`);
       }
 
-      // Write 1m file
-      const dir1m = path.join(FUT_DIR, sym, '1m');
-      ensureDir(dir1m);
-      const file1m = path.join(dir1m, `${date}.json`);
-      writeJSON(file1m, bars);
-      filesWritten++;
-      totalBars1m += bars.length;
-      manifestDates.push(date);
+      try {
+        // Select front-month contract (highest cumulative volume)
+        const volMap = symbolDateVolume[sym][date];
+        const frontMonth = Object.keys(volMap).reduce((best, c) => volMap[c] > volMap[best] ? c : best);
+        const bars = (symbolDateBars[sym][date][frontMonth] || []).sort((a, b) => a.ts - b.ts);
+        if (bars.length === 0) continue;
 
-      // Derive 5m bars
-      const bars5m = aggregateBars(bars, 5);
-      const dir5m = path.join(FUT_DIR, sym, '5m');
-      ensureDir(dir5m);
-      writeJSON(path.join(dir5m, `${date}.json`), bars5m);
-      filesWritten++;
+        // Lookahead validation
+        for (const bar of bars) {
+          const barDate = isoToTradingDate(new Date(bar.ts * 1000).toISOString());
+          if (barDate !== date) {
+            errLog(`Lookahead: ${sym} bar ${new Date(bar.ts * 1000).toISOString()} assigned to ${date}`);
+            validationErrors++;
+          }
+        }
 
-      // Derive 15m bars
-      const bars15m = aggregateBars(bars, 15);
-      const dir15m = path.join(FUT_DIR, sym, '15m');
-      ensureDir(dir15m);
-      writeJSON(path.join(dir15m, `${date}.json`), bars15m);
-      filesWritten++;
+        // Write 1m
+        const dir1m  = path.join(FUT_DIR, sym, '1m');
+        const file1m = path.join(dir1m, `${date}.json`);
+        writeJSON(file1m, bars);
+        filesWritten++;
+        totalBars1m += bars.length;
+        written.push(date);
+
+        // Derive 5m, 15m, 30m
+        for (const [minutes, tfLabel] of [[5,'5m'],[15,'15m'],[30,'30m']]) {
+          const agg = aggregateBars(bars, minutes);
+          writeJSON(path.join(FUT_DIR, sym, tfLabel, `${date}.json`), agg);
+          filesWritten++;
+        }
+      } catch (e2) {
+        errLog(`Phase 1c: ${sym} ${date}: ${e2.message}`);
+        errors++;
+      }
     }
 
-    // Write manifest
-    const manifest = {
-      symbol: sym,
-      firstDate: manifestDates[0] || null,
-      lastDate: manifestDates[manifestDates.length - 1] || null,
-      tradingDays: manifestDates.length,
-      totalBars1m,
+    // Update manifest
+    const existingManifest = readJSON(path.join(FUT_DIR, sym, 'manifest.json')) || {};
+    const allDates = [];
+    const dir1m = path.join(FUT_DIR, sym, '1m');
+    if (fs.existsSync(dir1m)) {
+      for (const f of fs.readdirSync(dir1m)) {
+        if (f.endsWith('.json')) allDates.push(f.replace('.json', ''));
+      }
+    }
+    allDates.sort();
+    const updatedManifest = {
+      symbol:      sym,
+      firstDate:   allDates[0] || null,
+      lastDate:    allDates[allDates.length - 1] || null,
+      tradingDays: allDates.length,
+      totalBars1m: (existingManifest.totalBars1m || 0) + totalBars1m,
       processedAt: new Date().toISOString(),
     };
-    writeJSON(path.join(FUT_DIR, sym, 'manifest.json'), manifest);
-    log(`  ${sym}: ${manifestDates.length} days, ${totalBars1m.toLocaleString()} 1m bars`);
+    writeJSON(path.join(FUT_DIR, sym, 'manifest.json'), updatedManifest);
+    log(`  ${sym}: wrote ${written.length} dates, ${totalBars1m.toLocaleString()} new 1m bars, ${errors} errors`);
+    symbolSummary[sym] = updatedManifest;
   }
 
   if (validationErrors > 0) {
-    warn(`${validationErrors} lookahead validation errors — check bar date assignments`);
+    warn(`${validationErrors} lookahead validation errors — see errors.log`);
   } else {
     log('\n[VALIDATION] No lookahead errors detected');
   }
 
   log(`\n[1c COMPLETE] ${elapsed(t0)} — ${filesWritten} files written`);
-}
-
-/** Aggregate 1m bars into N-minute bars */
-function aggregateBars(bars1m, minutes) {
-  if (bars1m.length === 0) return [];
-  const result = [];
-  for (let i = 0; i < bars1m.length; i += minutes) {
-    const slice = bars1m.slice(i, i + minutes);
-    if (slice.length === 0) continue;
-    result.push({
-      ts: slice[0].ts,
-      open:   slice[0].open,
-      high:   Math.max(...slice.map(b => b.high)),
-      low:    Math.min(...slice.map(b => b.low)),
-      close:  slice[slice.length - 1].close,
-      volume: slice.reduce((s, b) => s + b.volume, 0),
-    });
-  }
-  return result;
+  return symbolSummary;
 }
 
 // ─── PHASE 1d: FETCH ETF DAILY CLOSES ────────────────────────────────────────
@@ -541,56 +671,66 @@ async function phase1d() {
   log(' PHASE 1d — FETCH ETF DAILY CLOSES (Yahoo Finance)');
   log('══════════════════════════════════════════════════════');
 
-  const tickers = ['QQQ', 'SPY'];
-  for (const ticker of tickers) {
+  const allTickers = ['QQQ', 'SPY', 'GLD', 'USO', 'IWM', 'SLV'];
+  const closesPath = path.join(DATA, 'etf_closes.json');
+
+  // Load existing incremental file
+  const allCloses = readJSON(closesPath) || {};
+  for (const t of allTickers) {
+    if (!allCloses[t]) allCloses[t] = {};
+  }
+
+  for (const ticker of allTickers) {
     log(`\n[FETCH] ${ticker}`);
-    const outDir = path.join(OPT_DIR, ticker);
-    ensureDir(outDir);
-    const outFile = path.join(outDir, `${ticker}_daily.json`);
+    if (DRY_RUN) { log(`  [DRY] would fetch ${ticker} from Yahoo Finance`); continue; }
 
-    if (fs.existsSync(outFile) && !RECOMPUTE) {
-      log(`  SKIP (exists): ${outFile}`);
-      continue;
-    }
-    if (DRY_RUN) {
-      log(`  [DRY] would fetch ${ticker} daily from Yahoo Finance`);
-      continue;
-    }
+    let fetched = false;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        // Use range=max to get full history; Yahoo Finance supports this for all these ETFs
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=max`;
+        const resp = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const json = await resp.json();
 
-    try {
-      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=1y`;
-      const resp = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const json = await resp.json();
+        const result = json?.chart?.result?.[0];
+        if (!result) throw new Error('No chart result');
 
-      const result = json?.chart?.result?.[0];
-      if (!result) throw new Error('No chart result');
+        const ts       = result.timestamp;
+        const q        = result.indicators?.quote?.[0];
+        const adjclose = result.indicators?.adjclose?.[0]?.adjclose;
 
-      const ts    = result.timestamp;
-      const q     = result.indicators?.quote?.[0];
-      const adjclose = result.indicators?.adjclose?.[0]?.adjclose;
+        let added = 0;
+        for (let i = 0; i < ts.length; i++) {
+          const date  = new Date(ts[i] * 1000).toISOString().substring(0, 10);
+          const close = adjclose?.[i] ?? q?.close?.[i];
+          if (close && !isNaN(close) && close > 0) {
+            allCloses[ticker][date] = +close.toFixed(4);
+            added++;
+          }
+        }
 
-      const daily = {};
-      for (let i = 0; i < ts.length; i++) {
-        const date = new Date(ts[i] * 1000).toISOString().substring(0, 10);
-        daily[date] = {
-          open:   q.open[i],
-          high:   q.high[i],
-          low:    q.low[i],
-          close:  q.close[i],
-          adjClose: adjclose?.[i] ?? q.close[i],
-          volume: q.volume[i],
-        };
+        writeJSON(closesPath, allCloses);
+        log(`  Saved ${added} daily closes (${Object.keys(allCloses[ticker]).length} total) → etf_closes.json`);
+        fetched = true;
+        break;
+
+      } catch (e2) {
+        warn(`  Attempt ${attempt}/3 failed: ${e2.message}`);
+        if (attempt < 3) { await sleep(2000); }
+        else {
+          errLog(`Phase 1d: failed to fetch ${ticker} after 3 attempts: ${e2.message}`);
+          warn(`  Using existing ${Object.keys(allCloses[ticker]).length} dates for ${ticker}`);
+        }
       }
-
-      writeJSON(outFile, daily);
-      log(`  Saved ${Object.keys(daily).length} days → ${outFile}`);
-    } catch (e2) {
-      warn(`Failed to fetch ${ticker}: ${e2.message} — HP computation will use fallback close`);
+    }
+    if (!fetched) {
+      log(`  Keeping existing ${Object.keys(allCloses[ticker]).length} dates for ${ticker}`);
     }
   }
 
   log(`\n[1d COMPLETE] ${elapsed(t0)}`);
+  return allCloses;
 }
 
 // ─── PHASE 1e: PROCESS OPRA OPTIONS DATA ─────────────────────────────────────
@@ -601,67 +741,69 @@ async function phase1e() {
   log(' PHASE 1e — PROCESS OPRA OPTIONS DATA');
   log('══════════════════════════════════════════════════════');
 
-  const opraDir = path.join(RAW_DIR, 'OPRA');
-  if (!fs.existsSync(opraDir)) {
+  const opraRawBase = path.join(RAW_DIR, 'OPRA');
+  if (!fs.existsSync(opraRawBase)) {
     warn('raw/OPRA not found — run phase 1b first');
     return;
   }
 
-  const opraFiles = fs.readdirSync(opraDir).filter(f => f.endsWith('.csv.zst'));
-  const defFiles  = opraFiles.filter(f => f.includes('.definition.'));
-  const statFiles = opraFiles.filter(f => f.includes('.statistics.'));
+  const targetEtfs = OPRA_UNDERLYINGS.map(o => o.etf);
 
-  log(`Definition files: ${defFiles.length}  Statistics files: ${statFiles.length}`);
-
-  // STEP 1: Build contract definitions (instrument_id → { strike, expiry, type, underlying })
-  // We build a per-date map then merge (definitions are emitted daily)
+  // ── STEP 1: Build global contract definitions (from all OPRA dirs) ────────
   log('\n[STEP 1] Building contract definitions...');
   const t1 = Date.now();
-
-  // Use a merged map across all definition files
-  const contractDefs = {}; // instrument_id → { strike, expiry, type, underlying, symbol }
-  const defsOutPath = path.join(OPT_DIR, 'contract_definitions.json');
+  const contractDefs = {};
+  const defsOutPath  = path.join(OPT_DIR, 'contract_definitions.json');
 
   if (fs.existsSync(defsOutPath) && !RECOMPUTE) {
     log(`  SKIP (exists): contract_definitions.json — loading...`);
-    const existing = readJSON(defsOutPath);
-    Object.assign(contractDefs, existing);
+    Object.assign(contractDefs, readJSON(defsOutPath));
     log(`  Loaded ${Object.keys(contractDefs).length} contract definitions`);
   } else {
-    // Process all definition files and merge
-    // Column map (from inspection): instrument_id=4, instrument_class=7, expiration=10, underlying=46, strike_price=48
-    for (const fname of defFiles.sort()) {
-      const fpath = path.join(opraDir, fname);
-      const buf = await decompress(fs.readFileSync(fpath));
-      const text = buf.toString('utf8');
-      const lines = text.split('\n');
-      if (lines.length < 2) continue;
+    let totalDefs = 0;
+    for (const etf of targetEtfs) {
+      const dir = path.join(opraRawBase, etf);
+      if (!fs.existsSync(dir)) { warn(`raw/OPRA/${etf} not found — skipping`); continue; }
+      const defFiles = fs.readdirSync(dir).filter(f => f.includes('.definition.') && f.endsWith('.csv.zst'));
+      log(`  ${etf}: ${defFiles.length} definition file(s)`);
 
-      const headers = lines[0].split(',').map(h => h.trim());
-      const idxId       = headers.indexOf('instrument_id');
-      const idxClass    = headers.indexOf('instrument_class');
-      const idxExpiry   = headers.indexOf('expiration');
-      const idxUnderly  = headers.indexOf('underlying');
-      const idxStrike   = headers.indexOf('strike_price');
-      const idxSymbol   = headers.indexOf('symbol');
+      for (const fname of defFiles.sort()) {
+        try {
+          const buf  = await decompress(fs.readFileSync(path.join(dir, fname)));
+          const text = buf.toString('utf8');
+          const lines = text.split('\n');
+          if (lines.length < 2) continue;
 
-      for (let i = 1; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (!line) continue;
-        const parts = line.split(',');
-        const id       = parts[idxId];
-        const cls      = parts[idxClass];
-        const expiry   = (parts[idxExpiry] || '').substring(0, 10); // YYYY-MM-DD
-        const underly  = parts[idxUnderly];
-        const strike   = parseFloat(parts[idxStrike]);
-        const symbol   = parts[idxSymbol] || parts[1] || '';
+          const headers   = lines[0].split(',').map(h => h.trim());
+          const idxId     = headers.indexOf('instrument_id');
+          const idxClass  = headers.indexOf('instrument_class');
+          const idxExpiry = headers.indexOf('expiration');
+          const idxUndly  = headers.indexOf('underlying');
+          const idxStrike = headers.indexOf('strike_price');
+          const idxSymbol = headers.indexOf('symbol');
 
-        if (!id || !cls || !expiry || !underly || isNaN(strike)) continue;
-        if (underly !== 'QQQ' && underly !== 'SPY') continue;
+          for (let i = 1; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (!line) continue;
+            const parts = line.split(',');
+            const id     = parts[idxId];
+            const cls    = parts[idxClass];
+            const expiry = (parts[idxExpiry] || '').substring(0, 10);
+            const undly  = parts[idxUndly];
+            const strike = parseFloat(parts[idxStrike]);
+            const sym    = (parts[idxSymbol] || '').trim();
 
-        contractDefs[id] = { strike, expiry, type: cls, underlying: underly, symbol: symbol.trim() };
+            if (!id || !cls || !expiry || !undly || isNaN(strike)) continue;
+            if (!targetEtfs.includes(undly)) continue;
+
+            contractDefs[id] = { strike, expiry, type: cls, underlying: undly, symbol: sym };
+            totalDefs++;
+          }
+        } catch (e2) {
+          errLog(`Phase 1e def: ${etf}/${fname}: ${e2.message}`);
+        }
+        process.stdout.write(`\r  Processed ${fname} — ${totalDefs} defs`);
       }
-      process.stdout.write(`\r  Processed ${fname} — ${Object.keys(contractDefs).length} defs`);
     }
     log(`\n  Total: ${Object.keys(contractDefs).length} definitions`);
     writeJSON(defsOutPath, contractDefs);
@@ -669,129 +811,99 @@ async function phase1e() {
   }
   log(`[Step 1 done] ${elapsed(t1)}`);
 
-  // STEP 2: Parse statistics files (OI per contract per day)
+  // ── STEP 2: Parse statistics files per underlying ─────────────────────────
   log('\n[STEP 2] Parsing statistics files...');
 
-  // Load ETF daily closes for ±25% filter
-  const etfCloses = {};
-  for (const etf of ['QQQ', 'SPY']) {
-    const f = path.join(OPT_DIR, etf, `${etf}_daily.json`);
-    etfCloses[etf] = fs.existsSync(f) ? readJSON(f) : {};
-  }
+  // Load ETF closes for ±25% filter
+  const allCloses = readJSON(path.join(DATA, 'etf_closes.json')) || {};
+  const lastKnownClose = Object.fromEntries(targetEtfs.map(e => [e, null]));
 
-  // Track last known close for fallback
-  const lastKnownClose = { QQQ: null, SPY: null };
+  let totalFilesProcessed = 0;
 
-  let filesProcessed = 0;
-  for (const fname of statFiles.sort()) {
-    // Extract date from filename: opra-pillar-20260102.statistics.csv.zst → 2026-01-02
-    const dateMatch = fname.match(/(\d{8})/);
-    if (!dateMatch) continue;
-    const rawDate = dateMatch[1];
-    const date = `${rawDate.substring(0, 4)}-${rawDate.substring(4, 6)}-${rawDate.substring(6, 8)}`;
+  for (const etf of targetEtfs) {
+    const dir = path.join(opraRawBase, etf);
+    if (!fs.existsSync(dir)) { warn(`raw/OPRA/${etf} not found — skipping`); continue; }
 
-    // Check if output already exists for both underlyings
-    const qqqOut = path.join(OPT_DIR, 'QQQ', 'raw', `${date}.json`);
-    const spyOut = path.join(OPT_DIR, 'SPY', 'raw', `${date}.json`);
-    if (!RECOMPUTE && fs.existsSync(qqqOut) && fs.existsSync(spyOut)) {
-      // Update last known close from daily data
-      for (const etf of ['QQQ', 'SPY']) {
-        const c = etfCloses[etf]?.[date]?.close;
+    const statFiles = fs.readdirSync(dir)
+      .filter(f => f.includes('.statistics.') && f.endsWith('.csv.zst'))
+      .sort();
+
+    log(`\n  [${etf}] ${statFiles.length} statistics files`);
+    let processed = 0;
+
+    for (const fname of statFiles) {
+      const dateMatch = fname.match(/(\d{8})/);
+      if (!dateMatch) continue;
+      const rawDate = dateMatch[1];
+      const date = `${rawDate.substring(0,4)}-${rawDate.substring(4,6)}-${rawDate.substring(6,8)}`;
+
+      if (FROM_DATE && date < FROM_DATE) continue;
+
+      const outPath = path.join(OPT_DIR, etf, 'raw', `${date}.json`);
+      if (!RECOMPUTE && fs.existsSync(outPath)) {
+        const c = allCloses[etf]?.[date];
         if (c) lastKnownClose[etf] = c;
+        continue;
       }
-      continue;
+      if (DRY_RUN) { log(`  [DRY] would process ${fname}`); continue; }
+
+      try {
+        const buf  = await decompress(fs.readFileSync(path.join(dir, fname)));
+        const text = buf.toString('utf8');
+        const lines = text.split('\n');
+        if (lines.length < 2) continue;
+
+        const headers   = lines[0].split(',').map(h => h.trim());
+        const idxId     = headers.indexOf('instrument_id');
+        const idxStat   = headers.indexOf('stat_type');
+        const idxQty    = headers.indexOf('quantity');
+
+        const c = allCloses[etf]?.[date];
+        if (c) lastKnownClose[etf] = c;
+        const S = lastKnownClose[etf];
+
+        const oiMap = {};
+        for (let i = 1; i < lines.length; i++) {
+          const line = lines[i].trim();
+          if (!line) continue;
+          const parts = line.split(',');
+          if (parseInt(parts[idxStat]) !== 9) continue; // OI only
+          const id  = parts[idxId];
+          const qty = parseInt(parts[idxQty]);
+          if (!id || isNaN(qty) || qty <= 0 || qty === 2147483647) continue;
+          if (!oiMap[id] || qty > oiMap[id]) oiMap[id] = qty;
+        }
+
+        const contracts = [];
+        for (const [id, oi] of Object.entries(oiMap)) {
+          const def = contractDefs[id];
+          if (!def || def.underlying !== etf) continue;
+          if (S) {
+            if (def.strike < S * 0.75 || def.strike > S * 1.25) continue;
+          }
+          const dte = S ? (new Date(def.expiry + 'T00:00:00Z') - new Date(date + 'T00:00:00Z')) / 86400000 : 30;
+          if (dte < 0 || dte > 45) continue;
+          contracts.push({ symbol: def.symbol, strike: def.strike, expiry: def.expiry, type: def.type, oi });
+        }
+
+        if (contracts.length > 0) {
+          const outDir = path.join(OPT_DIR, etf, 'raw');
+          ensureDir(outDir);
+          writeJSON(outPath, { date, underlying: etf, contracts });
+        }
+
+        processed++;
+        totalFilesProcessed++;
+        process.stdout.write(`\r    ${etf} ${date} — ${contracts.length} contracts`);
+
+      } catch (e2) {
+        errLog(`Phase 1e stats: ${etf}/${fname}: ${e2.message}`);
+      }
     }
-    if (DRY_RUN) {
-      log(`  [DRY] would process ${fname}`);
-      continue;
-    }
-
-    process.stdout.write(`\r  Processing ${fname}...`);
-
-    const fpath = path.join(opraDir, fname);
-    const buf = await decompress(fs.readFileSync(fpath));
-    const text = buf.toString('utf8');
-    const lines = text.split('\n');
-
-    if (lines.length < 2) continue;
-
-    const headers = lines[0].split(',').map(h => h.trim());
-    const idxId       = headers.indexOf('instrument_id');
-    const idxStatType = headers.indexOf('stat_type');
-    const idxQty      = headers.indexOf('quantity');
-    // symbol is last column
-    const idxSymbol   = headers.indexOf('symbol');
-
-    // Accumulate OI per contract: instrument_id → maxOI seen (multiple publishers)
-    const oiMap = {}; // instrument_id → { qty, publishers: Set }
-
-    for (let i = 1; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (!line) continue;
-      const parts = line.split(',');
-      const statType = parseInt(parts[idxStatType]);
-      if (statType !== 9) continue; // only Open Interest (stat_type=9)
-
-      const id  = parts[idxId];
-      const qty = parseInt(parts[idxQty]);
-      if (!id || isNaN(qty) || qty <= 0 || qty === 2147483647) continue;
-
-      // Use max OI across publishers (conservative — some exchanges report partial OI)
-      if (!oiMap[id] || qty > oiMap[id]) oiMap[id] = qty;
-    }
-
-    // Get ETF closes for this date
-    for (const etf of ['QQQ', 'SPY']) {
-      const c = etfCloses[etf]?.[date]?.close;
-      if (c) lastKnownClose[etf] = c;
-    }
-
-    // Build per-underlying output
-    const byUnderlying = { QQQ: [], SPY: [] };
-
-    for (const [id, oi] of Object.entries(oiMap)) {
-      const def = contractDefs[id];
-      if (!def) continue;
-      if (def.underlying !== 'QQQ' && def.underlying !== 'SPY') continue;
-
-      const S = lastKnownClose[def.underlying];
-      if (!S) continue;
-
-      // Filter: ±25% from spot
-      if (def.strike < S * 0.75 || def.strike > S * 1.25) continue;
-
-      // Filter: expiry within 45 days
-      const expDate = new Date(def.expiry + 'T00:00:00Z');
-      const curDate = new Date(date + 'T00:00:00Z');
-      const dte = (expDate - curDate) / 86400000;
-      if (dte < 0 || dte > 45) continue;
-
-      byUnderlying[def.underlying].push({
-        symbol: def.symbol,
-        strike: def.strike,
-        expiry: def.expiry,
-        type:   def.type,
-        oi,
-      });
-    }
-
-    // Write output files
-    for (const etf of ['QQQ', 'SPY']) {
-      if (byUnderlying[etf].length === 0) continue;
-      const outDir = path.join(OPT_DIR, etf, 'raw');
-      ensureDir(outDir);
-      const outPath = path.join(outDir, `${date}.json`);
-      writeJSON(outPath, {
-        date,
-        underlying: etf,
-        contracts: byUnderlying[etf],
-      });
-    }
-
-    filesProcessed++;
+    log(`\n  [${etf}] Done — ${processed} files processed`);
   }
 
-  log(`\n[1e COMPLETE] ${elapsed(t0)} — ${filesProcessed} statistics files processed`);
+  log(`\n[1e COMPLETE] ${elapsed(t0)} — ${totalFilesProcessed} statistics files processed`);
 }
 
 // ─── PHASE 1f: COMPUTE HP LEVELS ─────────────────────────────────────────────
@@ -802,11 +914,11 @@ async function phase1f() {
   log(' PHASE 1f — COMPUTE HP LEVELS (Black-Scholes)');
   log('══════════════════════════════════════════════════════');
 
-  const underlyings = ['QQQ', 'SPY'];
+  // Load unified ETF closes
+  const allCloses = readJSON(path.join(DATA, 'etf_closes.json')) || {};
 
-  for (const etf of underlyings) {
-    const futProxy = FUTURES_PROXY_MAP[etf]; // QQQ→MNQ, SPY→MES
-    log(`\n[${etf} → ${futProxy}]`);
+  for (const { etf, futuresProxy } of OPRA_UNDERLYINGS) {
+    log(`\n[${etf} → ${futuresProxy}]`);
 
     const rawDir  = path.join(OPT_DIR, etf, 'raw');
     const compDir = path.join(OPT_DIR, etf, 'computed');
@@ -817,144 +929,206 @@ async function phase1f() {
       continue;
     }
 
-    // Load ETF daily closes
-    const etfDailyPath = path.join(OPT_DIR, etf, `${etf}_daily.json`);
-    const etfDaily = fs.existsSync(etfDailyPath) ? readJSON(etfDailyPath) : {};
-
-    // Load futures daily closes from 1m data (last bar close before 16:00 ET)
+    // Load futures daily closes from 1m data
     const futDates = {};
-    const futManifest = readJSON(path.join(FUT_DIR, futProxy, 'manifest.json'));
-    if (futManifest) {
-      log(`  Loading futures closes for ${futProxy}...`);
-      const fut1mDir = path.join(FUT_DIR, futProxy, '1m');
-      if (fs.existsSync(fut1mDir)) {
-        for (const f of fs.readdirSync(fut1mDir).filter(f => f.endsWith('.json'))) {
-          const date = f.replace('.json', '');
-          const bars = readJSON(path.join(fut1mDir, f)) || [];
-          // Last bar before 20:00 UTC (16:00 ET during EST, 15:00 ET during EDT — use 20:00 UTC to catch RTH close)
-          const rthBars = bars.filter(b => {
-            const h = new Date(b.ts * 1000).getUTCHours();
-            return h < 20;
-          });
-          if (rthBars.length > 0) {
-            futDates[date] = rthBars[rthBars.length - 1].close;
-          }
-        }
+    const fut1mDir = path.join(FUT_DIR, futuresProxy, '1m');
+    if (fs.existsSync(fut1mDir)) {
+      log(`  Loading futures closes for ${futuresProxy}...`);
+      for (const f of fs.readdirSync(fut1mDir).filter(f => f.endsWith('.json'))) {
+        const date = f.replace('.json', '');
+        const bars  = readJSON(path.join(fut1mDir, f)) || [];
+        const rthBars = bars.filter(b => new Date(b.ts * 1000).getUTCHours() < 20);
+        if (rthBars.length > 0) futDates[date] = rthBars[rthBars.length - 1].close;
       }
       log(`  Loaded ${Object.keys(futDates).length} futures close prices`);
+    } else {
+      warn(`  No 1m data for ${futuresProxy} — scaling ratios will be null`);
     }
 
-    // Build rolling 20-day log returns for IV estimation
-    // dates sorted → for each date, need previous 20 ETF closes
-    const etfDates = Object.keys(etfDaily).sort();
-    const etfClosePrices = etfDates.map(d => etfDaily[d]?.close);
+    // Build sorted ETF close array for rolling log returns
+    const etfCloseMap  = allCloses[etf] || {};
+    const etfDates     = Object.keys(etfCloseMap).sort();
+    const etfPrices    = etfDates.map(d => etfCloseMap[d]);
 
     const rawFiles = fs.readdirSync(rawDir).filter(f => f.endsWith('.json')).sort();
     let computed = 0, skipped = 0, errored = 0;
-
-    const manifestDates = [];
     let sumIV = 0;
+    const batchStart = Date.now();
 
-    for (const fname of rawFiles) {
-      const date = fname.replace('.json', '');
+    for (let fi = 0; fi < rawFiles.length; fi++) {
+      const date = rawFiles[fi].replace('.json', '');
+
+      if (FROM_DATE && date < FROM_DATE) { skipped++; continue; }
+
       const outPath = path.join(compDir, `${date}.json`);
 
-      // Skip if already computed and not forcing
-      if (!RECOMPUTE && fs.existsSync(outPath)) {
+      // Skip if already computed (unless --recompute or --recompute-from)
+      const shouldRecompute = RECOMPUTE || (RECOMPUTE_FROM && date >= RECOMPUTE_FROM);
+      if (!shouldRecompute && fs.existsSync(outPath)) {
         const existing = readJSON(outPath);
         if (existing?.computedAt) { skipped++; continue; }
       }
-      if (DRY_RUN) {
-        log(`  [DRY] would compute ${etf} ${date}`);
-        computed++;
-        continue;
+      if (DRY_RUN) { log(`  [DRY] would compute ${etf} ${date}`); computed++; continue; }
+
+      // Progress every 100 dates
+      if (fi > 0 && fi % 100 === 0) {
+        const pct = ((fi / rawFiles.length) * 100).toFixed(0);
+        const etaStr = eta(fi, rawFiles.length, Date.now() - batchStart);
+        log(`  [${etf}] ${fi}/${rawFiles.length} (${pct}%) — ETA ${etaStr}`);
       }
 
       try {
-        const rawData = readJSON(path.join(rawDir, fname));
+        const rawData = readJSON(path.join(rawDir, rawFiles[fi]));
         if (!rawData?.contracts?.length) { skipped++; continue; }
 
-        // Get ETF close for this date (fallback to previous)
-        let etfClose = etfDaily[date]?.close;
+        // ETF close — try exact date, then last known
+        let etfClose = etfCloseMap[date];
         if (!etfClose) {
-          // Fallback: last known close before this date
           const prevDates = etfDates.filter(d => d < date);
-          if (prevDates.length > 0) etfClose = etfDaily[prevDates[prevDates.length - 1]]?.close;
+          if (prevDates.length > 0) etfClose = etfCloseMap[prevDates[prevDates.length - 1]];
         }
-        if (!etfClose) { warn(`No ETF close for ${etf} ${date} — skipping`); errored++; continue; }
+        if (!etfClose) {
+          errLog(`Phase 1f: no ETF close for ${etf} ${date} — skipping`);
+          errored++;
+          continue;
+        }
 
-        // Get futures close for scaling ratio
         const futuresClose = futDates[date] || null;
 
-        // Build 20-day log returns ending at this date
+        // 20-day rolling log returns for IV estimation
         const idx = etfDates.indexOf(date);
-        const lookback = 20;
         const dailyLogReturns = [];
         if (idx > 0) {
-          const start = Math.max(0, idx - lookback);
+          const start = Math.max(0, idx - 20);
           for (let i = start + 1; i <= idx; i++) {
-            const prev = etfClosePrices[i - 1];
-            const cur  = etfClosePrices[i];
+            const prev = etfPrices[i - 1];
+            const cur  = etfPrices[i];
             if (prev && cur && prev > 0) dailyLogReturns.push(Math.log(cur / prev));
           }
         }
 
         const snapshot = computeHP({
-          date,
-          underlying: etf,
-          futuresProxy: futProxy,
-          etfClose,
-          futuresClose,
-          contracts: rawData.contracts,
-          dailyLogReturns,
+          date, underlying: etf, futuresProxy, etfClose, futuresClose,
+          contracts: rawData.contracts, dailyLogReturns,
         });
 
         writeJSON(outPath, snapshot);
-        manifestDates.push(date);
         sumIV += snapshot.atmIV || 0;
         computed++;
-        process.stdout.write(`\r  ${etf} ${date} — IV: ${((snapshot.atmIV || 0) * 100).toFixed(1)}%  GEX: ${(snapshot.totalGex / 1e9).toFixed(2)}B  DEX: ${snapshot.dexBias}`);
+        process.stdout.write(
+          `\r  ${etf} ${date} — IV: ${((snapshot.atmIV || 0) * 100).toFixed(1)}%  GEX: ${(snapshot.totalGex / 1e9).toFixed(2)}B  DEX: ${snapshot.dexBias}`
+        );
 
       } catch (e2) {
-        warn(`\nError computing ${etf} ${date}: ${e2.message}`);
+        errLog(`Phase 1f: ${etf} ${date}: ${e2.message}`);
         errored++;
       }
     }
-
     log(`\n  ${etf}: computed=${computed} skipped=${skipped} errors=${errored}`);
 
-    // Write computed manifest
-    const allComputed = fs.readdirSync(compDir).filter(f => f.endsWith('.json') && f !== 'manifest.json').sort();
-    const manifest = {
-      underlying: etf,
-      futuresProxy: futProxy,
-      firstDate:      allComputed[0]?.replace('.json', '') || null,
-      lastDate:       allComputed[allComputed.length - 1]?.replace('.json', '') || null,
-      datesComputed:  allComputed.length,
-      datesSkipped:   skipped,
-      avgAtmIV:       computed > 0 ? +(sumIV / computed).toFixed(4) : null,
-      processedAt:    new Date().toISOString(),
-    };
-    writeJSON(path.join(compDir, 'manifest.json'), manifest);
-    log(`  Manifest: ${allComputed.length} computed dates, avgIV=${((manifest.avgAtmIV || 0) * 100).toFixed(1)}%`);
+    // Write manifest
+    const allComp = fs.readdirSync(compDir).filter(f => f.endsWith('.json') && f !== 'manifest.json').sort();
+    writeJSON(path.join(compDir, 'manifest.json'), {
+      underlying:    etf,
+      futuresProxy,
+      firstDate:     allComp[0]?.replace('.json','') || null,
+      lastDate:      allComp[allComp.length-1]?.replace('.json','') || null,
+      datesComputed: allComp.length,
+      avgAtmIV:      computed > 0 ? +(sumIV / computed).toFixed(4) : null,
+      processedAt:   new Date().toISOString(),
+    });
+    log(`  Manifest: ${allComp.length} computed dates`);
   }
 
   log(`\n[1f COMPLETE] ${elapsed(t0)}`);
+}
+
+// ─── VERIFY ──────────────────────────────────────────────────────────────────
+
+async function runVerify() {
+  const t0 = Date.now();
+  log('\n══════════════════════════════════════════════════════');
+  log(' VERIFY — Checking output coverage');
+  log('══════════════════════════════════════════════════════');
+
+  const manifest = readJSON(path.join(DATA, 'manifest.json'));
+  const report   = { generatedAt: new Date().toISOString(), symbols: {}, opra: {} };
+
+  const targetSymbols = SYMBOL_FILTER ? [SYMBOL_FILTER] : ALL_SYMBOLS;
+
+  for (const sym of targetSymbols) {
+    const dir1m = path.join(FUT_DIR, sym, '1m');
+    const symManifest = readJSON(path.join(FUT_DIR, sym, 'manifest.json'));
+
+    if (!fs.existsSync(dir1m)) {
+      report.symbols[sym] = { status: 'missing', dates: 0 };
+      warn(`  ${sym}: NO DATA`);
+      continue;
+    }
+
+    const dates = fs.readdirSync(dir1m).filter(f => f.endsWith('.json')).map(f => f.replace('.json','')).sort();
+    const expectedRange = manifest?.cme?.[sym]?.dateRange;
+
+    report.symbols[sym] = {
+      status: dates.length > 0 ? 'ok' : 'empty',
+      dates: dates.length,
+      firstDate: dates[0] || null,
+      lastDate: dates[dates.length - 1] || null,
+      expectedRange,
+    };
+    log(`  ${sym}: ${dates.length} dates  [${dates[0]} → ${dates[dates.length-1]}]${expectedRange ? '  expected: ' + expectedRange.start + ' → ' + expectedRange.end : ''}`);
+  }
+
+  // Check OPRA computed files
+  for (const { etf } of OPRA_UNDERLYINGS) {
+    const compDir = path.join(OPT_DIR, etf, 'computed');
+    if (!fs.existsSync(compDir)) {
+      report.opra[etf] = { status: 'missing', dates: 0 };
+      continue;
+    }
+    const dates = fs.readdirSync(compDir).filter(f => f.endsWith('.json') && f !== 'manifest.json');
+    report.opra[etf] = { status: dates.length > 0 ? 'ok' : 'empty', dates: dates.length };
+    log(`  OPRA ${etf}: ${dates.length} HP computed dates`);
+  }
+
+  writeJSON(path.join(DATA, 'verification.json'), report);
+  log(`\n[VERIFY COMPLETE] ${elapsed(t0)} — verification.json written`);
+  return report;
 }
 
 // ─── MAIN ─────────────────────────────────────────────────────────────────────
 
 async function main() {
   const T0 = Date.now();
-
   console.log('╔══════════════════════════════════════════════════════╗');
-  console.log('║   FuturesEdge AI — Historical Data Pipeline          ║');
+  console.log('║   FuturesEdge AI — Historical Data Pipeline v2       ║');
   console.log('╚══════════════════════════════════════════════════════╝');
   console.log(`DRY_RUN=${DRY_RUN}  RECOMPUTE=${RECOMPUTE}  SYMBOL_FILTER=${SYMBOL_FILTER || 'all'}`);
+  console.log(`PHASE=${SINGLE_PHASE || 'all'}  FROM_DATE=${FROM_DATE || 'none'}  RECOMPUTE_FROM=${RECOMPUTE_FROM || 'none'}`);
+
+  ensureDir(DATA);
+  ensureDir(RAW_DIR);
+  ensureDir(FUT_DIR);
+  ensureDir(OPT_DIR);
 
   try {
-    if (INVENTORY_ONLY) {
+    if (VERIFY_ONLY) {
+      await runVerify();
+      return;
+    }
+
+    if (SINGLE_PHASE === '1a' || INVENTORY_ONLY) {
       await phase1a();
+    } else if (SINGLE_PHASE === '1b') {
+      await phase1b();
+    } else if (SINGLE_PHASE === '1c') {
+      await phase1c();
+    } else if (SINGLE_PHASE === '1d') {
+      await phase1d();
+    } else if (SINGLE_PHASE === '1e') {
+      await phase1e();
+    } else if (SINGLE_PHASE === '1f') {
+      await phase1f();
     } else if (FUTURES_ONLY) {
       await phase1b();
       await phase1c();

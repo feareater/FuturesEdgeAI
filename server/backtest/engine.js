@@ -19,22 +19,18 @@ const { computeIndicators, computeDDBands }  = require('../analysis/indicators')
 const { classifyRegime }     = require('../analysis/regime');
 const { detectSetups }       = require('../analysis/setups');
 const { buildMarketContext } = require('../analysis/marketContext');
+const { POINT_VALUE, HP_PROXY } = require('../data/instruments');
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const DATA_DIR = path.resolve(__dirname, '../../data/historical');
 const RESULTS_DIR = path.resolve(__dirname, '../../data/backtest/results');
 
-const POINT_VALUE = { MNQ: 2, MES: 5, MGC: 10, MCL: 100 };
-
 /** Bar duration in seconds for each timeframe (bar ts = bar open; close = ts + duration) */
 const TF_SECONDS = { '1m': 60, '5m': 300, '15m': 900, '30m': 1800, '1h': 3600, '2h': 7200, '4h': 14400 };
 
 // Max hold time in 1m bars (default 8h = 480 bars)
 const DEFAULT_MAX_BARS = 480;
-
-// HP_PROXY: which underlying maps to which symbol
-const HP_PROXY = { MNQ: 'QQQ', MES: 'SPY', MGC: null, MCL: null };
 
 // ─── In-progress jobs ─────────────────────────────────────────────────────────
 
