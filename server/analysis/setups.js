@@ -52,6 +52,7 @@ function detectSetups(candles, indicators, regime, opts = {}) {
   const symbol        = opts.symbol         || '';
   const trendlines    = opts.trendlines     || null;
   const calendarEvents = opts.calendarEvents || [];
+  const ddBands       = opts.ddBands        || indicators.ddBands || null;
 
   // Examine only the most recent SCAN_WINDOW candles, but use all known swings
   const scanStart   = Math.max(0, candles.length - SCAN_WINDOW);
@@ -103,6 +104,41 @@ function detectSetups(candles, indicators, regime, opts = {}) {
       if (_isNearCalendarEvent(setup, symbol, calendarEvents)) {
         setup.confidence  = Math.max(0, setup.confidence - 20);
         setup.nearEvent   = true;
+      }
+    }
+  }
+
+  // DD Band proximity scoring: adjusts confidence based on entry position vs CME SPAN levels
+  if (ddBands) {
+    for (const setup of top) {
+      const ddMod = scoreDDBandProximity(setup.entry, setup.direction, ddBands);
+      if (ddMod.score !== 0) {
+        setup.confidence = Math.max(0, Math.min(100, setup.confidence + ddMod.score));
+        setup.scoreBreakdown = { ...(setup.scoreBreakdown || {}), ddBand: ddMod.score };
+        setup.ddBandLabel = ddMod.label;
+        if (ddMod.detail) setup.rationale += ` · DD: ${ddMod.label.replace(/_/g, ' ')}`;
+      } else {
+        setup.ddBandLabel = ddMod.label;
+      }
+    }
+
+    // PDH Breakout additional check: PDH/PDL level itself beyond DD Band
+    for (const setup of top) {
+      if (setup.type === 'pdh_breakout' && indicators.pdh != null) {
+        const pdLevel = setup.direction === 'bullish' ? indicators.pdh : indicators.pdl;
+        if (pdLevel == null) continue;
+        const { ddBandUpper, ddBandLower } = ddBands;
+        if (setup.direction === 'bullish' && pdLevel > ddBandUpper) {
+          setup.scoreBreakdown = { ...(setup.scoreBreakdown || {}), ddBand: (setup.scoreBreakdown?.ddBand || 0) - 8 };
+          setup.confidence = Math.max(0, setup.confidence - 8);
+          setup.rationale += ' · PDH beyond DD upper';
+          setup.ddBandLabel = 'pdh_beyond_dd';
+        } else if (setup.direction === 'bearish' && pdLevel < ddBandLower) {
+          setup.scoreBreakdown = { ...(setup.scoreBreakdown || {}), ddBand: (setup.scoreBreakdown?.ddBand || 0) - 8 };
+          setup.confidence = Math.max(0, setup.confidence - 8);
+          setup.rationale += ' · PDL beyond DD lower';
+          setup.ddBandLabel = 'pdh_beyond_dd';
+        }
       }
     }
   }
@@ -1145,4 +1181,50 @@ function applyMarketContext(baseScore, setup, marketContext) {
 
 // ---------------------------------------------------------------------------
 
-module.exports = { detectSetups, applyMarketContext };
+// ---------------------------------------------------------------------------
+// DD Band proximity scoring
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns an additive confidence adjustment based on where entry sits relative
+ * to the CME SPAN-derived DD Band levels.
+ *
+ * Positive score = room to run (entry well inside the band)
+ * Negative score = entry beyond band (limited upside) or at SPAN extreme (overextended)
+ */
+function scoreDDBandProximity(entryPrice, direction, ddBands) {
+  if (!ddBands) return { score: 0, label: 'no_data', detail: null };
+
+  const { ddBandUpper, ddBandLower, spanUpper, spanLower, riskInterval } = ddBands;
+  if (!riskInterval) return { score: 0, label: 'no_data', detail: null };
+
+  const distToUpper = Math.abs(entryPrice - ddBandUpper) / riskInterval;
+  const distToLower = Math.abs(entryPrice - ddBandLower) / riskInterval;
+
+  const beyondUpper  = entryPrice > ddBandUpper;
+  const beyondLower  = entryPrice < ddBandLower;
+  const nearSpanUpper = entryPrice >= spanUpper * 0.98;
+  const nearSpanLower = entryPrice <= spanLower * 1.02;
+
+  if (direction === 'bullish') {
+    if (nearSpanUpper)               return { score: -20, label: 'at_span_extreme',   detail: 'Price at full SPAN upper — extreme extension, low follow-through probability' };
+    if (beyondUpper && distToUpper < 0.3) return { score: -12, label: 'beyond_dd_upper', detail: 'Price already beyond DD Band upper — limited room to run' };
+    if (beyondUpper)                 return { score: -7,  label: 'outside_dd_upper',  detail: 'Price outside DD Band upper' };
+    if (distToUpper > 0.5)           return { score: +8,  label: 'room_to_run',        detail: 'Price well inside DD Band — good room to DD upper' };
+    if (distToUpper > 0.2)           return { score: +4,  label: 'approaching_dd',     detail: 'Price approaching DD Band upper' };
+    return { score: 0, label: 'neutral', detail: null };
+  }
+
+  if (direction === 'bearish') {
+    if (nearSpanLower)               return { score: -20, label: 'at_span_extreme',   detail: 'Price at full SPAN lower — extreme extension, low follow-through probability' };
+    if (beyondLower && distToLower < 0.3) return { score: -12, label: 'beyond_dd_lower', detail: 'Price already beyond DD Band lower — limited room to run' };
+    if (beyondLower)                 return { score: -7,  label: 'outside_dd_lower',  detail: 'Price outside DD Band lower' };
+    if (distToLower > 0.5)           return { score: +8,  label: 'room_to_run',        detail: 'Price well inside DD Band — good room to DD lower' };
+    if (distToLower > 0.2)           return { score: +4,  label: 'approaching_dd',     detail: 'Price approaching DD Band lower' };
+    return { score: 0, label: 'neutral', detail: null };
+  }
+
+  return { score: 0, label: 'neutral', detail: null };
+}
+
+module.exports = { detectSetups, applyMarketContext, scoreDDBandProximity };

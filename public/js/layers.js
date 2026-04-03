@@ -22,6 +22,7 @@
     correlationHeatmap: true,
     cvd:                true,
     optionsLevels:      true,
+    ddBands:            true,
   };
 
   function load() {

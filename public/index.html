@@ -162,6 +162,12 @@
           <span id="opt-resilience" class="opt-value">—</span>
         </div>
         <div id="gamma-widget" class="gamma-widget" style="display:none"></div>
+        <div id="ddband-widget" class="ddband-widget" style="display:none">
+          <span id="dd-upper" class="dd-level">DD↑ —</span>
+          <span class="dd-sep">|</span>
+          <span id="dd-lower" class="dd-level">DD↓ —</span>
+          <span id="dd-position" class="dd-position-badge badge-ok">INSIDE DD</span>
+        </div>
         <!-- Hidden span kept for JS compatibility -->
         <span id="data-age" class="data-age" style="display:none">—</span>
       </div>
@@ -369,11 +375,32 @@
                   <span class="layer-name">Options Levels</span>
                 </label>
 
+                <label class="layer-row">
+                  <input type="checkbox" data-layer="ddBands" checked />
+                  <span class="swatch" style="background:rgba(255,152,0,0.85)"></span>
+                  <span class="layer-name">DD Bands</span>
+                </label>
+
               </div>
             </div>
           </div>
 
-
+          <!-- ── SPAN Margin Settings ──────────────────────────────────── -->
+          <div class="collapsible-section">
+            <div class="panel-header collapsible-header" data-section="span-margins">
+              SPAN Margins <span class="section-chevron">▾</span>
+            </div>
+            <div class="section-body">
+              <div class="span-margin-grid">
+                <label class="span-margin-row"><span class="span-sym">MNQ</span><input type="number" id="span-mnq" class="span-input" value="1320" min="100" step="10" /></label>
+                <label class="span-margin-row"><span class="span-sym">MES</span><input type="number" id="span-mes" class="span-input" value="660"  min="100" step="10" /></label>
+                <label class="span-margin-row"><span class="span-sym">MGC</span><input type="number" id="span-mgc" class="span-input" value="1650" min="100" step="10" /></label>
+                <label class="span-margin-row"><span class="span-sym">MCL</span><input type="number" id="span-mcl" class="span-input" value="1200" min="100" step="10" /></label>
+              </div>
+              <button id="span-save-btn" class="span-save-btn">Save Margins</button>
+              <span id="span-save-status" class="span-save-status"></span>
+            </div>
+          </div>
 
         </div>
 

@@ -15,6 +15,26 @@
     "swingHighLow": true,
     "iofConfluenceZones": true
   },
+  "spanMargin": {
+    "MNQ": 1320,
+    "MES": 660,
+    "MGC": 1650,
+    "MCL": 1200,
+    "cryptoVolAnnualized": 0.30
+  },
+  "features": {
+    "volumeProfile": true,
+    "openingRange": true,
+    "sessionLevels": true,
+    "economicCalendar": true,
+    "relativeStrength": true,
+    "correlationHeatmap": true,
+    "performanceStats": true,
+    "alertReplay": true,
+    "soundAlerts": false,
+    "pushNotifications": false,
+    "ddBands": true
+  },
   "swingLookback": 10,
   "impulseThreshold": 1.5,
   "aiRateLimitMs": 60000,

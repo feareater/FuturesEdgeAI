@@ -128,6 +128,11 @@
             </div>
           </details>
 
+          <div class="bt2-field-group">
+            <label>Run Name <span class="bt2-hint-inline">(optional)</span></label>
+            <input type="text" id="bt2-run-label" class="bt2-run-label-input" placeholder="e.g. RTH Only · MNQ · 5m" maxlength="60" />
+          </div>
+
           <div id="bt2-run-row">
             <button id="bt2-run-btn" class="bt2-run-btn">Run Backtest</button>
             <button id="bt2-save-btn" class="bt2-secondary-btn">Save Config</button>
@@ -309,6 +314,7 @@
                 <button class="bt2-opt-pill active" data-subtab="confidence">Confidence</button>
                 <button class="bt2-opt-pill" data-subtab="regime">Regime</button>
                 <button class="bt2-opt-pill" data-subtab="heatmap">Time of Day</button>
+                <button class="bt2-opt-pill" data-subtab="ddband">DD Band</button>
                 <button class="bt2-opt-pill" data-subtab="notifications">Notifications</button>
               </div>
 
@@ -316,6 +322,7 @@
               <div id="bt2-opt-panel-confidence" class="bt2-opt-panel"></div>
               <div id="bt2-opt-panel-regime"      class="bt2-opt-panel" style="display:none"></div>
               <div id="bt2-opt-panel-heatmap"     class="bt2-opt-panel" style="display:none"></div>
+              <div id="bt2-opt-panel-ddband"      class="bt2-opt-panel" style="display:none"></div>
               <div id="bt2-opt-panel-notifications" class="bt2-opt-panel" style="display:none"></div>
 
             </div><!-- /#bt2-opt-main -->

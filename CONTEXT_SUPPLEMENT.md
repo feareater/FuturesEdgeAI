@@ -5,7 +5,7 @@
 
 ---
 
-## Build Phases F–M (post-Phase 10)
+## Build Phases F–N (post-Phase 10)
 
 | Phase | Version | Focus |
 |---|---|---|
@@ -17,6 +17,7 @@
 | K | v8.x | Stats page 4-tab redesign, dashboard Futures/Crypto mode split, nav cleanup |
 | L | v10.0 | Historical backtesting system — Databento data pipeline, HP computation, backtest engine, backtest2.html |
 | M | v10.1–10.3 | Backtest bias fixes, trading hours filter, Compare tab, Optimize tab |
+| N | v11.0 | DD Band / CME SPAN margin levels — confidence modifier, chart layer, topbar widget, backtest analysis |
 
 ---
 
@@ -203,6 +204,7 @@ Hot-toggle via `POST /api/features { "featureName": true|false }` — no restart
     "correlationHeatmap": true,
     "performanceStats": true,
     "alertReplay": true,
+    "ddBands": true,
     "soundAlerts": false,
     "pushNotifications": false
   }
@@ -297,13 +299,57 @@ incorrect options scaling ratios.
 
 ---
 
-## Backtest System (v10.x) — Phase L/M
+## DD Band / SPAN Margin System — Phase N (v11.0)
+
+### Core Concept
+- `riskInterval = CME initial margin ÷ point value` — defines expected daily range
+- 5 levels: `priorClose`, `ddBandUpper` (+1×), `ddBandLower` (−1×), `spanUpper` (+2×), `spanLower` (−2×)
+- Crypto: `riskInterval = priorClose × (cryptoVolAnnualized / √252)` (default vol=0.30)
+
+### SPAN Margins (`config/settings.json → spanMargin`)
+```json
+{ "MNQ": 1320, "MES": 660, "MGC": 1650, "MCL": 1200, "cryptoVolAnnualized": 0.30 }
+```
+Update via `POST /api/settings/span` or the SPAN Margins panel in the dashboard sidebar.
+
+### Confidence Modifier (`scoreDDBandProximity` in setups.js)
+| Label | Score | Meaning |
+|---|---|---|
+| `room_to_run` | +8 | Entry well inside DD band, target outside it |
+| `approaching_dd` | +4 | Near DD band but not at it |
+| `neutral` | 0 | Ambiguous position |
+| `outside_dd` | −7 | Price already outside DD band |
+| `beyond_dd` | −12 | Price significantly extended |
+| `at_span_extreme` | −20 | Price at or beyond SPAN level |
+
+- `setup.ddBandLabel` and `setup.scoreBreakdown.ddBand` on every scored setup
+
+### Chart Layer
+- `ChartAPI.setDDBands(dd)` — 5 price lines: DD upper/lower (solid orange 0.85 opacity), SPAN upper/lower (dashed orange 0.45), prior close (dotted gray 0.40)
+- Layer toggle: `ddBands` key (default on)
+
+### API Routes
+- `GET /api/ddbands?symbol=MNQ` — returns `{ ddBands: { priorClose, riskInterval, ddBandUpper, ddBandLower, spanUpper, spanLower, currentPrice } }`
+- `POST /api/settings/span` — updates SPAN margins and persists to settings.json
+
+### Backtest (engine.js)
+- `computeDDBands(visibleBars, symbol, spanMargin)` called per bar — historically accurate, no lookahead
+- Trade fields added: `ddBandLabel`, `ddBandScore`
+
+### Backtest UI (backtest2.html/js)
+- DD Band sub-tab in Optimize: breakdown table by label (WR, PF, Net P&L), min 10 labelled trades
+- DD Band stat card in Summary: best/worst label WR, only when ≥10 labelled trades
+
+---
+
+## Backtest System (v10.x / v11.0) — Phase L/M/N
 
 ### Engine (`server/backtest/engine.js`)
 - `runBacktestMTF()` — bar-by-bar replay, no lookahead, current-bar filter, OR dedup per session/direction
-- Trade object fields: `symbol`, `date`, `timeframe`, `setupType`, `direction`, `entryTs`, `entry`, `sl`, `tp`, `confidence`, `outcome`, `exitTs`, `exitPrice`, `netPnl`, `grossPnl`, `hour` (ET), `hpProximity`, `resilienceLabel`, `dexBias`
+- Trade object fields: `symbol`, `date`, `timeframe`, `setupType`, `direction`, `entryTs`, `entry`, `sl`, `tp`, `confidence`, `outcome`, `exitTs`, `exitPrice`, `netPnl`, `grossPnl`, `hour` (ET), `hpProximity`, `resilienceLabel`, `dexBias`, `ddBandLabel`, `ddBandScore`
 - **No** `regime`, `nearEvent`, `mtfConfluence`, or `rMultiple` on trade objects (applied upstream)
 - `excludeHours` config: array of ET hours (0–23) to skip at entry
+- `spanMargin` config: object keyed by symbol — defaults to settings.json value if not provided
 
 ### Backtest UI (`public/backtest2.html`, `backtest2.js`, `backtest2.css`)
 - 5 tabs: Summary / Trades / Replay / Compare / **Optimize**
@@ -311,6 +357,7 @@ incorrect options scaling ratios.
   - Confidence sub-tab: threshold floors 60–90%, optimal floor (best PF where n≥10), MTF impact
   - Regime sub-tab: direction + HP proximity; regime/calendar not on trade records
   - Time of Day: ET hour heatmap (9–18) per setup type, uses `trade.hour`
+  - DD Band sub-tab: WR/PF/P&L by ddBandLabel; requires ≥10 labelled trades
   - Notifications: static tier/dedup/staleness design reference
   - State vars: `_bt2ActiveSubtab`, `_bt2OptSetupType`, `_bt2OptSymbol`
 

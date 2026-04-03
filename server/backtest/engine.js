@@ -15,7 +15,7 @@ const fs   = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const { computeIndicators }  = require('../analysis/indicators');
+const { computeIndicators, computeDDBands }  = require('../analysis/indicators');
 const { classifyRegime }     = require('../analysis/regime');
 const { detectSetups }       = require('../analysis/setups');
 const { buildMarketContext } = require('../analysis/marketContext');
@@ -554,6 +554,7 @@ async function runBacktestMTF(config) {
     maxHoldBars   = DEFAULT_MAX_BARS,
     feePerRT      = 4,
     excludeHours  = [],   // ET hours (0-23) to skip — empty = trade all hours
+    spanMargin    = {},   // CME SPAN margins — { MNQ:1320, MES:660, ... }
   } = config;
 
   const alerts = [];
@@ -635,9 +636,12 @@ async function runBacktestMTF(config) {
           const currentPrice = visibleBars[visibleBars.length - 1]?.close ?? 0;
           const mktCtx = useHP && hp ? buildMarketContextFromHP(hp, { ...indicators, close: currentPrice }) : null;
 
+          // Compute DD Bands from visible bars (no lookahead — same slice seen by indicators)
+          const ddBandsHist = computeDDBands(visibleBars, symbol, spanMargin);
+
           let setups;
           try {
-            setups = detectSetups(visibleBars, indicators, regime, { marketContext: mktCtx });
+            setups = detectSetups(visibleBars, indicators, regime, { marketContext: mktCtx, ddBands: ddBandsHist });
           } catch { continue; }
           if (!setups?.length) continue;
 
@@ -708,6 +712,8 @@ async function runBacktestMTF(config) {
               hpProximity,
               resilienceLabel: mktCtx?.hp?.resilienceLabel ?? null,
               dexBias:        mktCtx?.hp?.dexBias ?? null,
+              ddBandLabel:    setup.ddBandLabel || 'no_data',
+              ddBandScore:    setup.scoreBreakdown?.ddBand || 0,
             };
 
             alerts.push(trade);

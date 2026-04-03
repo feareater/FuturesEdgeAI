@@ -267,6 +267,33 @@ Default view (Reset to Default): all layers ON.
 | 8 | Volume Profile, Opening Range, Session Levels, Relative Strength, Correlation Matrix | ✅ Complete |
 | 9 | Economic Calendar (ForexFactory feed + gating), calendar badge, near-event alerts | ✅ Complete |
 | 10 | Performance analytics page, Alert Replay/Backtest page, sound alerts, RS widget | ✅ Complete |
+| N (v11.0) | DD Band / CME SPAN margin levels — confidence modifier, chart layer, topbar widget, backtest analysis | ✅ Complete |
+
+---
+
+## Alert Object Schema — DD Band additions (v11.0)
+
+`setup.ddBandLabel` — one of: `room_to_run`, `approaching_dd`, `neutral`, `outside_dd`, `beyond_dd`, `at_span_extreme`
+`setup.scoreBreakdown.ddBand` — confidence point adjustment (−20 to +8)
+
+## SPAN Margins (`config/settings.json → spanMargin`)
+
+```json
+{ "MNQ": 1320, "MES": 660, "MGC": 1650, "MCL": 1200, "cryptoVolAnnualized": 0.30 }
+```
+
+Update at runtime via `POST /api/settings/span` or the SPAN Margins panel in the dashboard sidebar.
+
+## DD Band Feature Flag
+
+`features.ddBands` (default: true) — hot-toggle via `POST /api/features { "ddBands": false }`.
+
+## New API Routes (v11.0)
+
+| Route | Purpose |
+|---|---|
+| `GET /api/ddbands?symbol=MNQ` | Current DD/SPAN levels + currentPrice for topbar widget |
+| `POST /api/settings/span` | Update SPAN margin values (body: `{ MNQ: 1400, ... }`) |
 
 ---
 

@@ -61,6 +61,10 @@
   let cvdLineSeries = null;
   let rawCandles    = [];
 
+  // DD Band / SPAN price line handles
+  let ddBandLines    = [];
+  let lastDDBands    = null;
+
   // Options Levels price line handles
   let optionsPriceLines = [];
   let lastOptionsLevels = null;
@@ -101,6 +105,7 @@
     correlationHeatmap: true,
     cvd:                true,
     optionsLevels:      true,
+    ddBands:            true,
   };
 
   // ── DOM refs ───────────────────────────────────────────────────────────────
@@ -393,6 +398,10 @@
     // Options Levels — cleared here; fresh data arrives async via setOptionsLevels()
     clearOptionsLines();
     lastOptionsLevels = null;
+
+    // DD Bands — cleared here; fresh data arrives async via setDDBands()
+    clearDDBandLines();
+    lastDDBands = null;
 
     // Apply persisted visibility state
     for (const [key, visible] of Object.entries(vis)) {
@@ -850,6 +859,37 @@
     }
   }
 
+  // ── DD Band / CME SPAN Levels ──────────────────────────────────────────────
+
+  function clearDDBandLines() {
+    for (const line of ddBandLines) {
+      try { candleSeries.removePriceLine(line); } catch (_) {}
+    }
+    ddBandLines = [];
+  }
+
+  function _drawDDBands(dd) {
+    if (!dd || !candleSeries) return;
+    const Solid  = LightweightCharts.LineStyle.Solid;
+    const Dashed = LightweightCharts.LineStyle.Dashed;
+
+    const levels = [
+      { price: dd.ddBandUpper, color: 'rgba(249,115,22,0.85)', title: 'DD↑',    style: Solid,  width: 1 },
+      { price: dd.ddBandLower, color: 'rgba(249,115,22,0.85)', title: 'DD↓',    style: Solid,  width: 1 },
+      { price: dd.spanUpper,   color: 'rgba(249,115,22,0.45)', title: 'SPAN↑',  style: Dashed, width: 1 },
+      { price: dd.spanLower,   color: 'rgba(249,115,22,0.45)', title: 'SPAN↓',  style: Dashed, width: 1 },
+      { price: dd.priorClose,  color: 'rgba(148,163,184,0.40)', title: 'pClose', style: LightweightCharts.LineStyle.Dotted, width: 1 },
+    ];
+
+    for (const { price, color, title, style, width } of levels) {
+      if (price == null) continue;
+      ddBandLines.push(candleSeries.createPriceLine({
+        price, color, lineWidth: width, lineStyle: style,
+        axisLabelVisible: true, title,
+      }));
+    }
+  }
+
   // ── PDH / PDL ──────────────────────────────────────────────────────────────
 
   function clearPricelines() {
@@ -998,6 +1038,11 @@
         if (visible && lastOptionsLevels) _drawOptionsLevels(lastOptionsLevels);
         if (visible && lastGammaData)     _drawGammaLevels(lastGammaData);
         break;
+
+      case 'ddBands':
+        clearDDBandLines();
+        if (visible && lastDDBands) _drawDDBands(lastDDBands);
+        break;
     }
   }
 
@@ -1051,6 +1096,13 @@
       lastOptionsLevels = data;
       clearOptionsLines();
       if (vis.optionsLevels && data) _drawOptionsLevels(data);
+    },
+
+    // Set DD Band / SPAN levels — called by alerts.js after /api/ddbands fetch.
+    setDDBands(data) {
+      lastDDBands = data;
+      clearDDBandLines();
+      if (vis.ddBands && data) _drawDDBands(data);
     },
 
     // Set gamma levels (flip, call wall, put wall) — called by alerts.js after gamma fetch.

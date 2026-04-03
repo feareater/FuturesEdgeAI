@@ -395,6 +395,41 @@
   // QQQ options expire Mon/Wed/Fri — these are 0DTE days for equity index futures (MNQ/MES)
   function _isZeroDTE() { const d = new Date().getDay(); return [1, 3, 5].includes(d); }
 
+  async function _fetchDDBands(symbol) {
+    try {
+      const res = await fetch(`/api/ddbands?symbol=${symbol}`);
+      if (!res.ok) return;
+      const { ddBands } = await res.json();
+      if (ddBands && window.ChartAPI) window.ChartAPI.setDDBands(ddBands);
+      _updateDDBandWidget(ddBands);
+    } catch (e) {
+      console.warn('[alerts] _fetchDDBands error:', e);
+    }
+  }
+
+  function _updateDDBandWidget(dd) {
+    const widget = document.getElementById('ddband-widget');
+    if (!widget) return;
+    if (!dd) { widget.style.display = 'none'; return; }
+    widget.style.display = '';
+    const upEl  = widget.querySelector('#dd-upper');
+    const loEl  = widget.querySelector('#dd-lower');
+    const badEl = widget.querySelector('#dd-position');
+    if (upEl)  upEl.textContent  = 'DD↑ ' + dd.ddBandUpper.toFixed(2);
+    if (loEl)  loEl.textContent  = 'DD↓ ' + dd.ddBandLower.toFixed(2);
+    if (badEl && dd.currentPrice != null) {
+      const p = dd.currentPrice;
+      let label, cls;
+      if      (p >= dd.spanUpper)    { label = 'AT SPAN↑'; cls = 'badge-danger'; }
+      else if (p <= dd.spanLower)    { label = 'AT SPAN↓'; cls = 'badge-danger'; }
+      else if (p > dd.ddBandUpper)   { label = 'ABOVE DD';  cls = 'badge-warn'; }
+      else if (p < dd.ddBandLower)   { label = 'BELOW DD';  cls = 'badge-warn'; }
+      else                           { label = 'INSIDE DD'; cls = 'badge-ok'; }
+      badEl.textContent  = label;
+      badEl.className    = 'dd-position-badge ' + cls;
+    }
+  }
+
   async function _fetchOptionsData(symbol) {
     // Get current futures price for strike scaling
     let futuresPrice = null;
@@ -954,9 +989,45 @@
       setInterval(_updateCorrHeatmap, 5 * 60 * 1000); // refresh every 5 min
     }
     _fetchOptionsData(activeSymbol);
+    _fetchDDBands(activeSymbol);
     _fetchForexRate();
     _fetchPrediction();
     setInterval(_fetchForexRate, 10 * 60 * 1000); // refresh every 10 min
+
+    // Populate SPAN margin inputs from server settings
+    fetch('/api/settings').then(r => r.json()).then(s => {
+      const sm = s.spanMargin || {};
+      const map = { MNQ: 'span-mnq', MES: 'span-mes', MGC: 'span-mgc', MCL: 'span-mcl' };
+      for (const [sym, id] of Object.entries(map)) {
+        const el = document.getElementById(id);
+        if (el && sm[sym] != null) el.value = sm[sym];
+      }
+    }).catch(() => {});
+
+    // Save SPAN margins
+    const spanSaveBtn = document.getElementById('span-save-btn');
+    if (spanSaveBtn) {
+      spanSaveBtn.addEventListener('click', async () => {
+        const body = {
+          MNQ: +document.getElementById('span-mnq')?.value || 1320,
+          MES: +document.getElementById('span-mes')?.value || 660,
+          MGC: +document.getElementById('span-mgc')?.value || 1650,
+          MCL: +document.getElementById('span-mcl')?.value || 1200,
+        };
+        const statusEl = document.getElementById('span-save-status');
+        try {
+          const res = await fetch('/api/settings/span', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+          if (res.ok) {
+            if (statusEl) { statusEl.textContent = 'Saved'; setTimeout(() => { statusEl.textContent = ''; }, 2000); }
+            _fetchDDBands(activeSymbol);
+          } else {
+            if (statusEl) statusEl.textContent = 'Error';
+          }
+        } catch (e) {
+          if (statusEl) statusEl.textContent = 'Error';
+        }
+      });
+    }
 
     // Listen for dashboard mode changes (Futures ↔ Crypto)
     document.addEventListener('dashModeChange', (e) => {
@@ -966,6 +1037,7 @@
       const rsWidget = document.getElementById('rs-widget');
       if (rsWidget) rsWidget.style.display = (activeSymbol === 'MNQ' || activeSymbol === 'MES') ? '' : 'none';
       _fetchOptionsData(activeSymbol);
+      _fetchDDBands(activeSymbol);
       _fetchPrediction();
     });
 
@@ -989,8 +1061,10 @@
         _updateOptionsWidget(null);
         const gammaEl = document.getElementById('gamma-widget');
         if (gammaEl) gammaEl.style.display = 'none';
+        _updateDDBandWidget(null);
       } else {
         _fetchOptionsData(activeSymbol);
+        _fetchDDBands(activeSymbol);
       }
       _fetchPrediction();
     });

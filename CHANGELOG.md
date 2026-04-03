@@ -4,6 +4,56 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v11.0] — 2026-04-02 — DD Band / CME SPAN Margin Levels (Phase N)
+
+### New: DD Band / SPAN margin-derived price levels
+- `riskInterval = CME initial margin ÷ point value` (futures); `priorClose × (0.30 / √252)` (crypto)
+- Five levels per symbol: `priorClose`, `ddBandUpper`, `ddBandLower`, `spanUpper`, `spanLower`
+- `computeDDBands()` added to `server/analysis/indicators.js` (exported); used in scan, backtest engine, `/api/ddbands`
+- SPAN margins stored in `config/settings.json → spanMargin` block: MNQ=1320, MES=660, MGC=1650, MCL=1200
+
+### New: `scoreDDBandProximity()` confidence modifier in `server/analysis/setups.js`
+- `room_to_run` +8, `approaching_dd` +4, `neutral` 0, `outside_dd` −7, `beyond_dd` −12, `at_span_extreme` −20
+- `setup.ddBandLabel` and `setup.scoreBreakdown.ddBand` added to every scored setup
+
+### New: Chart layer — DD Bands (`public/js/chart.js`, `layers.js`)
+- `ChartAPI.setDDBands(dd)` — draws 5 price lines: DD upper/lower (solid orange), SPAN upper/lower (dashed orange), prior close (dotted gray)
+- Layer toggle `ddBands` added to layers.js DEFAULTS and index.html layer list
+
+### New: DD Band topbar widget (`public/index.html`, `alerts.js`, `dashboard.css`)
+- `#ddband-widget` shows DD↑ / DD↓ levels and position badge (INSIDE DD / ABOVE DD / BELOW DD / AT SPAN)
+- `_fetchDDBands(symbol)` called on page load, symbol change, and SPAN margin save
+- `_updateDDBandWidget(dd)` updates badge color based on price position
+
+### New: SPAN Margin settings panel (`public/index.html`, `alerts.js`)
+- Collapsible panel in the Layers sidebar with 4 numeric inputs (MNQ/MES/MGC/MCL)
+- Save button POSTs to `/api/settings/span` and re-fetches DD bands
+
+### New: Pine Script DD Band lines (`server/index.js` → `/api/pine-script`)
+- 5 `plot()` calls for DD/SPAN levels baked in as float constants at generation time
+- Grouped under `group_dd` input with toggle
+
+### Backtest: historically accurate DD Bands (`server/backtest/engine.js`)
+- `computeDDBands(visibleBars, ...)` called per-bar — no lookahead
+- `trade.ddBandLabel` and `trade.ddBandScore` added to each trade record
+
+### Backtest2 UI additions (`public/backtest2.html`, `backtest2.js`)
+- New "DD Band" sub-tab in Optimize tab — breakdown table by label (WR, PF, Net P&L)
+- DD Band stat card in Summary tab (best/worst label WR) — shown only if ≥10 labelled trades
+
+### Performance stats (`server/analysis/performanceStats.js`)
+- `byDDBand` grouping added to `computePerformanceStats()` output
+
+### AI commentary (`server/ai/commentary.js`)
+- DD Band context line added to prompt when `setup.ddBandLabel` is set and `extras.ddBands` available
+
+### Infrastructure
+- New API routes: `GET /api/ddbands`, `POST /api/settings/span`
+- `/api/ddbands` now includes `currentPrice` for widget position badge
+- Service worker: `futuresedge-v34` → `futuresedge-v35`
+
+---
+
 ## [v10.3] — 2026-04-02 — Optimize Tab in backtest2 (from trade data)
 
 ### New: Optimize tab in backtest2.html (`public/backtest2.html`, `backtest2.js`, `backtest2.css`)

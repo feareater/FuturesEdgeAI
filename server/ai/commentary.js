@@ -135,6 +135,13 @@ function _buildPrompt(alerts, getCandles, extrasMap = {}) {
       `Rationale: ${s.rationale}`,
     ];
     if (zones) lines.push(`Zone context:\n  ${zones}`);
+    if (s.ddBandLabel && s.ddBandLabel !== 'no_data') {
+      const dd = extras?.ddBands;
+      const detail = dd
+        ? `DD Band: ${s.ddBandLabel} | DD±${dd.riskInterval?.toFixed(0) || '?'} pts | Prior close ${dd.priorClose?.toFixed(2) || '?'} | DD ${dd.ddBandUpper?.toFixed(2) || '?'} / ${dd.ddBandLower?.toFixed(2) || '?'} | SPAN ${dd.spanUpper?.toFixed(2) || '?'} / ${dd.spanLower?.toFixed(2) || '?'}`
+        : `DD Band position: ${s.ddBandLabel}`;
+      lines.push(detail);
+    }
 
     return lines.join('\n');
   }).join('\n\n---\n\n');

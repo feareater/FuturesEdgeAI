@@ -27,7 +27,7 @@ const ET_OFFSET_MS = 5 * 60 * 60 * 1000;
  * @returns {Object}  Indicator payload — see shape below
  */
 function computeIndicators(candles, opts = {}) {
-  const { swingLookback = 10, impulseThreshold = 1.5, symbol = null, features = {} } = opts;
+  const { swingLookback = 10, impulseThreshold = 1.5, symbol = null, features = {}, spanMargin = null } = opts;
 
   if (!candles || candles.length === 0) {
     return {
@@ -70,14 +70,69 @@ function computeIndicators(candles, opts = {}) {
     (sessionLevels ? ` asian:${sessionLevels.asian?.high?.toFixed(2)}` : '')
   );
 
+  const ddBands = computeDDBands(candles, symbol, spanMargin);
+
   return {
     ema9, ema21, ema50, vwap, atrCurrent, pdh, pdl,
     swingHighs, swingLows, fvgs, orderBlocks,
     volumeProfile, openingRange, sessionLevels,
+    ddBands,
   };
 }
 
-module.exports = { computeIndicators };
+// ---------------------------------------------------------------------------
+// DD Bands / CME SPAN margin levels
+// Computes 5 price levels anchored to the prior session close:
+//   ddBandUpper = priorClose + riskInterval
+//   ddBandLower = priorClose - riskInterval
+//   spanUpper   = priorClose + 2 × riskInterval
+//   spanLower   = priorClose - 2 × riskInterval
+// For futures: riskInterval = CME initial margin / pointValue
+// For crypto:  riskInterval = priorClose × (annualizedVol / sqrt(252))
+// ---------------------------------------------------------------------------
+
+const _DD_POINT_VALUE = { MNQ: 2, MES: 5, MGC: 10, MCL: 100 };
+const _DD_CRYPTO      = new Set(['BTC', 'ETH', 'XRP', 'XLM']);
+
+function computeDDBands(candles, symbol, spanMargin) {
+  if (!candles || candles.length < 2) return null;
+
+  // Find prior session close: last candle whose calendar date < today's date
+  const lastTs   = candles[candles.length - 1].time;
+  const todayStr = new Date(lastTs * 1000).toISOString().slice(0, 10);
+
+  let priorClose = null;
+  for (let i = candles.length - 1; i >= 0; i--) {
+    const d = new Date(candles[i].time * 1000).toISOString().slice(0, 10);
+    if (d < todayStr) {
+      priorClose = candles[i].close;
+      break;
+    }
+  }
+  if (!priorClose) return null;
+
+  let riskInterval;
+  if (_DD_CRYPTO.has(symbol)) {
+    const vol = spanMargin?.cryptoVolAnnualized ?? 0.30;
+    riskInterval = priorClose * (vol / Math.sqrt(252));
+  } else {
+    const margin = spanMargin?.[symbol];
+    const pv     = _DD_POINT_VALUE[symbol];
+    if (!margin || !pv) return null;
+    riskInterval = margin / pv;
+  }
+
+  return {
+    priorClose,
+    riskInterval: +riskInterval.toFixed(4),
+    ddBandUpper:  +(priorClose + riskInterval).toFixed(4),
+    ddBandLower:  +(priorClose - riskInterval).toFixed(4),
+    spanUpper:    +(priorClose + riskInterval * 2).toFixed(4),
+    spanLower:    +(priorClose - riskInterval * 2).toFixed(4),
+  };
+}
+
+module.exports = { computeIndicators, computeDDBands };
 
 // ---------------------------------------------------------------------------
 // EMA

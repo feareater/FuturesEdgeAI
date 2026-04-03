@@ -23,6 +23,7 @@ function computePerformanceStats(alerts) {
       return String(d.getUTCHours());
     }),
     byDirection: _groupBy(resolved, a => a.setup.direction),
+    byDDBand:    _groupBy(resolved, a => a.setup?.ddBandLabel || 'no_data'),
     totalAlerts: alerts.length,
     resolvedCount: resolved.length,
     openCount:   alerts.filter(a => a.setup?.outcome === 'open').length,

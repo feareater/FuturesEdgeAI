@@ -8,7 +8,7 @@ const express = require('express');
 const { WebSocketServer } = require('ws');
 const { authenticate }      = require('./auth/tradovate');
 const { getCandles }        = require('./data/snapshot');
-const { computeIndicators } = require('./analysis/indicators');
+const { computeIndicators, computeDDBands } = require('./analysis/indicators');
 const { classifyRegime, computeAlignment } = require('./analysis/regime');
 const { detectSetups }      = require('./analysis/setups');
 const { detectTrendlines }  = require('./analysis/trendlines');
@@ -341,6 +341,7 @@ app.post('/api/commentary/single', async (req, res) => {
         volumeProfile: ind.volumeProfile  || null,
         atrCurrent:    ind.atrCurrent     || 0,
         perfStats:     perfStats.bySymbol?.[symbol] || {},
+        ddBands:       ind.ddBands || null,
       };
     } catch (_) {}
 
@@ -1022,6 +1023,13 @@ app.get('/api/pine-script', async (req, res) => {
     const options = await getOptionsData(symbol, null);
     if (!options) return res.status(503).send('// Options data unavailable — try again shortly\n');
 
+    // Compute DD Band levels for this symbol (baked into Pine Script as constants)
+    let ddBandsForPine = null;
+    try {
+      const pineCandles = getCandles(symbol, '15m');
+      ddBandsForPine = computeDDBands(pineCandles, symbol, settings.spanMargin || {});
+    } catch (_) {}
+
     const d  = options;
     const dl = d.scaledDaily || {};
     const lz = d.scaledLiquidityZones     || [];
@@ -1031,8 +1039,10 @@ app.get('/api/pine-script', async (req, res) => {
     const proxyTicker = PROXY_MAP[symbol] || 'QQQ';
 
     const n  = v => v != null ? String(Math.round(v)) : 'na';
+    const nf = v => v != null ? v.toFixed(2) : 'na';
     const f  = v => v != null ? v.toFixed(4) : 'na';
     const ts = new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+    const db = ddBandsForPine;
 
     // Zone bias → Pine color/label (baked at generation time)
     const LZ_COLOR = { call: 'color.blue', put: 'color.teal', balanced: 'color.yellow' };
@@ -1162,6 +1172,7 @@ var g3 = "Hedge Pressure"
 var g4 = "Pivot Candidates"
 var g5 = "${proxyTicker} Daily Levels"
 var g6 = "Info Table"
+var g7 = "DD Band / CME SPAN"
 
 show_oi      = input.bool(true,  "OI Walls",         group=g1)
 show_maxpain = input.bool(true,  "Max Pain",          group=g1)
@@ -1172,6 +1183,7 @@ show_hp      = input.bool(true,  "Hedge Pressure",    group=g3)
 show_pv      = input.bool(true,  "Pivot Candidates",  group=g4)
 show_daily   = input.bool(true,  "${proxyTicker} Daily Levels",  group=g5)
 show_table   = input.bool(true,  "Show Info Table",   group=g6)
+show_dd      = input.bool(true,  "DD Band / SPAN",    group=g7)
 tbl_pos      = input.string("top_right", "Table position", options=["top_right","top_left","bottom_right","bottom_left"], group=g6)
 
 // ── Baked-in levels (regenerate via /api/pine-script) ─────────────────────────
@@ -1185,6 +1197,13 @@ float put_wall  = ${n(d.scaledPutWall)}
 float qqq_pdo   = ${n(dl.prevDayOpen)}
 float qqq_pdc   = ${n(dl.prevDayClose)}
 float qqq_do    = ${n(dl.curDayOpen)}
+
+// === DD Band / CME SPAN levels (regenerate daily via /api/pine-script) ===
+float dd_prior_close = ${db ? nf(db.priorClose) : 'na'}
+float dd_upper       = ${db ? nf(db.ddBandUpper) : 'na'}
+float dd_lower       = ${db ? nf(db.ddBandLower) : 'na'}
+float span_upper     = ${db ? nf(db.spanUpper) : 'na'}
+float span_lower     = ${db ? nf(db.spanLower) : 'na'}
 
 // Metrics
 float  pc_ratio   = ${f(d.pcRatio)}
@@ -1214,6 +1233,13 @@ plot(show_walls and put_wall  != 0 ? put_wall  : na, "Put Wall",  color=color.ne
 plot(show_daily and qqq_pdo != 0 ? qqq_pdo : na, "${proxyTicker} Prev Day Open",  color=color.new(color.purple, 25), linewidth=1, style=plot.style_linebr)
 plot(show_daily and qqq_pdc != 0 ? qqq_pdc : na, "${proxyTicker} Prev Day Close", color=color.new(color.yellow, 20), linewidth=1, style=plot.style_linebr)
 plot(show_daily and qqq_do  != 0 ? qqq_do  : na, "${proxyTicker} Day Open",       color=color.new(color.silver, 30), linewidth=1, style=plot.style_linebr)
+
+// DD Band / CME SPAN levels
+plot(show_dd and dd_upper != 0 and not na(dd_upper)         ? dd_upper       : na, "DD Band Upper", color=color.new(color.orange, 15), linewidth=1, style=plot.style_line)
+plot(show_dd and dd_lower != 0 and not na(dd_lower)         ? dd_lower       : na, "DD Band Lower", color=color.new(color.orange, 15), linewidth=1, style=plot.style_line)
+plot(show_dd and span_upper != 0 and not na(span_upper)     ? span_upper     : na, "SPAN Upper",    color=color.new(color.orange, 55), linewidth=1, style=plot.style_stepline_diamond)
+plot(show_dd and span_lower != 0 and not na(span_lower)     ? span_lower     : na, "SPAN Lower",    color=color.new(color.orange, 55), linewidth=1, style=plot.style_stepline_diamond)
+plot(show_dd and dd_prior_close != 0 and not na(dd_prior_close) ? dd_prior_close : na, "DD Prior Close", color=color.new(color.gray, 60), linewidth=1, style=plot.style_circles)
 
 // Liquidity zones — filled horizontal bands (plot + fill)
 ${lzPlotLines}
@@ -1295,6 +1321,34 @@ app.get('/api/options', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+// GET /api/ddbands?symbol=MNQ — current DD Band / SPAN levels for a symbol
+app.get('/api/ddbands', (req, res) => {
+  const symbol = req.query.symbol || 'MNQ';
+  try {
+    const candles  = getCandles(symbol, '15m');
+    const ddBands  = computeDDBands(candles, symbol, settings.spanMargin || {});
+    if (ddBands && candles && candles.length > 0) {
+      ddBands.currentPrice = candles[candles.length - 1].close;
+    }
+    res.json({ symbol, ddBands });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/settings/span — update SPAN margin values without editing JSON manually
+// Body: { MNQ: 1400, MES: 700 } — only the keys provided are updated
+app.post('/api/settings/span', (req, res) => {
+  const updates = req.body || {};
+  settings.spanMargin = { ...(settings.spanMargin || {}), ...updates };
+  try {
+    fs.writeFileSync('./config/settings.json', JSON.stringify(settings, null, 2));
+    res.json({ ok: true, spanMargin: settings.spanMargin });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // GET /api/forex?pair=GBPUSD — Polygon.io forex rate (free tier, 15-min delayed)
 app.get('/api/forex', async (req, res) => {
   try {
@@ -1827,6 +1881,8 @@ app.post('/api/backtest/run', (req, res) => {
   if (!config || !config.startDate || !config.endDate) {
     return res.status(400).json({ error: 'config.startDate and endDate required' });
   }
+  // Fall back to server settings.spanMargin if client didn't send one
+  if (!config.spanMargin) config.spanMargin = settings.spanMargin || {};
   try {
     const jobId = launchBacktest(config);
     res.json({ jobId });
@@ -2031,12 +2087,14 @@ async function runScan() {
           swingLookback:    settings.swingLookback,
           impulseThreshold: settings.impulseThreshold,
           symbol,
+          spanMargin:       settings.spanMargin || {},
         });
         const regime     = { ...classifyRegime(ind), alignment };
         const trendlines = detectTrendlines(candles, ind.atrCurrent);
         const setups     = detectSetups(candles, ind, regime, {
           rrRatio: settings.risk.rrRatio || 1.0, symbol, trendlines, calendarEvents,
           correlationMatrix: corrMatrix, marketContext,
+          ddBands: ind.ddBands,
         });
 
         for (const setup of setups) {

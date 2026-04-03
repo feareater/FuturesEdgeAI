@@ -1926,6 +1926,63 @@ html, body {
                     font-size: 9px; font-weight: 700; padding: 1px 4px;
                     border-radius: 3px; border: 1px solid rgba(239,83,80,0.4); }
 
+/* ── DD Band widget ──────────────────────────────────────────────────────── */
+.ddband-widget {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  padding: 2px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  white-space: nowrap;
+}
+.dd-level { color: rgba(255,152,0,0.85); font-weight: 600; }
+.dd-sep   { color: var(--border); }
+.dd-position-badge {
+  font-size: 9px; font-weight: 700; padding: 1px 5px;
+  border-radius: 3px;
+}
+.badge-ok   { background: rgba(38,166,154,0.2); color: #26a69a; border: 1px solid rgba(38,166,154,0.4); }
+.badge-warn { background: rgba(255,152,0,0.2);  color: #ff9800; border: 1px solid rgba(255,152,0,0.4); }
+.badge-danger { background: rgba(239,83,80,0.2); color: #ef5350; border: 1px solid rgba(239,83,80,0.4); }
+
+/* ── SPAN margin settings panel ─────────────────────────────────────────── */
+.span-margin-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 12px;
+  margin-bottom: 8px;
+}
+.span-margin-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.span-sym   { font-weight: 600; color: var(--text-dim); min-width: 28px; }
+.span-input {
+  width: 70px;
+  background: var(--bg-input, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 12px;
+  padding: 2px 5px;
+}
+.span-save-btn {
+  font-size: 11px;
+  padding: 3px 10px;
+  background: var(--accent, #2962ff);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.span-save-btn:hover { opacity: 0.85; }
+.span-save-status { font-size: 11px; color: #26a69a; margin-left: 8px; }
+
 /* ── Feature toggles section ─────────────────────────────────────────────── */
 
 .features-header {

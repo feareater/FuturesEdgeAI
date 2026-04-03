@@ -12,6 +12,26 @@
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
+// Job label overrides: { [jobId]: string } — stored in localStorage so renames survive page reload
+let _jobLabels = (() => {
+  try { return JSON.parse(localStorage.getItem('bt2_job_labels') || '{}'); } catch { return {}; }
+})();
+
+function _saveJobLabels() {
+  localStorage.setItem('bt2_job_labels', JSON.stringify(_jobLabels));
+}
+
+/** Return the best display label for a job */
+function _getJobLabel(jobId, config) {
+  if (_jobLabels[jobId]) return _jobLabels[jobId];
+  if (config?.label) return config.label;
+  const syms = (config?.symbols || ['?']).join(',');
+  const range = config?.startDate && config?.endDate
+    ? `${config.startDate.substring(5)} → ${config.endDate.substring(5)}`
+    : jobId.substring(0, 8);
+  return `${syms} · ${range}`;
+}
+
 let _currentResults = null;    // latest loaded backtest results
 let _currentJobId   = null;
 let _pollTimer      = null;
@@ -196,6 +216,7 @@ function getConfig() {
   const contracts  = {};
   document.querySelectorAll('.bt2-contracts').forEach(el => { contracts[el.dataset.sym] = +el.value || 1; });
 
+  const labelVal = document.getElementById('bt2-run-label')?.value?.trim();
   return {
     startDate:      document.getElementById('bt2-start').value,
     endDate:        document.getElementById('bt2-end').value,
@@ -209,6 +230,7 @@ function getConfig() {
     contracts,
     startingBalance: +document.getElementById('bt2-balance').value || 10000,
     excludeHours:   getExcludeHours(),
+    ...(labelVal ? { label: labelVal } : {}),
   };
 }
 
@@ -218,9 +240,10 @@ function getStartingBalance() {
 
 function saveConfig() {
   const cfg = getConfig();
-  // Don't persist dates — they're session choices, not preferences
+  // Don't persist dates or run label — they're per-run choices, not preferences
   delete cfg.startDate;
   delete cfg.endDate;
+  delete cfg.label;
   localStorage.setItem('bt2_config', JSON.stringify(cfg));
   showToast('Config saved');
 }
@@ -374,6 +397,45 @@ function renderStatCards(stats, startingBalance = 10000) {
       <div class="bt2-card-value ${c.cls || ''}">${c.value}</div>
     </div>
   `).join('');
+
+  // DD Band summary card — only when ≥10 labelled trades exist
+  _renderDDBandStatCard(stats);
+}
+
+function _renderDDBandStatCard(stats) {
+  const container = document.getElementById('bt2-stat-cards');
+  if (!container) return;
+
+  // Compute from _currentResults trades
+  const trades = (_currentResults?.trades || []).filter(t => t.ddBandLabel && t.ddBandLabel !== 'no_data');
+  if (trades.length < 10) return;
+
+  // Best and worst label by WR
+  const groups = {};
+  for (const t of trades) {
+    if (!groups[t.ddBandLabel]) groups[t.ddBandLabel] = { wins: 0, total: 0 };
+    groups[t.ddBandLabel].total++;
+    if (t.pnl > 0) groups[t.ddBandLabel].wins++;
+  }
+  const LABEL_NAMES = {
+    room_to_run: 'Room to Run', approaching_dd: 'Approaching DD',
+    neutral: 'Neutral', outside_dd: 'Outside DD',
+    beyond_dd: 'Beyond DD', at_span_extreme: 'At SPAN Extreme',
+  };
+  const entries = Object.entries(groups).filter(([, g]) => g.total >= 3);
+  if (entries.length === 0) return;
+  const best  = entries.reduce((a, b) => (b[1].wins/b[1].total > a[1].wins/a[1].total ? b : a));
+  const worst = entries.reduce((a, b) => (b[1].wins/b[1].total < a[1].wins/a[1].total ? b : a));
+
+  const card = document.createElement('div');
+  card.className = 'bt2-card bt2-card-wide';
+  card.innerHTML = `
+    <div class="bt2-card-label">DD Band</div>
+    <div class="bt2-card-value" style="font-size:11px; line-height:1.6">
+      <span class="positive">Best: ${LABEL_NAMES[best[0]] || best[0]} (${(best[1].wins/best[1].total*100).toFixed(0)}% WR)</span><br>
+      <span class="negative">Worst: ${LABEL_NAMES[worst[0]] || worst[0]} (${(worst[1].wins/worst[1].total*100).toFixed(0)}% WR)</span>
+    </div>`;
+  container.appendChild(card);
 }
 
 // ─── Equity chart ─────────────────────────────────────────────────────────────
@@ -622,11 +684,7 @@ async function loadPreviousJobs() {
       const c = j.config || {};
       const s = j.stats  || {};
 
-      // Header line
-      const syms = (c.symbols || ['?']).join(', ');
-      const dateRange = c.startDate && c.endDate
-        ? `${c.startDate.substring(5)} → ${c.endDate.substring(5)}`
-        : j.jobId.substring(0, 8);
+      const displayLabel = _getJobLabel(j.jobId, c);
 
       // Stats line
       let statsLine = '';
@@ -634,21 +692,21 @@ async function loadPreviousJobs() {
         const pnl = s.grossPnl ?? 0;
         const pnlCls = pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
         const pnlStr = `${pnl >= 0 ? '+' : ''}$${fmtNum(pnl)}`;
-        const bal = (c.startingBalance || 10000) + pnl;
-        statsLine = `${s.totalTrades} trades · WR:${(s.winRate*100).toFixed(0)}% · PF:${s.profitFactor} · <span class="${pnlCls}">${pnlStr}</span> · Bal:$${fmtNum(bal)}`;
+        statsLine = `${s.totalTrades} trades · WR:${(s.winRate*100).toFixed(0)}% · PF:${s.profitFactor} · <span class="${pnlCls}">${pnlStr}</span>`;
       }
 
       // Config line
       const tfs     = (c.timeframes || []).join(',');
       const setups  = (c.setupTypes || []).map(t => t.replace('_breakout','').replace('_rejection','rej').replace('trendline_break','tl')).join(',');
-      const contr   = c.contracts ? Object.entries(c.contracts).map(([k,v]) => `${k}:${v}`).join(' ') : '';
       const conf    = c.minConfidence ? `≥${c.minConfidence}%` : '';
-      const configLine = [tfs, setups, contr, conf].filter(Boolean).join(' · ');
+      const exHours = (c.excludeHours || []).length > 0 ? 'RTH filter' : 'All hours';
+      const configLine = [tfs, setups, conf, exHours].filter(Boolean).join(' · ');
 
       return `<div class="bt2-job-row${j.jobId===_currentJobId?' selected':''}" data-job="${j.jobId}">
         <div class="bt2-job-row-head">
           <div class="bt2-job-status ${j.status}"></div>
-          <span>${syms} &nbsp;${dateRange}</span>
+          <span class="bt2-job-label" data-job="${j.jobId}">${displayLabel}</span>
+          <button class="bt2-job-rename" data-job="${j.jobId}" title="Rename">✏</button>
           <button class="bt2-job-del" data-job="${j.jobId}" title="Delete">✕</button>
         </div>
         ${statsLine ? `<div class="bt2-job-meta">${statsLine}</div>` : ''}
@@ -659,10 +717,43 @@ async function loadPreviousJobs() {
     list.querySelectorAll('.bt2-job-row').forEach(row => {
       row.addEventListener('click', async e => {
         if (e.target.classList.contains('bt2-job-del')) return;
+        if (e.target.classList.contains('bt2-job-rename')) return;
         const jobId = row.dataset.job;
         _currentJobId = jobId;
         const results = await apiFetch(`/api/backtest/results/${jobId}`);
-        if (results) loadResults(results);
+        if (results) {
+          loadResults(results);
+          // Restore config panel to match this job so hours filter and other settings are visible
+          _populateConfigFromJob(results.config || {});
+        }
+      });
+    });
+
+    list.querySelectorAll('.bt2-job-rename').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        const jobId = btn.dataset.job;
+        const labelEl = list.querySelector(`.bt2-job-label[data-job="${jobId}"]`);
+        if (!labelEl) return;
+        const current = labelEl.textContent;
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.value = current;
+        input.className = 'bt2-job-label-edit';
+        input.maxLength = 60;
+        labelEl.replaceWith(input);
+        input.focus();
+        input.select();
+        const commit = () => {
+          const val = input.value.trim();
+          if (val) { _jobLabels[jobId] = val; _saveJobLabels(); }
+          loadPreviousJobs();
+        };
+        input.addEventListener('blur', commit);
+        input.addEventListener('keydown', e2 => {
+          if (e2.key === 'Enter') { e2.preventDefault(); commit(); }
+          if (e2.key === 'Escape') loadPreviousJobs();
+        });
       });
     });
 
@@ -671,10 +762,52 @@ async function loadPreviousJobs() {
         e.stopPropagation();
         const jobId = btn.dataset.job;
         await apiFetch(`/api/backtest/jobs/${jobId}`, { method: 'DELETE' });
+        delete _jobLabels[jobId];
+        _saveJobLabels();
         loadPreviousJobs();
       });
     });
   } catch {}
+}
+
+/** Populate the config panel fields from a saved job config (so user can see what was applied) */
+function _populateConfigFromJob(cfg) {
+  if (!cfg) return;
+  if (cfg.startDate) document.getElementById('bt2-start').value = cfg.startDate;
+  if (cfg.endDate)   document.getElementById('bt2-end').value   = cfg.endDate;
+  if (cfg.symbols) {
+    document.querySelectorAll('input[name="sym"]').forEach(el => {
+      el.checked = cfg.symbols.includes(el.value);
+    });
+  }
+  if (cfg.timeframes) {
+    document.querySelectorAll('input[name="tf"]').forEach(el => {
+      el.checked = cfg.timeframes.includes(el.value);
+    });
+  }
+  if (cfg.setupTypes) {
+    document.querySelectorAll('input[name="st"]').forEach(el => {
+      el.checked = cfg.setupTypes.includes(el.value);
+    });
+  }
+  if (cfg.minConfidence) {
+    document.getElementById('bt2-conf').value = cfg.minConfidence;
+    document.getElementById('bt2-conf-label').textContent = cfg.minConfidence;
+  }
+  if (cfg.useHP !== undefined) document.getElementById('bt2-use-hp').checked = cfg.useHP;
+  if (cfg.maxHoldBars) document.getElementById('bt2-maxhold').value = Math.round(cfg.maxHoldBars / 60);
+  if (cfg.feePerRT !== undefined) document.getElementById('bt2-fee').value = cfg.feePerRT;
+  if (cfg.startingBalance) document.getElementById('bt2-balance').value = cfg.startingBalance;
+  if (cfg.contracts) {
+    document.querySelectorAll('.bt2-contracts').forEach(el => {
+      if (cfg.contracts[el.dataset.sym]) el.value = cfg.contracts[el.dataset.sym];
+    });
+  }
+  // Always restore hours filter — key for showing what was applied
+  setExcludeHours(cfg.excludeHours || []);
+  // Show the run label if it has one
+  const labelEl = document.getElementById('bt2-run-label');
+  if (labelEl) labelEl.value = cfg.label || '';
 }
 
 // ─── Compare ──────────────────────────────────────────────────────────────────
@@ -745,9 +878,8 @@ function renderCompareSelectors() {
       <select class="bt2-cmp-sel" data-idx="${idx}">
         <option value="">— select run —</option>
         ${_cmpAllJobs.map(j => {
-          const cfg = j.config || {};
-          const label = `${cfg.startDate||'?'} → ${cfg.endDate||'?'} · ${(cfg.symbols||[]).join(',')} · ${(cfg.timeframes||[]).join(',')}`;
-          return `<option value="${j.jobId}" ${j.jobId===job.jobId?'selected':''}>${label}</option>`;
+          const optLabel = _getJobLabel(j.jobId, j.config || {});
+          return `<option value="${j.jobId}" ${j.jobId===job.jobId?'selected':''}>${optLabel}</option>`;
         }).join('')}
       </select>
       <button class="bt2-cmp-remove" data-idx="${idx}" title="Remove">✕</button>`;
@@ -764,10 +896,10 @@ function renderCompareSelectors() {
       // Fetch equity curve
       let equity = [];
       try {
-        const res = await apiFetch(`/api/backtest/jobs/${jobId}/results`);
+        const res = await apiFetch(`/api/backtest/results/${jobId}`);
         equity = res?.equity || [];
       } catch {}
-      _cmpJobs[idx] = { jobId, label: sel.options[sel.selectedIndex].text, stats: jobMeta.stats, config: jobMeta.config, equity };
+      _cmpJobs[idx] = { jobId, label: _getJobLabel(jobId, jobMeta.config || {}), stats: jobMeta.stats, config: jobMeta.config, equity };
       renderCompareSelectors();
       renderCompareBody();
     });
@@ -1405,6 +1537,7 @@ function _renderOptimizeTab() {
     case 'confidence':    _bt2RenderConfidence(); break;
     case 'regime':        _bt2RenderRegime(); break;
     case 'heatmap':       _bt2RenderHeatmap(); break;
+    case 'ddband':        _bt2RenderDDBand(); break;
     case 'notifications': _bt2RenderNotifications(); break;
   }
 }
@@ -1732,6 +1865,71 @@ function _bt2RenderHeatmap() {
   </div>`;
 
   panel.innerHTML = html;
+}
+
+// ── DD Band sub-tab ────────────────────────────────────────────────────────
+function _bt2RenderDDBand() {
+  const panel = document.getElementById('bt2-opt-panel-ddband');
+  if (!panel) return;
+
+  const allTrades = (_currentResults?.trades || []);
+  const trades = allTrades.filter(t => {
+    if (_bt2OptSetupType !== 'all' && t.setupType !== _bt2OptSetupType) return false;
+    if (_bt2OptSymbol    !== 'all' && t.symbol    !== _bt2OptSymbol)    return false;
+    return true;
+  });
+
+  const withLabel = trades.filter(t => t.ddBandLabel && t.ddBandLabel !== 'no_data');
+  if (withLabel.length < 10) {
+    panel.innerHTML = '<p class="bt2-opt-note">Not enough DD Band data in this run (need ≥10 trades with label). Re-run with current engine version.</p>';
+    return;
+  }
+
+  // Group by label
+  const groups = {};
+  for (const t of withLabel) {
+    const lbl = t.ddBandLabel;
+    if (!groups[lbl]) groups[lbl] = { wins: 0, losses: 0, pnl: 0 };
+    const won = t.pnl > 0;
+    groups[lbl].wins   += won ? 1 : 0;
+    groups[lbl].losses += won ? 0 : 1;
+    groups[lbl].pnl    += t.pnl;
+  }
+
+  const LABEL_ORDER = ['room_to_run', 'approaching_dd', 'neutral', 'outside_dd', 'beyond_dd', 'at_span_extreme'];
+  const LABEL_NAMES = {
+    room_to_run:    'Room to Run',
+    approaching_dd: 'Approaching DD',
+    neutral:        'Neutral',
+    outside_dd:     'Outside DD',
+    beyond_dd:      'Beyond DD',
+    at_span_extreme:'At SPAN Extreme',
+  };
+
+  const rows = LABEL_ORDER
+    .filter(lbl => groups[lbl])
+    .map(lbl => {
+      const g  = groups[lbl];
+      const n  = g.wins + g.losses;
+      const wr = n > 0 ? (g.wins / n * 100).toFixed(1) : '—';
+      const pf = g.losses > 0 ? (g.wins / g.losses).toFixed(2) : (g.wins > 0 ? '∞' : '—');
+      const cls = lbl === 'room_to_run' || lbl === 'approaching_dd' ? 'positive'
+                : lbl === 'beyond_dd'  || lbl === 'at_span_extreme'  ? 'negative' : '';
+      return `<tr>
+        <td>${LABEL_NAMES[lbl]}</td>
+        <td>${n}</td>
+        <td class="${parseFloat(wr) >= 55 ? 'positive' : parseFloat(wr) < 40 ? 'negative' : ''}">${wr}%</td>
+        <td class="${parseFloat(pf) >= 1.5 ? 'positive' : parseFloat(pf) < 1 ? 'negative' : ''}">${pf}</td>
+        <td class="${g.pnl >= 0 ? 'positive' : 'negative'}">${g.pnl >= 0 ? '+' : ''}$${fmtNum(g.pnl)}</td>
+      </tr>`;
+    }).join('');
+
+  panel.innerHTML = `
+    <p class="bt2-opt-note">Performance by DD Band position at entry. Excludes ${trades.length - withLabel.length} trades with no DD Band data.</p>
+    <table class="bt2-breakdown-table">
+      <thead><tr><th>Position</th><th>Trades</th><th>WR</th><th>PF</th><th>Net P&L</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
 }
 
 // ── Notifications sub-tab (static) ────────────────────────────────────────
