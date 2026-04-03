@@ -17,7 +17,7 @@ FuturesEdge AI is a browser-based trading analysis dashboard for a single user (
 - **MGC** — Micro Gold Futures
 - **MES** — Micro E-mini S&P 500 Futures
 - **MCL** — Micro Crude Oil Futures
-- Active scan timeframes: **5m, 15m, 30m** (1m/2m/3m removed — stale with 15-min delayed seed data)
+- Active scan timeframes: **5m, 15m, 30m** (seed mode: 15m/30m/1h/2h/4h; live mode: 5m/15m/30m triggered on bar close)
 
 ---
 
@@ -28,6 +28,7 @@ FuturesEdge AI is a browser-based trading analysis dashboard for a single user (
 | Runtime | Node.js |
 | Backend framework | Express.js |
 | Market data (Phase 1) | Yahoo Finance seed data — `data/seed/*.json` (run `node server/data/seedFetch.js` to refresh) |
+| Market data (Phase O) | Databento REST API — `server/data/databento.js` (live 1m feed for MNQ/MES/MGC/MCL; hot-toggle via `features.liveData`) |
 | Market data (Phase 3+) | Ironbeam REST + WebSocket (Optimusfutures account — needs API access enabled) |
 | Charting | TradingView Lightweight Charts |
 | Technical indicators | `technicalindicators` npm library |
@@ -268,6 +269,7 @@ Default view (Reset to Default): all layers ON.
 | 9 | Economic Calendar (ForexFactory feed + gating), calendar badge, near-event alerts | ✅ Complete |
 | 10 | Performance analytics page, Alert Replay/Backtest page, sound alerts, RS widget | ✅ Complete |
 | N (v11.0) | DD Band / CME SPAN margin levels — confidence modifier, chart layer, topbar widget, backtest analysis | ✅ Complete |
+| O (v12.0) | Databento live data feed — REST adapter, live gate in snapshot.js, 1m→5m/15m/30m aggregation, event-driven scan | ✅ Complete (B1–B4) |
 
 ---
 
@@ -300,6 +302,43 @@ Update at runtime via `POST /api/settings/span` or the SPAN Margins panel in the
 |---|---|
 | `GET /api/ddbands?symbol=MNQ` | Current DD/SPAN levels + currentPrice for topbar widget |
 | `POST /api/settings/span` | Update SPAN margin values (body: `{ MNQ: 1400, ... }`) |
+
+---
+
+## Databento Live Feed (Phase O / v12.0)
+
+### Files
+- `server/data/databento.js` — REST adapter, polling loop, normalization
+- `server/data/snapshot.js` — live gate, `writeLiveCandle()`, 1m→5m/15m/30m aggregation
+
+### Symbol map
+| Internal | Databento | Notes |
+|---|---|---|
+| MNQ | `MNQ.c.0` | Micro E-mini Nasdaq-100, front-month continuous |
+| MES | `MES.c.0` | Micro E-mini S&P 500, front-month continuous |
+| MGC | `GC.c.0` | GC proxy (Micro Gold not in subscription; same price/oz) |
+| MCL | `MCL.c.0` | Micro Crude Oil, front-month continuous |
+
+### How it works
+1. `startLiveFeed(symbols, onCandle)` — polls `hist.databento.com` every 65s, aligned to 5s after bar close
+2. `writeLiveCandle(symbol, candle)` in `snapshot.js` stores the 1m bar and returns completed 5m/15m/30m aggregates
+3. `_onLiveCandle()` in `server/index.js` broadcasts `live_candle` to the chart and fires a targeted `runScan({ targetSymbols, targetTimeframes })` per completed window
+
+### Feature flag
+`features.liveData` (default: **false**) — set to `true` to start the live feed at next server startup.
+Hot-toggle: `POST /api/features { "liveData": true }` (feed starts at next boot; requires restart to activate).
+
+### Environment variable
+`DATABENTO_API_KEY` — in `.env`. Live feed silently disabled if not set.
+
+### Historical data
+Raw Databento zip downloads live in `Historical_data/` (gitignored, never committed).
+Processed candle files go in `data/historical/` (also gitignored).
+
+### New API route (v12.0)
+| Route | Purpose |
+|---|---|
+| `GET /api/datastatus` | Live feed health: source, lag seconds, last bar times per symbol |
 
 ---
 

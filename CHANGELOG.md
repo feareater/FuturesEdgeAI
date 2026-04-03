@@ -4,6 +4,43 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v12.0] — 2026-04-03 — Databento Live Data Feed (Phase O, B1–B4)
+
+### B1: Databento REST adapter (`server/data/databento.js`)
+- `fetchHistoricalCandles(symbol, startIso, endIso)` — HTTPS Basic Auth, NDJSON parse, normalized output
+- `startLiveFeed(symbols, onCandle)` — aligned polling loop (65s, first poll 5s after next bar close)
+- `getLiveFeedStatus()` — connected state, lag seconds, last bar times per symbol
+- Symbol map: MNQ→`MNQ.c.0`, MES→`MES.c.0`, MGC→`GC.c.0` (GC proxy — same price/oz), MCL→`MCL.c.0`
+- Wire format normalization: `rec.hd.ts_event` (nanosecond string), fixed-point prices ÷ 1e9
+- Exponential backoff on poll errors: 10s base, 5min cap
+
+### B2: snapshot.js live gate (`server/data/snapshot.js`, `server/index.js`)
+- `_isLiveMode()` — reads `features.liveData` from settings.json (5s cache) for hot-toggle support
+- `writeLiveCandle(symbol, candle)` — stores incoming 1m bars, deduplicates by timestamp, trims to 500 bars
+- `getCandles()` — live gate: when `liveData=true` and symbol is in `LIVE_FUTURES`, returns from in-memory store
+- `POST /api/features` route restored in `server/index.js` (was documented but missing from code)
+- `GET /api/datastatus` — returns source, lag, last bar times; data source status pill in dashboard topbar
+
+### B3: Real-time candle aggregation (`server/data/snapshot.js`)
+- `writeLiveCandle()` now aggregates 1m → 5m / 15m / 30m on every call
+- Window alignment: `Math.floor(time / tfSeconds) * tfSeconds` — no lookahead
+- Completed windows returned as `[{ tf, candle }, ...]`; partial (in-progress) bars updated in-place
+- `_mergeWindow(bars, tfSeconds)` helper extracted alongside existing `_aggregateCandles()`
+
+### B4: Event-driven scan on bar close (`server/index.js`)
+- `_onLiveCandle(symbol, candle)` — calls `writeLiveCandle`, broadcasts `live_candle` event for chart, fires `runScan({ targetSymbols, targetTimeframes })` on each completed higher-TF window
+- `_startDatabento()` — called at startup when `features.liveData === true`
+- `runScan()` refactored to accept `{ targetSymbols, targetTimeframes }` overrides — all existing callers unaffected
+- Seed-mode auto-refresh kept for crypto/SIL (not on Databento feed); futures served live
+
+### Infrastructure
+- Removed stale Databento zip downloads from project root (GLBX-*/OPRA-* files)
+- `Historical_data/` folder added to `.gitignore` (large zip files, not committed)
+- `data/` folder added to `.gitignore` — seed files, logs, and backtest results excluded from version control
+- `DATABENTO_PROJECT.md` added to repo (integration plan and progress tracker)
+
+---
+
 ## [v11.0] — 2026-04-02 — DD Band / CME SPAN Margin Levels (Phase N)
 
 ### New: DD Band / SPAN margin-derived price levels

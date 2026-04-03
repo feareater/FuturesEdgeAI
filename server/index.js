@@ -8,7 +8,7 @@ const express = require('express');
 const { WebSocketServer } = require('ws');
 const { authenticate }      = require('./auth/tradovate');
 const { getCandles, writeLiveCandle } = require('./data/snapshot');
-const { getLiveFeedStatus } = require('./data/databento');
+const { getLiveFeedStatus, startLiveFeed } = require('./data/databento');
 const { computeIndicators, computeDDBands } = require('./analysis/indicators');
 const { classifyRegime, computeAlignment } = require('./analysis/regime');
 const { detectSetups }      = require('./analysis/setups');
@@ -2059,13 +2059,20 @@ const SCAN_SYMBOLS    = ['MNQ', 'MGC', 'MES', 'MCL', 'BTC', 'ETH', 'XRP', 'XLM',
 const SCAN_TIMEFRAMES = ['15m', '30m', '1h', '2h', '4h'];
 
 /**
- * Run a full scan. Returns the count of NEW alerts added to the cache.
+ * Run a scan. Returns the count of NEW alerts added to the cache.
+ *
+ * @param {Object} [opts]
+ * @param {string[]} [opts.targetSymbols]   Limit scan to these symbols (default: all SCAN_SYMBOLS)
+ * @param {string[]} [opts.targetTimeframes] Limit scan to these timeframes (default: SCAN_TIMEFRAMES)
  */
-async function runScan() {
-  console.log('[scan] Starting…');
+async function runScan({ targetSymbols = null, targetTimeframes = null } = {}) {
+  const scanSymbols    = targetSymbols    || SCAN_SYMBOLS;
+  const scanTimeframes = targetTimeframes || SCAN_TIMEFRAMES;
+  console.log('[scan] Starting…' + (targetSymbols ? ` [${scanSymbols.join(',')} × ${scanTimeframes.join(',')}]` : ''));
   let newCount = 0;
 
   // Compute correlation matrix once per scan (used by all symbols for scoring)
+  // Always use the full symbol set for accuracy even in targeted scans.
   let corrMatrix = null;
   try {
     const corrCandles = {};
@@ -2080,13 +2087,13 @@ async function runScan() {
   // Fetch calendar events once per scan (cached in calendar.js for 1h)
   // Economic calendar is always-on — no feature flag needed.
   let calendarCache = {};
-  for (const sym of SCAN_SYMBOLS) {
+  for (const sym of scanSymbols) {
     // Crypto symbols have no relevant ForexFactory calendar events
     if (['BTC', 'ETH', 'XRP', 'XLM'].includes(sym)) { calendarCache[sym] = []; continue; }
     try { calendarCache[sym] = await getCalendarEvents(sym); } catch { calendarCache[sym] = []; }
   }
 
-  for (const symbol of SCAN_SYMBOLS) {
+  for (const symbol of scanSymbols) {
     // Pre-compute 5m and 15m regimes for the alignment flag
     const regime5m  = _regimeFor(symbol, '5m');
     const regime15m = _regimeFor(symbol, '15m');
@@ -2120,7 +2127,7 @@ async function runScan() {
     // ── Collect all setup candidates for this symbol across all TFs ──────────
     const candidates = []; // { tf, setup, regime }
 
-    for (const tf of SCAN_TIMEFRAMES) {
+    for (const tf of scanTimeframes) {
       try {
         const candles    = getCandles(symbol, tf);
         const ind        = computeIndicators(candles, {
@@ -2317,13 +2324,50 @@ function _regimeFor(symbol, tf) {
 }
 
 // ---------------------------------------------------------------------------
+// Databento live feed handlers
+// ---------------------------------------------------------------------------
+
+/**
+ * Called by the Databento live feed for every new 1m bar.
+ * Stores the bar, broadcasts a live_candle event for the chart, and fires a
+ * targeted scan whenever a higher-TF window (5m / 15m / 30m) completes.
+ */
+async function _onLiveCandle(symbol, candle) {
+  // Store 1m bar; get list of completed higher-TF aggregates
+  const completed = writeLiveCandle(symbol, candle);
+
+  // Broadcast the raw 1m bar so the chart can extend in real time
+  broadcast({ type: 'live_candle', symbol, timeframe: '1m', candle });
+
+  // For each completed higher-TF window, broadcast and trigger a targeted scan
+  for (const { tf, candle: aggCandle } of completed) {
+    broadcast({ type: 'live_candle', symbol, timeframe: tf, candle: aggCandle });
+    try {
+      await runScan({ targetSymbols: [symbol], targetTimeframes: [tf] });
+    } catch (err) {
+      console.error(`[live] Scan error ${symbol} ${tf}: ${err.message}`);
+    }
+  }
+}
+
+/**
+ * Start the Databento live feed for the four supported futures symbols.
+ * Called at startup when features.liveData === true.
+ */
+function _startDatabento() {
+  const liveSymbols = ['MNQ', 'MES', 'MGC', 'MCL'];
+  startLiveFeed(liveSymbols, (symbol, candle) => {
+    _onLiveCandle(symbol, candle).catch(err =>
+      console.error(`[live] onCandle error ${symbol}: ${err.message}`)
+    );
+  });
+  console.log('[startup] Databento live feed started for', liveSymbols.join(', '));
+}
+
+// ---------------------------------------------------------------------------
 // Auto-refresh (seed mode) — fetches fresh Yahoo Finance data every 15 min,
 // evicts open-outcome alerts so they get re-evaluated against new candles,
 // then re-runs the scan and broadcasts data_refresh to connected clients.
-//
-// Live-mode seam: replace the setInterval below with a broker WebSocket
-// candle-close handler and call _autoRefresh({ fetchData: false }) — the
-// broker already wrote fresh candles; skip the Yahoo fetch step.
 // ---------------------------------------------------------------------------
 
 async function _autoRefresh({ fetchData = true } = {}) {
@@ -2473,6 +2517,15 @@ async function start() {
         _scheduleRefresh(); // start the recurring interval from this point
       }, refreshIntervalMs);
       console.log(`[startup] Auto-refresh scheduled every ${refreshIntervalMs / 60000} min`);
+
+      // Start Databento live feed if liveData feature is enabled.
+      // Futures symbols (MNQ/MES/MGC/MCL) will be served from liveCandles in real time;
+      // crypto/SIL still use seed data refreshed by the interval above.
+      if (settings.features?.liveData === true) {
+        _startDatabento();
+      } else {
+        console.log('[startup] Databento live feed disabled (features.liveData=false) — seed mode');
+      }
 
     // Real-time crypto prices — Coinbase Exchange WebSocket (free, no auth)
     coinbaseWS.start();

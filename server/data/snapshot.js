@@ -32,7 +32,7 @@ const LIVE_FUTURES     = new Set(['MNQ', 'MES', 'MGC', 'MCL']);
 // ---------------------------------------------------------------------------
 // Live in-memory candle store (populated by writeLiveCandle from databento.js)
 // Key: `${symbol}:${tf}`, Value: candle[] sorted ascending
-// In B2: only 1m bars are stored. B3 adds aggregated 5m/15m/30m.
+// 1m bars stored directly; 5m/15m/30m aggregated on each writeLiveCandle call.
 // ---------------------------------------------------------------------------
 
 const liveCandles    = new Map();   // live bar store
@@ -143,6 +143,21 @@ function _aggregateCandles(candles, n) {
   return result;
 }
 
+// Aggregate an array of 1m bars into a single higher-TF candle aligned to tfSeconds window.
+// Returns the aggregated candle if all bars share the same window, otherwise null.
+function _mergeWindow(bars, tfSeconds) {
+  if (!bars.length) return null;
+  const windowStart = Math.floor(bars[0].time / tfSeconds) * tfSeconds;
+  return {
+    time:   windowStart,
+    open:   bars[0].open,
+    high:   Math.max(...bars.map(c => c.high)),
+    low:    Math.min(...bars.map(c => c.low)),
+    close:  bars[bars.length - 1].close,
+    volume: bars.reduce((sum, c) => sum + c.volume, 0),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -152,17 +167,23 @@ function _validate(symbol, timeframe) {
   if (!VALID_TIMEFRAMES.includes(timeframe)) throw new Error(`Unknown timeframe: ${timeframe}`);
 }
 
+// Higher-TF aggregation config for live mode
+const LIVE_AGG_TFS = [
+  { tf: '5m',  seconds: 300  },
+  { tf: '15m', seconds: 900  },
+  { tf: '30m', seconds: 1800 },
+];
+
 // ---------------------------------------------------------------------------
 // Live candle writer — called by databento.js on each 1m bar close
 // ---------------------------------------------------------------------------
 
 /**
- * Store an incoming live 1m bar.
- * B3 will extend this to also emit aggregated 5m/15m/30m bars when windows close.
+ * Store an incoming live 1m bar and emit completed higher-TF bars.
  *
  * @param {string} symbol  Internal symbol, e.g. 'MNQ'
  * @param {Object} candle  Normalized { time, open, high, low, close, volume }
- * @returns {Array}  List of completed higher-TF bar objects { tf, candle } — always [] in B2
+ * @returns {Array}  List of { tf, candle } objects for each completed higher-TF window
  */
 function writeLiveCandle(symbol, candle) {
   if (!LIVE_FUTURES.has(symbol)) return [];
@@ -181,8 +202,49 @@ function writeLiveCandle(symbol, candle) {
 
   liveCandles.set(key1m, bars);
 
-  // B3 will add aggregation here and return completed higher-TF bars
-  return [];
+  // Aggregate into higher TFs — emit a bar when its window just closed
+  const completed = [];
+  for (const { tf, seconds } of LIVE_AGG_TFS) {
+    const keyTf = `${symbol}:${tf}`;
+    const prevBars = liveCandles.get(keyTf) ?? [];
+
+    // Determine the window this new 1m bar belongs to
+    const windowStart = Math.floor(candle.time / seconds) * seconds;
+
+    // Collect all 1m bars in this window
+    const windowBars = bars.filter(b => Math.floor(b.time / seconds) * seconds === windowStart);
+
+    // Window is complete when the next bar would fall in the next window.
+    // The candle that just arrived (candle.time) is the last 1m of the window
+    // if the NEXT minute (candle.time + 60) falls in a different window.
+    const nextMinuteWindow = Math.floor((candle.time + 60) / seconds) * seconds;
+    const windowClosed = nextMinuteWindow !== windowStart;
+
+    if (windowClosed && windowBars.length > 0) {
+      const agg = _mergeWindow(windowBars, seconds);
+
+      // Only push if we don't already have this timestamp (avoid duplicates on re-delivery)
+      const alreadyStored = prevBars.length > 0 && prevBars[prevBars.length - 1].time === agg.time;
+      if (!alreadyStored) {
+        prevBars.push(agg);
+        if (prevBars.length > MAX_LIVE_BARS) prevBars.splice(0, prevBars.length - MAX_LIVE_BARS);
+        liveCandles.set(keyTf, prevBars);
+        completed.push({ tf, candle: agg });
+      }
+    } else if (!windowClosed && windowBars.length > 0) {
+      // Update the in-progress bar (replace last if same window, otherwise push)
+      const partial = _mergeWindow(windowBars, seconds);
+      if (prevBars.length > 0 && prevBars[prevBars.length - 1].time === partial.time) {
+        prevBars[prevBars.length - 1] = partial;
+      } else {
+        prevBars.push(partial);
+        if (prevBars.length > MAX_LIVE_BARS) prevBars.splice(0, prevBars.length - MAX_LIVE_BARS);
+      }
+      liveCandles.set(keyTf, prevBars);
+    }
+  }
+
+  return completed;
 }
 
 // ---------------------------------------------------------------------------
