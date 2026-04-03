@@ -11,7 +11,7 @@
 Two parallel tracks that converge at validation:
 
 - **Track A — Historical backtest extension:** Replace the current 64-day dataset with 12–18 months of Databento CME + OPRA data to achieve statistically meaningful backtest results (n≥30 per setup per symbol).
-- **Track B — Live data feed:** Replace Yahoo Finance seed data with a real-time Databento WebSocket feed so the scan engine fires on current price with no lag.
+- **Track B — Live data feed:** Replace Yahoo Finance seed data with a real-time Databento feed so the scan engine fires on current price with no lag.
 
 These tracks are fully parallel — they touch different files and have zero code conflicts. They converge at **Step C (Validation)**, which requires both tracks complete and 30+ days of live forward-test data collected.
 
@@ -21,12 +21,12 @@ These tracks are fully parallel — they touch different files and have zero cod
 
 | ID | Track | Step | Status | Notes |
 |----|-------|------|--------|-------|
-| B1 | Live | `databento.js` adapter — REST + WebSocket | 🔵 **IN PROGRESS** | First task — execute now |
-| B2 | Live | `snapshot.js` live gate + feature flag | ⬜ To do | Depends on B1 |
-| B3 | Live | 1m → 5m/15m/30m candle derivation | ⬜ To do | Depends on B2 |
-| B4 | Live | Scan engine on live data, re-enable 1m/5m TF | ⬜ To do | Depends on B3 |
+| B1 | Live | `databento.js` adapter — REST polling feed | ✅ **Done** | Implemented with raw `https` module (no npm client — see notes) |
+| B2 | Live | `snapshot.js` live gate + feature flag + `/api/datastatus` | ✅ **Done** | Hot-toggle via `POST /api/features {"liveData": true}` |
+| B3 | Live | 1m → 5m/15m/30m candle aggregation | ✅ **Done** | Window-aligned; partial bars updated in-place |
+| B4 | Live | Event-driven scan on bar close | ✅ **Done** | `runScan({targetSymbols, targetTimeframes})` on each completed window |
 | B5 | Live | Forward-test harness, dedup, push notifications | ⬜ To do | Depends on B4 |
-| A1 | Historical | Purchase Databento data (CME + OPRA, 12m+) | ⬜ To do | Manual — Jeff action |
+| A1 | Historical | Purchase + download Databento data (CME + OPRA) | 🔵 **In progress** | Jeff has downloaded data to `Historical_data/` folder |
 | A2 | Historical | Run pipeline on new data (`historicalPipeline.js`) | ⬜ To do | Depends on A1 + A3 |
 | A3 | Historical | Audit front-month roll logic in Phase 1c | ⬜ To do | Do before A2, code review only |
 | A4 | Historical | HP recompute over full date range | ⬜ To do | Depends on A2 |
@@ -41,13 +41,9 @@ These tracks are fully parallel — they touch different files and have zero cod
 
 To execute a specific step, say:
 
-> "Execute step B2" or "Now do step A3"
+> "Execute step B5" or "Now do step A3"
 
 Claude Code will read this document, find the step, check its dependencies, and implement only that step. It will not proceed to the next step unless explicitly told to.
-
-To update status after completing a step, say:
-
-> "Mark B1 as done"
 
 ---
 
@@ -58,7 +54,7 @@ To update status after completing a step, say:
 DATABENTO_API_KEY=your_key_here
 ```
 
-### `config/settings.json` additions required
+### `config/settings.json` — already configured
 ```json
 {
   "features": {
@@ -67,180 +63,78 @@ DATABENTO_API_KEY=your_key_here
 }
 ```
 
-### npm package required
-```bash
-npm install @databento/client
-```
+### npm package — NOT required
+> **Important:** Databento does NOT have an official Node.js client library on npm.
+> The `@databento/client` package does not exist. The adapter (`server/data/databento.js`)
+> uses Node.js built-in `https` module to call the REST API directly.
+
+---
+
+## Implementation notes (B1–B4 completed 2026-04-03)
+
+### B1 — Key findings
+
+**No npm client:** `@databento/client` does not exist on npm. Databento's JS client is on their roadmap but unreleased as of April 2026. Implemented using Node.js built-in `https` module with Basic Auth (API key as username, empty password).
+
+**Polling not WebSocket:** The `ohlcv-1m` schema delivers completed bars. An aligned polling approach (every 65s, first poll 5s after next bar close) is equivalent to a streaming connection for this schema — bars close once per minute regardless of connection type. This is simpler, more robust, and avoids WebSocket reconnect complexity.
+
+**Wire format (confirmed from live API, 2026-04-03):**
+- `rec.hd.ts_event` — nanosecond timestamp string, e.g. `"1775136600000000000"` (nested under `hd`, not flat)
+- `rec.open/high/low/close` — fixed-point integer strings, divide by `1e9` to get price
+- `rec.volume` — integer string
+- `rec.hd.rtype` — 33 for `ohlcv-1m` on `GLBX.MDP3`
+
+**Symbol map (confirmed live):**
+
+| Internal | Databento | Confirmed |
+|---|---|---|
+| MNQ | `MNQ.c.0` | ✅ |
+| MES | `MES.c.0` | ✅ |
+| MGC | `GC.c.0` | ✅ GC proxy — Micro Gold (`MGC.c.0`) not in subscription; GC has identical prices |
+| MCL | `MCL.c.0` | ✅ |
+
+**stype_in:** `continuous` (required when using `.c.0` notation)
+
+**Backoff:** `_failCount` + `_backoffDelay` starting at 10s, doubling per consecutive error, capped at 300s.
+
+### B2 — Key findings
+
+**`POST /api/features` was missing from code:** The route was documented in CLAUDE.md but was not in `server/index.js`. Discovered during B2 implementation and restored.
+
+**Settings cache:** `_isLiveMode()` re-reads `settings.json` at most every 5s so hot-toggle via `POST /api/features` takes effect within one poll cycle without a restart.
+
+**`/api/datastatus`:** Returns `{source, wsConnected, lagSeconds, lastBarTime, lastBarTimes, symbols}`. In seed mode returns `source:'seed'`. In live mode delegates to `getLiveFeedStatus()` from `databento.js`.
+
+### B3 — Implementation
+
+`writeLiveCandle(symbol, candle)` now:
+1. Stores the incoming 1m bar (dedup by timestamp, trim to 500 bars)
+2. For each of `[{tf:'5m', seconds:300}, {tf:'15m', seconds:900}, {tf:'30m', seconds:1800}]`:
+   - Computes `windowStart = Math.floor(candle.time / seconds) * seconds`
+   - Collects all 1m bars in the current window
+   - Detects window close: `Math.floor((candle.time + 60) / seconds) * seconds !== windowStart`
+   - On close: builds final aggregated bar, stores it, adds to `completed` return list
+   - On partial: updates the in-progress bar in-place (replace last element if same `windowStart`)
+3. Returns `[{ tf, candle }, ...]` — one entry per completed higher-TF window
+
+Helper `_mergeWindow(bars, tfSeconds)` handles OHLCV merge; sits alongside existing `_aggregateCandles()`.
+
+### B4 — Implementation
+
+`runScan()` refactored to accept `{ targetSymbols, targetTimeframes }` overrides — all existing callers pass no args and get existing behavior unchanged.
+
+`_onLiveCandle(symbol, candle)` in `server/index.js`:
+- Calls `writeLiveCandle()`, gets completed TF array back
+- Broadcasts `live_candle` event for each (1m always, higher-TF on close)
+- Calls `runScan({ targetSymbols: [symbol], targetTimeframes: [tf] })` per completed window
+
+`_startDatabento()` called at startup when `features.liveData === true`. The seed-mode periodic refresh still runs — it handles crypto/SIL (not on Databento feed) and provides a redundant full scan for futures every 2 minutes.
+
+**MTF confluence in live mode:** Only applies within the same targeted scan call. Cross-TF confluence (e.g. 5m alert confirmed by 15m zone) fires naturally on the 15m bar close — that scan sees both 5m and 15m setups in candidates. Single-TF targeted scans won't cross-confirm, which is acceptable.
 
 ---
 
 ## Step details
-
----
-
-### B1 — `databento.js` adapter
-
-**Status:** 🔵 In progress
-**File:** `server/data/databento.js` (new file)
-**Branch:** `feature/databento-live`
-**Depends on:** Nothing — this is the first task
-
-#### What to build
-
-A single new module with two exports:
-
-**`startLiveFeed(symbols, onCandle)`**
-
-- Connects to Databento Live WebSocket using `@databento/client`
-- Dataset: `GLBX.MDP3`
-- Schema: `ohlcv-1m`
-- Symbols: `MNQ`, `MES`, `MGC`, `MCL` — map to Databento continuous front-month tickers (`MNQ1!`, `MES1!`, `MGC1!`, `MCL1!` — confirm exact ticker format in Databento docs before coding)
-- On each 1m bar close, calls `onCandle(symbol, candle)` with normalized shape: `{ time, open, high, low, close, volume }` where `time` is Unix seconds (matching existing candle format throughout the codebase)
-- Reconnect on disconnect with exponential backoff — model on existing `coinbaseWS.js` pattern
-- Log connection status, disconnects, and reconnects to console (verbose — this is a new critical path)
-
-**`fetchHistoricalCandles(symbol, startIso, endIso)`**
-
-- REST call to Databento timeseries API via `@databento/client`
-- Returns array of normalized `{ time, open, high, low, close, volume }` objects sorted ascending
-- Used on server startup to seed the in-memory candle store before the WebSocket catches up
-- Fetch enough bars to compute all indicators: minimum 100 1m bars (EMA50 needs 50, swing lookback needs more)
-- Handle errors gracefully — if historical seed fails, log warning and proceed with WebSocket-only (the live feed will build up bars over time)
-
-#### Normalization contract
-
-The normalized candle object must exactly match what the rest of the codebase expects. Check `server/data/snapshot.js` for the existing candle shape and match it precisely. The scan engine, indicators, and backtest engine all depend on this shape. Do not add extra fields or rename existing ones.
-
-#### What NOT to build in this step
-
-- Do not modify `snapshot.js` yet (that is B2)
-- Do not wire into the scan engine yet (that is B4)
-- Do not add the feature flag yet (that is B2)
-
-#### Acceptance criteria
-
-- `startLiveFeed` connects successfully and logs incoming bars to console when `DATABENTO_API_KEY` is set
-- `fetchHistoricalCandles` returns a correctly shaped array for a test date range
-- Disconnection triggers reconnect with backoff (test by temporarily setting wrong API key)
-- No modification to any existing file
-
-#### Notes
-
-- Databento's Node client is `@databento/client` — use it, do not write raw WebSocket code
-- Databento Live uses an authentication flow different from their REST API — check their docs for the `LiveClient` vs `Historical` client distinction
-- The `ohlcv-1m` schema delivers bars on bar close — confirm this in Databento docs (some schemas deliver on tick)
-- If Databento uses instrument IDs rather than ticker strings for subscription, the client library handles the lookup — check the `LiveClient.subscribe()` API signature
-
----
-
-### B2 — `snapshot.js` live gate
-
-**Status:** ⬜ To do
-**File:** `server/data/snapshot.js` (modify existing)
-**Branch:** `feature/databento-live`
-**Depends on:** B1
-
-#### What to build
-
-Add a live data store and a feature flag gate to `snapshot.js`.
-
-**In-memory live store:**
-
-```javascript
-const liveCandles = new Map(); // key: `${symbol}:${tf}`, value: candle[]
-```
-
-`databento.js` calls a new exported function `writeLiveCandle(symbol, candle)` on each 1m bar. `snapshot.js` aggregates 1m bars into 5m/15m/30m candles (B3 handles aggregation logic — stub this in B2 as a passthrough that just stores 1m bars).
-
-**Feature flag gate in `getCandles(symbol, tf)`:**
-
-```javascript
-const settings = loadSettings();
-if (settings.features?.liveData && FUTURES_SYMBOLS.includes(symbol)) {
-  return liveCandles.get(`${symbol}:${tf}`) ?? [];
-}
-// existing seed logic below — unchanged
-```
-
-**New API route:** `GET /api/datastatus`
-
-Returns:
-```json
-{
-  "source": "live",
-  "lastBarTime": "2026-04-03T14:32:00.000Z",
-  "lagSeconds": 47,
-  "wsConnected": true,
-  "symbols": ["MNQ", "MES", "MGC", "MCL"]
-}
-```
-
-Add to topbar in `index.html` — a small status pill: green dot + "LIVE" when `liveData: true` and lag < 120s, amber dot + "DELAYED" when lag 120–300s, red dot + "SEED" when `liveData: false` or WS disconnected.
-
-#### Acceptance criteria
-
-- `GET /api/datastatus` returns correct state in both seed and live modes
-- Toggling `features.liveData` via `POST /api/features` switches data source without restart
-- Topbar pill shows correct status
-- Existing seed mode behavior completely unchanged when `liveData: false`
-
----
-
-### B3 — Candle derivation (1m → 5m/15m/30m)
-
-**Status:** ⬜ To do
-**File:** `server/data/snapshot.js` (modify existing)
-**Branch:** `feature/databento-live`
-**Depends on:** B2
-
-#### What to build
-
-On each `writeLiveCandle(symbol, candle)` call, check if a complete higher-TF window has closed and emit the aggregated candle.
-
-Rules:
-- 5m: every 5 consecutive 1m bars (aligned to clock: 09:30, 09:35, 09:40...)
-- 15m: every 15 consecutive 1m bars
-- 30m: every 30 consecutive 1m bars
-- Bar alignment: use `Math.floor(unixSeconds / tfSeconds) * tfSeconds` to group bars into windows
-- Aggregation: `open` = first bar open, `high` = max of all highs, `low` = min of all lows, `close` = last bar close, `volume` = sum of all volumes, `time` = window start time
-
-The aggregation logic already exists in `snapshot.js` for the seed derivation path. Extract it into a shared `aggregateBars(bars, tfSeconds)` function and reuse it for both paths.
-
-#### Acceptance criteria
-
-- With `liveData: true`, `getCandles('MNQ', '5m')` returns correctly aggregated 5m bars
-- Bar timestamps are window-aligned (not the timestamp of the last 1m bar)
-- A partial window (e.g. 3 of 5 1m bars received) does not emit a 5m bar until all 5 arrive
-- 1m timeframe also available in live mode (pass through directly)
-
----
-
-### B4 — Scan engine on live data
-
-**Status:** ⬜ To do
-**File:** `server/index.js` (modify existing)
-**Branch:** `feature/databento-live`
-**Depends on:** B3
-
-#### What to build
-
-Wire `databento.js`'s `startLiveFeed` into the server startup sequence. On each completed higher-TF candle from `snapshot.js`, trigger `runScan()` for that symbol.
-
-Currently `runScan()` runs on a timer (polling). In live mode, it should be event-driven: scan fires when a new 5m/15m/30m bar closes, not on a fixed interval.
-
-Implementation:
-- In `server/index.js` startup, if `features.liveData === true`, call `databento.startLiveFeed(SCAN_SYMBOLS, onLiveCandle)`
-- `onLiveCandle` calls `snapshot.writeLiveCandle(symbol, candle)`, which returns the list of newly completed higher-TF bars
-- For each completed higher-TF bar, call `runScan(symbol, tf)` immediately
-
-Re-enable 1m and 5m in `SCAN_TIMEFRAMES` when `liveData: true`. Keep 5m/15m/30m only when `liveData: false` (seed mode — fast TFs are stale).
-
-#### Acceptance criteria
-
-- With `liveData: true`, alerts fire within seconds of a bar close (not on a 60-second polling cycle)
-- `runScan` is not called more than once per bar per symbol per timeframe
-- Server still functions correctly in seed mode (polling unchanged)
-- No duplicate alerts from the same setup within the existing dedup window
 
 ---
 
@@ -289,34 +183,42 @@ Implement the `pushNotifications` feature flag (currently reserved, not implemen
 
 ---
 
-### A1 — Purchase Databento data
+### A1 — Purchase + download Databento data
 
-**Status:** ⬜ To do
+**Status:** 🔵 In progress — data downloaded to `Historical_data/`
 **Owner:** Jeff (manual action — no code)
 
-#### What to purchase
+#### Data location
+
+Downloaded files are in:
+```
+Historical_data/
+  CME/        ← GLBX.MDP3 futures zip files
+  OPRA/
+    QQQ/
+    SPY/
+    GLD/
+    SLV/
+    USO/
+    IWM/      ← OPRA options zip files per underlying
+```
+
+#### What was purchased
 
 **CME Globex futures (for backtest candles):**
 - Dataset: `GLBX.MDP3`
 - Schema: `ohlcv-1m`
-- Symbols: `MNQ`, `MES`, `MGC`, `MCL`
-- Date range: 12–18 months back from today
-- Delivery: daily partition (one file per trading day), zstd compressed
-- Format: CSV
+- Symbols: MNQ, MES, MGC, MCL (continuous front-month, `.c.0` notation)
+- Format: zstd-compressed zip files, daily partition
 
 **OPRA options (for HP computation):**
 - Dataset: `OPRA.PILLAR`
-- Schemas: `definition` AND `statistics` (both required)
-- Symbols: `QQQ`, `SPY`, `GLD`, `USO` option chains
-- Same date range as CME data
-- Delivery: daily partition, zstd compressed
+- Underlyings: QQQ, SPY, GLD, SLV, USO, IWM option chains
+- Format: zstd-compressed zip files, daily partition
 
-#### Notes
+#### Next step
 
-- Use Databento's cost estimator before purchasing — filter tightly on symbols and date range
-- Daily partition format is required — do not purchase as a single aggregate file
-- OPRA data is significantly larger than CME data — check disk space before downloading (estimate: 4× the current `data/historical/` folder size per year of data)
-- Download to the same directory that `historicalPipeline.js` Phase 1a reads from
+Proceed to A3 (audit roll logic) before running the pipeline.
 
 ---
 
@@ -331,11 +233,13 @@ Implement the `pushNotifications` feature flag (currently reserved, not implemen
 
 Read `historicalPipeline.js` Phase 1c carefully. Answer these questions:
 
-**Q1: Does Databento deliver `MNQ1!` (continuous front-month) or individual contract symbols (`MNQU5`, `MNQZ5`)?**
+**Q1: Does Databento deliver `MNQ.c.0` (continuous front-month) or individual contract symbols (`MNQU5`, `MNQZ5`)?**
 
-If `MNQ1!` continuous: Databento handles roll stitching. No fix needed. Proceed to A2.
+Based on B1 work: Databento uses `.c.0` continuous notation with `stype_in=continuous`. This means Databento handles the roll stitching. Verify that the historical pipeline uses the same `stype_in=continuous` parameter.
 
-If individual contracts: the pipeline selects front-month by highest volume per day. Continue to Q2.
+If using continuous: Databento handles roll stitching. No price adjustment needed. Proceed to A2.
+
+If individual contracts: the pipeline selects front-month by highest volume per day. Continue to Q2–Q4 below.
 
 **Q2: Is front-month selection per-day or per-bar?**
 
@@ -365,19 +269,17 @@ If a roll problem is found: commit to the expiring contract for the entire roll 
 
 **Status:** ⬜ To do
 **File:** `server/data/historicalPipeline.js` (run, not modify)
-**Depends on:** A1 (data downloaded), A3 (roll audit complete)
+**Depends on:** A1 (data downloaded ✅), A3 (roll audit complete)
 
 #### What to do
-
-This is an execution task, not a coding task.
 
 **Step 1: Verify disk space**
 
 Check current `data/historical/` size. Multiply by (target months / 3) to estimate new size. Confirm you have 2× that amount free before proceeding.
 
-**Step 2: Place downloaded files**
+**Step 2: Confirm input directory**
 
-Confirm Databento zip files are in the directory that Phase 1a reads from. Check the `INPUT_DIR` or equivalent constant at the top of `historicalPipeline.js`.
+Verify `historicalPipeline.js` reads from the correct path for the new data in `Historical_data/CME/` and `Historical_data/OPRA/`. Update `INPUT_DIR` constants if needed.
 
 **Step 3: Run Phase 1d pre-check**
 
@@ -396,12 +298,6 @@ Skip-if-exists logic handles existing dates automatically. Monitor console outpu
 **Step 5: Verify output**
 
 ```bash
-# Count derived files (should equal trading days × symbols × timeframes)
-ls data/historical/derived/ | wc -l
-
-# Count HP computed files (should equal trading days)
-ls data/historical/computed/ | wc -l
-
 # Check backtest available date range
 curl http://localhost:3000/api/backtest/available
 ```
@@ -518,32 +414,32 @@ If any setup diverges beyond the acceptable gap: investigate before paper tradin
 
 ## File map — what each step touches
 
-| File | Steps that touch it |
-|------|-------------------|
-| `server/data/databento.js` | B1 (create) |
-| `server/data/snapshot.js` | B2, B3 |
-| `server/index.js` | B2 (datastatus route), B4 (live scan wiring) |
-| `server/trading/simulator.js` | B5 |
-| `server/storage/log.js` | B5 |
-| `sw.js` | B5 |
-| `public/index.html` | B2 (status pill) |
-| `server/data/historicalPipeline.js` | A3 (audit), A2 (run) |
-| `server/data/hpCompute.js` | A4 (run) |
-| `config/settings.json` | B2 (liveData flag) |
-| `.env` | B1 (DATABENTO_API_KEY), B5 (VAPID keys) |
-| `package.json` | B1 (`@databento/client`) |
+| File | Steps | Status |
+|------|-------|--------|
+| `server/data/databento.js` | B1 (create) | ✅ Done |
+| `server/data/snapshot.js` | B2, B3 | ✅ Done |
+| `server/index.js` | B2 (datastatus route), B4 (live scan wiring) | ✅ Done |
+| `public/index.html` | B2 (status pill) | ✅ Done |
+| `server/trading/simulator.js` | B5 | ⬜ To do |
+| `server/storage/log.js` | B5 | ⬜ To do |
+| `sw.js` | B5 | ⬜ To do |
+| `server/data/historicalPipeline.js` | A3 (audit), A2 (run) | ⬜ To do |
+| `server/data/hpCompute.js` | A4 (run) | ⬜ To do |
+| `config/settings.json` | B2 (`liveData` flag added) | ✅ Done |
+| `.env` | B1 (`DATABENTO_API_KEY`), B5 (VAPID keys) | B1 ✅ / B5 ⬜ |
 
 ---
 
-## Databento reference
+## Databento reference (corrected)
 
-- **Live WebSocket endpoint:** `wss://live.databento.com/v0/live`
-- **REST historical endpoint:** via `@databento/client` `Historical` class
+- **Live feed implementation:** REST polling, 65s interval, aligned to 5s after bar close — NOT WebSocket
+- **REST historical endpoint:** `https://hist.databento.com/v0/timeseries.get_range`
+- **Authentication:** HTTP Basic Auth — API key as username, empty password
 - **CME dataset:** `GLBX.MDP3`
 - **OPRA dataset:** `OPRA.PILLAR`
 - **Schema for candles:** `ohlcv-1m`
-- **Continuous front-month ticker format:** confirm in Databento symbol reference (likely `MNQ1!` or `MNQZ6` format)
-- **Node client:** `npm install @databento/client`
+- **Continuous front-month format:** `MNQ.c.0` (not `MNQ1!`) with `stype_in=continuous`
+- **Node client:** None available — use Node.js built-in `https` module
 - **Docs:** https://docs.databento.com
 
 ---
@@ -552,7 +448,7 @@ If any setup diverges beyond the acceptable gap: investigate before paper tradin
 
 ```
 main                              ← stable, always working
-feature/databento-live            ← B1, B2, B3, B4
+feature/databento-live            ← B1–B4 (complete, not yet merged to main)
 feature/databento-forward-test    ← B5
 feature/databento-historical      ← A3 fix (if needed)
 ```
@@ -573,4 +469,4 @@ Merge each feature branch to main only after its acceptance criteria are met and
 ---
 
 *Last updated: 2026-04-03*
-*Next action: Execute B1 — build `server/data/databento.js`*
+*B1–B4 complete. A1 data downloaded. Next actions: A3 (audit roll logic) → A2 (run pipeline); B5 (forward-test harness).*
