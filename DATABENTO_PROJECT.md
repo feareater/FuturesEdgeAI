@@ -26,9 +26,9 @@ These tracks are fully parallel — they touch different files and have zero cod
 | B3 | Live | 1m → 5m/15m/30m candle aggregation | ✅ **Done** | Window-aligned; partial bars updated in-place |
 | B4 | Live | Event-driven scan on bar close | ✅ **Done** | `runScan({targetSymbols, targetTimeframes})` on each completed window |
 | B5 | Live | Forward-test harness, dedup, push notifications | ⬜ To do | Depends on B4 |
-| A1 | Historical | Purchase + download Databento data (CME + OPRA) | 🔵 **In progress** | Jeff has downloaded data to `Historical_data/` folder |
-| A2 | Historical | Run pipeline on new data (`historicalPipeline.js`) | ⬜ To do | Depends on A1 + A3 |
-| A3 | Historical | Audit front-month roll logic in Phase 1c | ⬜ To do | Do before A2, code review only |
+| A1 | Historical | Purchase + download Databento data (CME + OPRA) | 🔵 **In progress** | Data downloaded; running pipeline phases now |
+| A2 | Historical | Rewrite pipeline for 16 symbols, 13yr scale, instruments.js | ✅ **Done** | instruments.js created; pipeline rewritten; engine.js updated; streaming zip fix |
+| A3 | Historical | Audit front-month roll logic in Phase 1c | ⬜ To do | Do before running A1 pipeline |
 | A4 | Historical | HP recompute over full date range | ⬜ To do | Depends on A2 |
 | A5 | Historical | Full backtest run, validate edge across 12m | ⬜ To do | Depends on A4 |
 | C  | Validation | Compare live WR vs backtest WR per setup | ⬜ To do | Depends on A5 + B5 + 30 days live |
@@ -118,6 +118,29 @@ DATABENTO_API_KEY=your_key_here
 3. Returns `[{ tf, candle }, ...]` — one entry per completed higher-TF window
 
 Helper `_mergeWindow(bars, tfSeconds)` handles OHLCV merge; sits alongside existing `_aggregateCandles()`.
+
+### A2 — Implementation (completed 2026-04-03)
+
+**instruments.js** (`server/data/instruments.js`) — new file, single source of truth for all 16 CME symbols and 6 OPRA underlyings. Key fields per symbol: `databento` (`.c.0` ticker), `dbRoot` (for CSV symbol matching), `category`, `pointValue`, `tickSize`, `tickValue`, `optionsProxy`, `rthOnly`, `sessionHours`, `pdh_rr`.
+
+**Proxy instruments** — three CME symbols use a different Databento root:
+- `MGC` → `GC.c.0` (Micro Gold shares price with full Gold contract)
+- `SIL` → `SI.c.0` (Micro Silver shares price with full Silver contract)
+- `MHG` → `HG.c.0` (Micro Copper shares price with full Copper contract)
+- `DATABENTO_ROOT_TO_INTERNAL` map handles this automatically: `GC→MGC`, `SI→SIL`, `HG→MHG`
+
+**historicalPipeline.js rewrite** — major changes:
+- Phase CLI: `--phase 1a|1b|1c|1d|1e|1f` — run any single phase
+- Phase 1c: all 16 symbols, pre-computes `existingDates` Set to avoid re-reading already-processed dates (memory-safe at 3,250 trading days × 16 symbols)
+- Phase 1d: all 6 ETFs (QQQ/SPY/GLD/SLV/USO/IWM), unified `etf_closes.json`, 3× retry per date with 2s delay
+- `csvSymbolToInternal()`: handles both `.c.0` continuous (`MNQ.c.0`) and individual contract (`MNQM6`) CSV formats
+- `aggregateBars()`: window-aligned using `Math.floor(ts/tfSec)*tfSec` — matches live aggregation in snapshot.js
+- `errLog()`: appends to `data/historical/errors.log` (non-fatal per-date errors)
+- `eta()`: progress estimation logged every 100 dates during Phase 1c
+
+**engine.js refactor** — removed hardcoded `POINT_VALUE` and `HP_PROXY` maps; both now imported from `instruments.js`. All backtest symbols now work automatically.
+
+**Streaming zip fix** — `adm-zip` replaced with `unzipper`. The QQQ OPRA zip is 3.3 GB; `adm-zip` hits Node's 2 GiB buffer limit. `unzipper.Open.file()` reads the zip central directory to seek directly to entries without loading the full archive. `adm-zip` removed from `package.json`.
 
 ### B4 — Implementation
 
@@ -416,17 +439,20 @@ If any setup diverges beyond the acceptable gap: investigate before paper tradin
 
 | File | Steps | Status |
 |------|-------|--------|
+| `server/data/instruments.js` | A2 (create) | ✅ Done |
 | `server/data/databento.js` | B1 (create) | ✅ Done |
 | `server/data/snapshot.js` | B2, B3 | ✅ Done |
+| `server/data/historicalPipeline.js` | A2 (rewrite), A3 (audit before running) | ✅ Code done / ⬜ Run pending |
+| `server/backtest/engine.js` | A2 (imports from instruments.js) | ✅ Done |
 | `server/index.js` | B2 (datastatus route), B4 (live scan wiring) | ✅ Done |
 | `public/index.html` | B2 (status pill) | ✅ Done |
 | `server/trading/simulator.js` | B5 | ⬜ To do |
 | `server/storage/log.js` | B5 | ⬜ To do |
 | `sw.js` | B5 | ⬜ To do |
-| `server/data/historicalPipeline.js` | A3 (audit), A2 (run) | ⬜ To do |
 | `server/data/hpCompute.js` | A4 (run) | ⬜ To do |
 | `config/settings.json` | B2 (`liveData` flag added) | ✅ Done |
 | `.env` | B1 (`DATABENTO_API_KEY`), B5 (VAPID keys) | B1 ✅ / B5 ⬜ |
+| `package.json` | A2 (adm-zip → unzipper) | ✅ Done |
 
 ---
 
@@ -469,4 +495,4 @@ Merge each feature branch to main only after its acceptance criteria are met and
 ---
 
 *Last updated: 2026-04-03*
-*B1–B4 complete. A1 data downloaded. Next actions: A3 (audit roll logic) → A2 (run pipeline); B5 (forward-test harness).*
+*B1–B4 complete. A2 code complete (instruments.js, pipeline rewrite, streaming zip fix). A1 pipeline run in progress. Next actions: A3 (audit roll logic) → run pipeline phases 1a–1f; B5 (forward-test harness).*

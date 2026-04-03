@@ -53,8 +53,10 @@ FuturesEdgeAI/
 │   ├── auth/
 │   │   └── tradovate.js       ← OAuth + session token management
 │   ├── data/
+│   │   ├── instruments.js     ← Single source of truth: all 16 CME symbols + 6 OPRA underlyings (pointValue, dbRoot, optionsProxy, etc.)
 │   │   ├── snapshot.js        ← OHLCV fetch + candle normalization (source-agnostic)
 │   │   ├── seedFetch.js       ← Yahoo Finance seed data fetch (MNQ/MGC/MES/MCL)
+│   │   ├── historicalPipeline.js ← Databento historical data pipeline (phases 1a–1f)
 │   │   └── calendar.js        ← ForexFactory economic calendar (1h cache)
 │   ├── analysis/
 │   │   ├── indicators.js      ← EMA, VWAP, ATR, PDH/PDL, swings, VP, OR, sessions
@@ -270,6 +272,7 @@ Default view (Reset to Default): all layers ON.
 | 10 | Performance analytics page, Alert Replay/Backtest page, sound alerts, RS widget | ✅ Complete |
 | N (v11.0) | DD Band / CME SPAN margin levels — confidence modifier, chart layer, topbar widget, backtest analysis | ✅ Complete |
 | O (v12.0) | Databento live data feed — REST adapter, live gate in snapshot.js, 1m→5m/15m/30m aggregation, event-driven scan | ✅ Complete (B1–B4) |
+| P (v12.1) | Historical pipeline v2 — instruments.js single source of truth, 16 symbols, 13yr scale, streaming zip extraction | ✅ Complete (A2) |
 
 ---
 

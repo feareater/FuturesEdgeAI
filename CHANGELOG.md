@@ -4,6 +4,39 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v12.1] — 2026-04-03 — Historical Pipeline v2 + instruments.js (Phase P, A2)
+
+### A2: instruments.js — single source of truth (`server/data/instruments.js`)
+- New file: all 16 CME futures symbols with `databento`, `dbRoot`, `category`, `pointValue`, `tickSize`, `tickValue`, `optionsProxy`, `rthOnly`, `sessionHours`, `pdh_rr`
+- Symbols: MNQ, MES, M2K, MYM (equity index); MGC, SIL, MHG (commodity metal); MCL (energy); M6E, M6B (FX); ZT, ZF, ZN, ZB, UB (fixed income); MBT (crypto futures)
+- `DATABENTO_ROOT_TO_INTERNAL` map built dynamically — handles GC→MGC, SI→SIL, HG→MHG proxies
+- Exports: `INSTRUMENTS`, `ALL_SYMBOLS`, `OPRA_UNDERLYINGS`, `POINT_VALUE`, `HP_PROXY`, `ETF_TO_FUTURES`, `FUTURES_TO_ETF`, groupings by category
+
+### A2: historicalPipeline.js rewrite (`server/data/historicalPipeline.js`)
+- **All 16 CME symbols** — reads from `instruments.js` (no hardcoded lists)
+- **6 OPRA underlyings** — QQQ, SPY, GLD, SLV, USO, IWM
+- **`--phase 1a|1b|1c|1d|1e|1f`** CLI arg — run any single phase independently
+- **Full resumability** — `existingDates` Set per symbol pre-computed to skip already-processed dates; memory-safe at 13yr × 16 symbol scale
+- **`errLog()`** — appends errors to `data/historical/errors.log` rather than crashing pipeline
+- **`eta()`** — ETA estimation logged every 100 dates during Phase 1c
+- **Window-aligned `aggregateBars()`** — derives 5m/15m/30m using `Math.floor(ts/tfSec)*tfSec` bucketing (matches live aggregation in snapshot.js)
+- **`csvSymbolToInternal()`** — handles both `.c.0` continuous and individual contract (`MNQM6`, `M2KH5`) symbol formats
+- **Per-underlying OPRA dirs** — extracts to `raw/OPRA/{underlying}/`; reads from same structure in Phase 1e
+- **Unified `etf_closes.json`** — single file for all 6 ETF close prices; 3× retry with 2s delay per date
+
+### A2: engine.js refactor (`server/backtest/engine.js`)
+- Removed hardcoded `POINT_VALUE = { MNQ: 2, MES: 5, MGC: 10, MCL: 100 }`
+- Removed hardcoded `HP_PROXY = { MNQ: 'QQQ', MES: 'SPY', MGC: null, MCL: null }`
+- Both now imported from `server/data/instruments.js` — all symbols supported automatically
+
+### Infrastructure: streaming zip extraction
+- Replaced `adm-zip` with `unzipper` (streaming) — `adm-zip` loads entire archive into memory, crashing on 3.3 GB QQQ OPRA zip (Node 2 GiB buffer limit)
+- `streamZip(zipPath, onEntry)` — streams entries one-by-one via `unzipper.Open.file()`
+- `readZipEntry(zipPath, entryName)` — reads a single named entry without loading full archive
+- `adm-zip` removed from `package.json`; `unzipper` added
+
+---
+
 ## [v12.0] — 2026-04-03 — Databento Live Data Feed (Phase O, B1–B4)
 
 ### B1: Databento REST adapter (`server/data/databento.js`)

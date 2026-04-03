@@ -18,6 +18,8 @@
 | L | v10.0 | Historical backtesting system — Databento data pipeline, HP computation, backtest engine, backtest2.html |
 | M | v10.1–10.3 | Backtest bias fixes, trading hours filter, Compare tab, Optimize tab |
 | N | v11.0 | DD Band / CME SPAN margin levels — confidence modifier, chart layer, topbar widget, backtest analysis |
+| O | v12.0 | Databento live data feed — REST adapter, live gate, 1m→5m/15m/30m aggregation, event-driven scan (B1–B4) |
+| P | v12.1 | Historical pipeline v2 — instruments.js single source of truth, 16 CME symbols, 13yr scale, streaming zip (A2) |
 
 ---
 
@@ -369,6 +371,63 @@ Update via `POST /api/settings/span` or the SPAN Margins panel in the dashboard 
 ### `/api/performance/optimize` (separate from backtest)
 - Computes threshold/regime/MTF/hour stats from alertCache (live alerts, not backtest trades)
 - 5-minute cache; exports `computeOptimizeStats` from `server/analysis/performanceStats.js`
+
+---
+
+## Historical Pipeline — Phase P (v12.1)
+
+### instruments.js — `server/data/instruments.js`
+Single source of truth for all instrument metadata. Imported by `historicalPipeline.js`, `hpCompute.js`, and `server/backtest/engine.js`.
+
+**16 CME symbols**: MNQ, MES, M2K, MYM (equity index); MGC, SIL, MHG (metal); MCL (energy); M6E, M6B (FX); ZT, ZF, ZN, ZB, UB (fixed income); MBT (crypto futures)
+
+**Key exports:**
+```javascript
+INSTRUMENTS          // Full metadata map keyed by internal symbol
+ALL_SYMBOLS          // ['MNQ','MES',...] — all 16
+OPRA_UNDERLYINGS     // [{ etf:'QQQ', futuresProxy:'MNQ' }, ...]
+POINT_VALUE          // { MNQ:2, MES:5, MGC:10, MCL:100, ... }
+HP_PROXY             // { MNQ:'QQQ', MES:'SPY', MGC:'GLD', MCL:'USO', SIL:'SLV', M2K:'IWM', ... }
+ETF_TO_FUTURES       // { QQQ:'MNQ', SPY:'MES', ... }
+FUTURES_TO_ETF       // { MNQ:'QQQ', MES:'SPY', ... }
+DATABENTO_ROOT_TO_INTERNAL // { GC:'MGC', SI:'SIL', HG:'MHG', MNQ:'MNQ', ... }
+```
+
+**Proxy instruments** (Databento dbRoot ≠ internal symbol):
+- `MGC` → Databento `GC.c.0` (Micro Gold proxies full Gold — same price/oz)
+- `SIL` → Databento `SI.c.0` (Micro Silver proxies full Silver)
+- `MHG` → Databento `HG.c.0` (Micro Copper proxies full Copper)
+
+### historicalPipeline.js — Phases and CLI
+
+```bash
+node server/data/historicalPipeline.js --phase 1a   # Inventory zips → manifest.json
+node server/data/historicalPipeline.js --phase 1b   # Extract zips → raw/GLBX/ and raw/OPRA/{etf}/
+node server/data/historicalPipeline.js --phase 1c   # Parse CSVs → per-symbol candle files
+node server/data/historicalPipeline.js --phase 1d   # Fetch ETF closes (QQQ/SPY/GLD/SLV/USO/IWM) from Yahoo
+node server/data/historicalPipeline.js --phase 1e   # Parse OPRA chains → per-date contract files
+node server/data/historicalPipeline.js --phase 1f   # Compute HP snapshots (Black-Scholes)
+```
+
+Additional flags: `--symbol MNQ` (1c only), `--from-date YYYY-MM-DD`, `--recompute`, `--dry-run`, `--verify`
+
+**Resumability:** Each phase is fully resumable — skip-if-exists at write time; Phase 1c pre-computes `existingDates` Set per symbol to skip reading/storing already-processed bars.
+
+**Output structure:**
+```
+data/historical/
+  manifest.json          ← zip inventory (Phase 1a)
+  errors.log             ← per-date errors (non-fatal)
+  etf_closes.json        ← unified ETF close prices (Phase 1d)
+  raw/GLBX/              ← extracted .csv.zst files (Phase 1b)
+  raw/OPRA/{etf}/        ← extracted OPRA .csv.zst files (Phase 1b)
+  futures/{SYMBOL}/      ← per-date OHLCV JSON files (Phase 1c)
+  options/{etf}/         ← per-date option chain files (Phase 1e)
+  computed/{etf}/        ← per-date HP snapshot files (Phase 1f)
+```
+
+### Streaming zip extraction
+`unzipper` replaces `adm-zip` — supports >2 GiB archives (QQQ OPRA zip is 3.3 GB). `adm-zip` uses `fs.readFileSync` on the whole archive which hits Node's 2 GiB buffer limit.
 
 ---
 
