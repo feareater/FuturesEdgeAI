@@ -4,6 +4,24 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v12.5] — 2026-04-04 — Backtest zone_rejection dedup fix + full A5 run
+
+### Backtest engine: zone_rejection dedup overhaul (`server/backtest/engine.js`)
+- **Root cause**: dedup key included `setup.time` (unique per bar), so the same zone could add a new key on every 5m/15m/30m bar — 1-trade-at-a-time was the only gate, leaving ~18 zone_rejection trades/day
+- **Fix 1 — zone-level bucketing**: changed dedup key for `zone_rejection` from per-bar timestamp to per-zone-level bucket: `${symbol}-${tf}-zone_rejection-${direction}-${Math.round(setup.zoneLevel / atr * 4)}` (0.25 ATR resolution). Same zone can only fire once per day per TF.
+- **Fix 2 — 60-min per-direction cooldown**: after any zone_rejection fires, suppress all zone_rejections for the same symbol+direction for 60 minutes, regardless of zone level. Prevents re-entering failed zone clusters.
+- **Fix 3 — cross-TF shared cooldown**: `lastZoneRejTs` declared at symbol scope (outside TF loop), keyed by `date-direction`. A fire on 5m blocks 15m and 30m for the same 60-min window. Prevents the same zone being re-entered on a higher TF moments later.
+- **Result**: zone_rejection count in 2022 annual slice dropped from ~6,750 to ~3,928 (42% reduction); trades/symbol/day: ~4 (vs ~7 pre-fix), consistent with genuine signal frequency under 60-min cooldown.
+
+### A5 full-period backtest (full available range)
+- 2022 validation results: 5,386 trades total, WR 44.6%, PF 1.063, Gross +$29,332, Sharpe 4.28
+  - `zone_rejection`: 3,928 trades (15.6/day), WR 47.3%, gross -$22,781
+  - `or_breakout`: 1,031 trades (4.1/day), WR 32.2%, gross +$53,524
+  - `pdh_breakout`: 427 trades (1.7/day), WR 49.4%, gross -$1,411
+- Full-period (2018-09-24 → 2026-04-01) results pending
+
+---
+
 ## [v12.4] — 2026-04-04 — Full Pipeline Complete: Phase 1e/1f + ETF close fixes (Phase R)
 
 ### Phase 1b: XNYS.PILLAR ETF close extraction (`server/data/historicalPipeline.js`)

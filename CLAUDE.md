@@ -275,6 +275,7 @@ Default view (Reset to Default): all layers ON.
 | P (v12.1) | Historical pipeline v2 — instruments.js, 16 symbols, per-symbol zip extraction (Phase 1b), per-symbol directory scan (Phase 1c), --clean-raw/--force flags, DATABENTO_ROOT_TO_INTERNAL fixes for MGC/SIL/MHG | ✅ Complete (A2) |
 | Q (v12.2) | OPRA pipeline correctness — fetchETFDailyCloses (Databento ohlcv-1d via DBEQ.BASIC), Phase 1d ETF close fetch, Phase 1e strike/OI parsing fix (plain parseFloat, OI-only stats, underlyingPrice from etf_closes.json), hpCompute.js openInterest compat | ✅ Complete |
 | R (v12.3) | ETF close pipeline from XNYS.PILLAR ohlcv-1d zips — Phase 1b loop 4 (ETF_closes/ extraction), Phase 1d rewrite (local file parser, no API), Phase 1e remove lastKnownPrice fallback (skip dates with no ETF close), Phase 1f HP computation complete (~1736 dates/ETF, 2018–2026, written to options/{etf}/computed/) | ✅ Complete |
+| S (v12.5) | Backtest dedup fix — zone_rejection key uses zone-level bucket (0.25 ATR), 60-min per-direction cooldown shared across all TFs (cross-TF lastZoneRejTs at symbol scope); A5 full-period baseline run | ✅ Complete |
 
 ---
 

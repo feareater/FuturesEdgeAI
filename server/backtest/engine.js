@@ -571,6 +571,10 @@ async function runBacktestMTF(config) {
 
     console.log(`[BT-MTF] ${symbol}: ${days.length} days × ${timeframes.join('/')} TFs`);
 
+    // 60-min cooldown tracker for zone_rejection — shared across all TFs for this symbol.
+    // Keyed by 'date-direction' so it resets per session and is cross-TF aware.
+    const lastZoneRejTs = {}; // { 'YYYY-MM-DD-bullish': ts, ... }
+
     for (const tf of timeframes) {
       const tfDir = path.join(DATA_DIR, 'futures', symbol, tf);
       if (!fs.existsSync(tfDir)) {
@@ -652,12 +656,26 @@ async function runBacktestMTF(config) {
             if (setup.time !== detectTs) continue;
 
             // OR breakout: dedup per-session per-direction (fire once on first break).
-            // Zone/PDH/trendline: dedup per triggering candle.
+            // zone_rejection: dedup per zone-level bucket (0.25 ATR resolution) to avoid
+            //   refiring on every bar near the same zone within a session.
+            // PDH/trendline: dedup per triggering candle (setup.time is unique per bar).
+            const atr = indicators?.atr ?? 1;
             const setupKey = setup.type === 'or_breakout'
               ? `${symbol}-${date}-or_breakout-${setup.direction}`
-              : `${symbol}-${tf}-${setup.time}-${setup.type}-${setup.direction}`;
+              : setup.type === 'zone_rejection'
+                ? `${symbol}-${tf}-zone_rejection-${setup.direction}-${Math.round((setup.zoneLevel ?? 0) / atr * 4)}`
+                : `${symbol}-${tf}-${setup.time}-${setup.type}-${setup.direction}`;
             if (seenSetupKeys.has(setupKey)) continue;
             seenSetupKeys.add(setupKey);
+
+            // 60-minute cooldown for zone_rejection: once it fires for a symbol+direction,
+            // suppress all zone_rejections for that direction for the next 60 min — across
+            // all timeframes (shared via lastZoneRejTs which is symbol-scoped, not TF-scoped).
+            if (setup.type === 'zone_rejection') {
+              const ckKey = `${date}-${setup.direction}`;
+              const lastTs = lastZoneRejTs[ckKey] ?? 0;
+              if (barCloseTs < lastTs + 3600) continue;
+            }
 
             // Hour filter: skip if this ET hour is excluded by the user
             const { hour: etHourCheck } = _etHourMin(barCloseTs);
@@ -714,6 +732,11 @@ async function runBacktestMTF(config) {
 
             alerts.push(trade);
             trades.push(trade);
+
+            // Update 60-min cooldown timestamp after zone_rejection fires (cross-TF shared)
+            if (trade.setupType === 'zone_rejection') {
+              lastZoneRejTs[`${date}-${trade.direction}`] = barCloseTs;
+            }
 
             if (!equityMap[date]) equityMap[date] = 0;
             equityMap[date] += netPnl;
