@@ -143,8 +143,6 @@ function eta(done, total, elapsedMs) {
   return `${(remaining / 3600).toFixed(1)}h`;
 }
 
-/** Sleep for ms milliseconds */
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // ─── Zip discovery ───────────────────────────────────────────────────────────
 
@@ -199,20 +197,6 @@ function findAllETFCloseZips() {
   return result;
 }
 
-/**
- * Read the schema field from a zip's metadata.json.
- * Returns the schema string (e.g. 'ohlcv-1d', 'definition', 'statistics') or null.
- */
-async function getZipSchema(zipPath) {
-  try {
-    const metaBuf = await readZipEntry(zipPath, 'metadata.json');
-    if (!metaBuf) return null;
-    const meta = JSON.parse(metaBuf.toString('utf8'));
-    return meta.query?.schema || null;
-  } catch (_) {
-    return null;
-  }
-}
 
 // ─── Date helpers ────────────────────────────────────────────────────────────
 
@@ -587,20 +571,31 @@ async function phase1b() {
     });
   }
 
-  // Extract ohlcv-1d ETF close zips → raw/OPRA/{underlying}/ohlcv-1d/
-  // These are non-OPRA zips in the same OPRA folders (e.g. DBEQ-* downloads).
-  // Verify schema = 'ohlcv-1d' via metadata.json before extracting.
+  // Loop 3: OPRA ohlcv-1d zips (options daily OHLCV, dataset=OPRA.PILLAR)
+  // These are non-OPRA-prefixed zips in the OPRA folders.
+  // Only extract if dataset=OPRA.PILLAR AND schema=ohlcv-1d.
+  // Warn and skip anything from XNYS.PILLAR or other datasets — those belong in ETF_closes/.
   const etfCloseZips = findAllETFCloseZips();
-  log(`\n── Checking ${etfCloseZips.length} potential ohlcv-1d zip(s) → raw/OPRA/{underlying}/ohlcv-1d/ ──`);
+  log(`\n── Checking ${etfCloseZips.length} potential OPRA ohlcv-1d zip(s) → raw/OPRA/{underlying}/ohlcv-1d/ ──`);
   for (const zipInfo of etfCloseZips) {
-    const schema = await getZipSchema(zipInfo.path);
+    let meta = null;
+    try {
+      const metaBuf = await readZipEntry(zipInfo.path, 'metadata.json');
+      if (metaBuf) meta = JSON.parse(metaBuf.toString('utf8'));
+    } catch (_) {}
+    const schema  = meta?.query?.schema;
+    const dataset = meta?.query?.dataset;
     if (schema !== 'ohlcv-1d') {
       warn(`  ${zipInfo.name}: schema='${schema}' — expected 'ohlcv-1d', skipping`);
       continue;
     }
+    if (dataset !== 'OPRA.PILLAR') {
+      warn(`  ${zipInfo.name}: dataset='${dataset}' — expected OPRA.PILLAR for OPRA ohlcv-1d. Wrong folder? ETF equity closes belong in Historical_data/ETF_closes/, not OPRA/. Skipping.`);
+      continue;
+    }
     const destDir = path.join(RAW_DIR, 'OPRA', zipInfo.underlying, 'ohlcv-1d');
     ensureDir(destDir);
-    log(`\n[EXTRACT] ${zipInfo.name} (ohlcv-1d) → raw/OPRA/${zipInfo.underlying}/ohlcv-1d/`);
+    log(`\n[EXTRACT] ${zipInfo.name} (OPRA ohlcv-1d) → raw/OPRA/${zipInfo.underlying}/ohlcv-1d/`);
     let zipExtracted = 0;
     let zipSkipped   = 0;
     await streamZip(zipInfo.path, async (entry) => {
@@ -615,6 +610,61 @@ async function phase1b() {
     });
     skipped += zipSkipped;
     log(`  Extracted ${zipExtracted} file(s), skipped ${zipSkipped} existing`);
+  }
+
+  // Loop 4: XNYS.PILLAR ohlcv-1d ETF equity close zips → raw/ETF_closes/{ticker}/
+  // Jeff places one zip per ETF (QQQ, SPY, GLD, SLV, USO, IWM) in Historical_data/ETF_closes/.
+  // Verify dataset=XNYS.PILLAR and schema=ohlcv-1d. Ticker derived from symbols[0] (strip .EQ suffix).
+  const ETF_CLOSE_ZIP_DIR = path.join(HIST_DATA, 'ETF_closes');
+  const ETF_CLOSE_RAW_DIR = path.join(RAW_DIR, 'ETF_closes');
+  if (!fs.existsSync(ETF_CLOSE_ZIP_DIR)) {
+    log(`\n── ETF closes zip dir not found (${ETF_CLOSE_ZIP_DIR}) — skipping loop 4 ──`);
+  } else {
+    const etfZips = fs.readdirSync(ETF_CLOSE_ZIP_DIR)
+      .filter(f => f.endsWith('.zip'))
+      .map(f => ({ name: f, path: path.join(ETF_CLOSE_ZIP_DIR, f) }));
+    log(`\n── Checking ${etfZips.length} zip(s) in ETF_closes/ → raw/ETF_closes/{ticker}/ ──`);
+    for (const zipInfo of etfZips) {
+      let meta = null;
+      try {
+        const metaBuf = await readZipEntry(zipInfo.path, 'metadata.json');
+        if (metaBuf) meta = JSON.parse(metaBuf.toString('utf8'));
+      } catch (_) {}
+      const schema  = meta?.query?.schema;
+      const dataset = meta?.query?.dataset;
+      const symbols = meta?.query?.symbols;
+      if (dataset !== 'XNYS.PILLAR') {
+        warn(`  ${zipInfo.name}: dataset='${dataset}' — expected XNYS.PILLAR, skipping`);
+        continue;
+      }
+      if (schema !== 'ohlcv-1d') {
+        warn(`  ${zipInfo.name}: schema='${schema}' — expected 'ohlcv-1d', skipping`);
+        continue;
+      }
+      if (!symbols || symbols.length === 0) {
+        warn(`  ${zipInfo.name}: no symbols in metadata.json, skipping`);
+        continue;
+      }
+      // Derive ticker: strip .EQ or other suffixes (e.g. "QQQ.EQ" → "QQQ", "QQQ" → "QQQ")
+      const ticker = symbols[0].replace(/\.[A-Z]+$/, '');
+      const destDir = path.join(ETF_CLOSE_RAW_DIR, ticker);
+      ensureDir(destDir);
+      log(`\n[EXTRACT] ${zipInfo.name} (${ticker} equity ohlcv-1d) → raw/ETF_closes/${ticker}/`);
+      let zipExtracted = 0;
+      let zipSkipped   = 0;
+      await streamZip(zipInfo.path, async (entry) => {
+        if (entry.type === 'Directory') return;
+        const dest = path.join(destDir, entry.path);
+        if (fs.existsSync(dest)) { zipSkipped++; return; }
+        if (DRY_RUN) { log(`  [DRY] would extract: ${entry.path}`); return; }
+        ensureDir(path.dirname(dest));
+        fs.writeFileSync(dest, await entry.buffer());
+        zipExtracted++;
+        extracted++;
+      });
+      skipped += zipSkipped;
+      log(`  Ticker: ${ticker} — extracted ${zipExtracted} file(s), skipped ${zipSkipped} existing`);
+    }
   }
 
   log(`\n[1b COMPLETE] ${elapsed(t0)} — ${extracted} files extracted, ${skipped} already existed`);
@@ -894,21 +944,32 @@ function dateFromFilename(fname) {
   return `${d.substring(0, 4)}-${d.substring(4, 6)}-${d.substring(6, 8)}`;
 }
 
+// Expected ETF close price ranges for sanity checking (wide bounds covering 2018–2026+)
+const ETF_EXPECTED_RANGES = {
+  QQQ: [50,  700],
+  SPY: [100, 750],
+  GLD: [100, 500],
+  SLV: [10,  100],
+  USO: [5,   200],
+  IWM: [70,  300],
+};
+
 async function phase1d() {
   const t0 = Date.now();
   log('\n══════════════════════════════════════════════════════');
-  log(' PHASE 1d — PARSE ETF DAILY CLOSES (local ohlcv-1d files)');
+  log(' PHASE 1d — PARSE ETF DAILY CLOSES (XNYS.PILLAR ohlcv-1d)');
   log('══════════════════════════════════════════════════════');
-  log('Reads extracted files from raw/OPRA/{etf}/ohlcv-1d/ written by Phase 1b.');
+  log('Reads extracted files from raw/ETF_closes/{ticker}/ written by Phase 1b loop 4.');
   log('Run phase 1b first if this directory is missing.');
 
+  const ETF_CLOSE_RAW_DIR = path.join(RAW_DIR, 'ETF_closes');
   const allTickers = OPRA_UNDERLYINGS.map(o => o.etf); // QQQ, SPY, GLD, SLV, USO, IWM
   const closesPath = path.join(DATA, 'etf_closes.json');
   const allCloses  = {};
 
   if (DRY_RUN) {
     for (const etf of allTickers) {
-      const etfDir = path.join(RAW_DIR, 'OPRA', etf, 'ohlcv-1d');
+      const etfDir = path.join(ETF_CLOSE_RAW_DIR, etf);
       const exists = fs.existsSync(etfDir);
       const count  = exists ? fs.readdirSync(etfDir).filter(f => f.endsWith('.csv.zst')).length : 0;
       log(`[DRY] ${etf}: would parse ${count} file(s) from ${etfDir}`);
@@ -918,9 +979,9 @@ async function phase1d() {
   }
 
   for (const etf of allTickers) {
-    const etfDir = path.join(RAW_DIR, 'OPRA', etf, 'ohlcv-1d');
+    const etfDir = path.join(ETF_CLOSE_RAW_DIR, etf);
     if (!fs.existsSync(etfDir)) {
-      warn(`${etf}: ohlcv-1d directory not found (${etfDir}) — run phase 1b first`);
+      warn(`${etf}: raw/ETF_closes/${etf}/ not found — run phase 1b first (place XNYS.PILLAR ohlcv-1d zips in Historical_data/ETF_closes/)`);
       allCloses[etf] = {};
       continue;
     }
@@ -930,20 +991,20 @@ async function phase1d() {
       .sort();
 
     if (files.length === 0) {
-      warn(`${etf}: no .csv.zst files in ${etfDir}`);
+      warn(`${etf}: no .csv.zst files in raw/ETF_closes/${etf}/`);
       allCloses[etf] = {};
       continue;
     }
 
     log(`\n[${etf}] Parsing ${files.length} ohlcv-1d file(s)...`);
-    const closes = {};
+    const closes  = {};
     let processed = 0;
     let errors    = 0;
 
-    // Close field format: auto-detected per value.
-    // pretty_px=true (typical): decimal string like "476.890000000" → parseFloat gives ~477.
-    // pretty_px=false (raw):    fixed-point integer string → parseFloat gives ~4.77e11.
-    // ETF prices are always < 10000, so any value > 100000 is raw fixed-point → divide by 1e9.
+    // Close field format auto-detected per value:
+    //   pretty_px=true  → decimal string "476.890000000" → parseFloat ~477
+    //   pretty_px=false → fixed-point integer string    → parseFloat ~4.77e11 → divide by 1e9
+    // ETF prices are always < 10000; any parsed value > 100000 is raw fixed-point.
 
     for (const fname of files) {
       try {
@@ -973,10 +1034,8 @@ async function phase1d() {
           if (!rawClose) continue;
 
           let close = parseFloat(rawClose);
-          // Auto-detect fixed-point: ETF prices are always < 10000; anything larger is raw int
           if (close > 100000) close = close / 1e9;
 
-          // Derive date: prefer filename pattern, fall back to ts_event column
           const date = dateFromFilename(fname)
             || (tsIdx >= 0 ? tsEventToDate(parts[tsIdx]) : null);
 
@@ -999,14 +1058,25 @@ async function phase1d() {
     const sortedDates = Object.keys(closes).sort();
     log(`  ${etf}: ${sortedDates.length} dates (${errors} errors)`);
 
-    // Spot-check: 3 sample dates so values can be visually verified
+    // Spot-check: 3 sample dates for visual sanity check
     const spots = [
       sortedDates[0],
       sortedDates[Math.floor(sortedDates.length / 2)],
       sortedDates[sortedDates.length - 1],
     ].filter(Boolean);
+    const [minExp, maxExp] = ETF_EXPECTED_RANGES[etf] || [0, Infinity];
     for (const d of spots) {
-      log(`  ${etf} sample: ${d} → $${closes[d].toFixed(2)}`);
+      const price = closes[d];
+      const flag  = (price < minExp || price > maxExp)
+        ? ` ⚠ UNEXPECTED (expected $${minExp}–$${maxExp})`
+        : '';
+      log(`  ${etf} sample: ${d} → $${price.toFixed(2)}${flag}`);
+    }
+
+    // Warn if any sampled price is outside expected range
+    const outOfRange = sortedDates.filter(d => closes[d] < minExp || closes[d] > maxExp);
+    if (outOfRange.length > 0) {
+      warn(`  ${etf}: ${outOfRange.length} date(s) outside expected $${minExp}–$${maxExp} range — check source data`);
     }
   }
 
@@ -1654,8 +1724,6 @@ async function runVerify() {
 
   for (const sym of targetSymbols) {
     const dir1m = path.join(FUT_DIR, sym, '1m');
-    const symManifest = readJSON(path.join(FUT_DIR, sym, 'manifest.json'));
-
     if (!fs.existsSync(dir1m)) {
       report.symbols[sym] = { status: 'missing', dates: 0 };
       warn(`  ${sym}: NO DATA`);
