@@ -4,6 +4,44 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v12.8] — 2026-04-04 — Market breadth scoring from 16 CME instruments (Phase V)
+
+### New file: `server/analysis/marketBreadth.js`
+- **`classifyInstrumentRegime(closes)`** — classifies a single instrument from daily close array using two independent signals: 20-bar price position (close vs 20-bar high × 0.95 / low × 1.05) and 10-bar SMA direction (0.05% threshold). Both agree → that direction; one neutral → follow the other; disagree → neutral.
+- **`computeMarketBreadth(getCandles, currentSymbol)`** — live mode; calls getCandles for all 16 symbols on '30m' TF, skips unavailable symbols gracefully.
+- **`computeMarketBreadthHistorical(dailyClosesBySym, sortedDates, date)`** — historical mode; uses pre-loaded daily closes with strict no-lookahead (prior 21 trading days).
+- **Breadth fields computed**: `equityBreadth` / `equityBreadthBearish` (0–4 count of MNQ/MES/M2K/MYM); `bondRegime` (ZN primary, ZB confirmation); `yieldCurve` (steepening/flattening/flat via ZT vs ZN); `copperRegime` (MHG); `dollarRegime` (falling/rising/flat via M6E inverse); `metalsBreadth` / `metalsBreadthBearish` (MGC/SIL/MHG); `fixedIncomeBreadth` (bearish bonds ZT/ZF/ZN/ZB/UB); `btcRegime` (MBT); `riskAppetiteScore` (−20 to +20); `riskAppetite` (on/off/neutral).
+- **Risk appetite formula**: equity ×3 + bond ±2 + copper ±3 + dollar ±1 + bitcoin ±1; labels: on ≥5, off ≤−5, neutral.
+
+### Updated: `server/analysis/marketContext.js`
+- Imports `computeMarketBreadth` from marketBreadth.js
+- `buildMarketContext()` calls `computeMarketBreadth(getCandles, symbol)` after HP/VIX/DXY context; adds `breadth` field to returned context object
+- Wrapped in try/catch — breadth failure never breaks context build
+
+### Updated: `server/analysis/setups.js`
+- **`detectSetups()`**: stamps `setup.symbol = symbol` on all returned setups (required so `applyMarketContext` can classify the instrument category)
+- **`applyMarketContext()`**: converted all `marketContext.hp.xxx` / `.options.xxx` / `.vix.xxx` / `.dxy.xxx` accesses to optional chaining so function works when context only has `breadth` and not HP data
+- **Breadth additive scoring** (additive pts, not multipliers, cap ±15):
+  - Equity setups: equity breadth ±5/6 pts, bond regime ±3/4 pts, copper regime ±4 pts, risk appetite ±3/5 pts
+  - Commodity setups: copper regime ±4 pts, dollar regime ±3 pts, risk appetite ±3/5 pts
+  - MGC/SIL/MHG: metals breadth ±4 pts
+- `contextBreakdown` gains `breadth` (pts after cap) and `breadthDetail` (equityBreadth, bondRegime, copperRegime, riskAppetite)
+
+### Updated: `server/backtest/engine.js`
+- Imports `computeMarketBreadthHistorical` and `ALL_SYMBOLS` from instruments.js
+- **`_loadDailyClosesForSymbol(sym)`**: reads last bar of each daily 1m file → `{ date: close }` map
+- **`_precomputeBreadth(startDate, endDate)`**: loads daily closes for all 16 symbols once, computes `{ date → breadthObject }` for every trading date in range; logged with timing
+- **`_minimalContext()`**: neutral context stub (multiplier=1.0, all bonuses=0) used when HP data unavailable but breadth exists
+- **`runBacktestMTF()`**: calls `_precomputeBreadth` once before main loop; injects `breadth` into `mktCtx` on every bar; passes `symbol` in detectSetups opts
+- **Trade record additions**: `equityBreadth`, `bondRegime`, `copperRegime`, `dollarRegime`, `riskAppetite`, `riskAppetiteScore`
+- **`computeStats()`**: added `byRiskAppetite`, `byBondRegime`, `byCopperRegime`, `byEquityBreadth` breakdowns
+
+### Updated: `public/backtest2.html` + `public/js/backtest2.js`
+- **Market Breadth sub-tab** (Optimize tab): four breakdown tables — by riskAppetite (on/neutral/off), by bondRegime (bullish/bearish/neutral), by copperRegime, by equityBreadth bucket (0–1/2/3–4). Min 10 trades per row.
+- **Inter-market sub-tab** (Optimize tab): equityBreadth (0/1/2/3/4) × riskAppetite (on/neutral/off) WR heatmap. Green ≥60%, amber 45–59%, red <45%, gray n<5.
+
+---
+
 ## [v12.7] — 2026-04-04 — DX/VIX pipeline + backtest engine enrichment (Phase U)
 
 ### Pipeline: DX extraction + parsing (Phase 1b loop 5 + Phase 1d DX block)

@@ -1538,6 +1538,8 @@ function _renderOptimizeTab() {
     case 'regime':        _bt2RenderRegime(); break;
     case 'heatmap':       _bt2RenderHeatmap(); break;
     case 'ddband':        _bt2RenderDDBand(); break;
+    case 'breadth':       _bt2RenderBreadth(); break;
+    case 'intermarket':   _bt2RenderIntermarket(); break;
     case 'notifications': _bt2RenderNotifications(); break;
   }
 }
@@ -2303,4 +2305,183 @@ function _optAssessBadge(wr, pf) {
   if (wr >= 50 && pf >= 1.0) return '<span class="opt-badge-amber">marginal</span>';
   if (pf < 1.0 && wr > 0)    return '<span class="opt-badge-red">noise zone</span>';
   return '<span class="opt-badge-gray">insufficient data</span>';
+}
+
+// ── Market Breadth sub-tab ────────────────────────────────────────────────────
+function _bt2RenderBreadth() {
+  const panel = document.getElementById('bt2-opt-panel-breadth');
+  if (!panel) return;
+
+  const allTrades = (_currentResults?.trades || []);
+  const trades = allTrades.filter(t => {
+    if (_bt2OptSetupType !== 'all' && t.setupType !== _bt2OptSetupType) return false;
+    if (_bt2OptSymbol    !== 'all' && t.symbol    !== _bt2OptSymbol)    return false;
+    return true;
+  });
+
+  const withBreadth = trades.filter(t => t.riskAppetite != null);
+  if (withBreadth.length < 10) {
+    panel.innerHTML = '<p class="bt2-opt-note">No market breadth data in this run. Re-run with engine v12.8+.</p>';
+    return;
+  }
+
+  // Helper: group trades by a key function, compute WR/PF/netPnl per group
+  function breadthBreakdown(keyFn) {
+    const groups = {};
+    for (const t of withBreadth) {
+      const k = keyFn(t);
+      if (k === 'unknown' || k == null) continue;
+      if (!groups[k]) groups[k] = { wins: 0, total: 0, pnl: 0 };
+      groups[k].total++;
+      if (t.outcome === 'won') groups[k].wins++;
+      groups[k].pnl += t.netPnl ?? 0;
+    }
+    return groups;
+  }
+
+  function groupTableRows(groups, ordered, labels) {
+    return ordered.filter(k => groups[k] && groups[k].total >= 10).map(k => {
+      const g  = groups[k];
+      const wr = (g.wins / g.total * 100).toFixed(1);
+      const pf = g.pnl > 0 && (g.total - g.wins) > 0
+        ? (g.wins / (g.total - g.wins)).toFixed(2) : g.pnl > 0 ? '∞' : '—';
+      const pnlCls = g.pnl >= 0 ? 'positive' : 'negative';
+      const wrCls  = parseFloat(wr) >= 55 ? 'positive' : parseFloat(wr) < 40 ? 'negative' : '';
+      return `<tr>
+        <td>${labels[k] ?? k}</td>
+        <td>${g.total}</td>
+        <td class="${wrCls}">${wr}%</td>
+        <td>${pf}</td>
+        <td class="${pnlCls}">${g.pnl >= 0 ? '+' : ''}$${fmtNum(g.pnl)}</td>
+      </tr>`;
+    }).join('') || '<tr><td colspan="5" style="color:var(--muted)">No groups with ≥10 trades</td></tr>';
+  }
+
+  const thead = '<thead><tr><th>Condition</th><th>Trades</th><th>WR</th><th>PF</th><th>Net P&L</th></tr></thead>';
+
+  // Risk appetite
+  const raGroups = breadthBreakdown(t => t.riskAppetite);
+  const raRows   = groupTableRows(raGroups, ['on', 'neutral', 'off'],
+    { on: 'Risk-On', neutral: 'Neutral', off: 'Risk-Off' });
+
+  // Bond regime
+  const bondGroups = breadthBreakdown(t => t.bondRegime);
+  const bondRows   = groupTableRows(bondGroups, ['bullish', 'neutral', 'bearish'],
+    { bullish: 'Bullish (yields ↓)', neutral: 'Neutral', bearish: 'Bearish (yields ↑)' });
+
+  // Copper regime
+  const cuGroups = breadthBreakdown(t => t.copperRegime);
+  const cuRows   = groupTableRows(cuGroups, ['bullish', 'neutral', 'bearish'],
+    { bullish: 'Bullish (growth)', neutral: 'Neutral', bearish: 'Bearish' });
+
+  // Equity breadth bucket
+  const ebGroups = breadthBreakdown(t => {
+    const eb = t.equityBreadth;
+    if (eb == null) return null;
+    if (eb <= 1) return '0-1';
+    if (eb === 2) return '2';
+    return '3-4';
+  });
+  const ebRows = groupTableRows(ebGroups, ['0-1', '2', '3-4'],
+    { '0-1': '0–1 bullish (weak)', '2': '2 bullish (mixed)', '3-4': '3–4 bullish (broad)' });
+
+  panel.innerHTML = `
+    <p class="bt2-opt-note">
+      Market breadth at time of trade entry (prior-day closes, no lookahead).
+      ${trades.length - withBreadth.length} trades excluded (no breadth data). Min 10 trades per row.
+    </p>
+
+    <div class="bt2-section-label" style="margin:12px 0 6px">By Risk Appetite</div>
+    <table class="bt2-breakdown-table">${thead}<tbody>${raRows}</tbody></table>
+
+    <div class="bt2-section-label" style="margin:14px 0 6px">By Bond Regime (ZN price direction)</div>
+    <table class="bt2-breakdown-table">${thead}<tbody>${bondRows}</tbody></table>
+
+    <div class="bt2-section-label" style="margin:14px 0 6px">By Copper Regime (MHG — growth proxy)</div>
+    <table class="bt2-breakdown-table">${thead}<tbody>${cuRows}</tbody></table>
+
+    <div class="bt2-section-label" style="margin:14px 0 6px">By Equity Breadth (# of 4 indices bullish)</div>
+    <table class="bt2-breakdown-table">${thead}<tbody>${ebRows}</tbody></table>
+  `;
+}
+
+// ── Inter-market heatmap sub-tab ──────────────────────────────────────────────
+function _bt2RenderIntermarket() {
+  const panel = document.getElementById('bt2-opt-panel-intermarket');
+  if (!panel) return;
+
+  const allTrades = (_currentResults?.trades || []);
+  const trades = allTrades.filter(t => {
+    if (_bt2OptSetupType !== 'all' && t.setupType !== _bt2OptSetupType) return false;
+    if (_bt2OptSymbol    !== 'all' && t.symbol    !== _bt2OptSymbol)    return false;
+    return true;
+  });
+
+  const withBreadth = trades.filter(t => t.riskAppetite != null && t.equityBreadth != null);
+  if (withBreadth.length < 10) {
+    panel.innerHTML = '<p class="bt2-opt-note">No market breadth data in this run. Re-run with engine v12.8+.</p>';
+    return;
+  }
+
+  // Build heatmap: equityBreadth (0/1/2/3/4) × riskAppetite (on/neutral/off)
+  const EB_VALUES  = [0, 1, 2, 3, 4];
+  const RA_KEYS    = ['on', 'neutral', 'off'];
+  const RA_LABELS  = { on: 'Risk-On', neutral: 'Neutral', off: 'Risk-Off' };
+
+  // Accumulate cells
+  const cells = {};
+  for (const t of withBreadth) {
+    const eb = t.equityBreadth;
+    const ra = t.riskAppetite;
+    if (eb == null || ra == null) continue;
+    const key = `${eb}|${ra}`;
+    if (!cells[key]) cells[key] = { wins: 0, total: 0 };
+    cells[key].total++;
+    if (t.outcome === 'won') cells[key].wins++;
+  }
+
+  // Build table header
+  let headerRow = '<tr><th>EquityBreadth \\ RiskAppetite</th>';
+  for (const ra of RA_KEYS) headerRow += `<th>${RA_LABELS[ra]}</th>`;
+  headerRow += '</tr>';
+
+  // Build table rows
+  let rows = '';
+  for (const eb of EB_VALUES) {
+    rows += `<tr><td style="font-weight:600">${eb} bullish</td>`;
+    for (const ra of RA_KEYS) {
+      const key = `${eb}|${ra}`;
+      const cell = cells[key];
+      if (!cell || cell.total < 5) {
+        rows += '<td style="color:var(--muted);text-align:center">—</td>';
+        continue;
+      }
+      const wr = cell.wins / cell.total;
+      const wrPct = (wr * 100).toFixed(0);
+      const bg = wr >= 0.60 ? 'rgba(16,185,129,0.25)'
+               : wr >= 0.45 ? 'rgba(245,158,11,0.20)'
+               :               'rgba(239,68,68,0.20)';
+      const color = wr >= 0.60 ? '#10b981' : wr >= 0.45 ? '#f59e0b' : '#ef4444';
+      rows += `<td style="text-align:center;background:${bg}">
+        <span style="color:${color};font-weight:600">${wrPct}%</span>
+        <span style="color:var(--muted);font-size:10px;display:block">n=${cell.total}</span>
+      </td>`;
+    }
+    rows += '</tr>';
+  }
+
+  panel.innerHTML = `
+    <p class="bt2-opt-note">
+      Win rate by equity breadth × risk appetite. Reveals which macro combinations are most predictive.
+      Green ≥60%, amber 45–59%, red &lt;45%. Gray cells have &lt;5 trades.
+    </p>
+    <table class="bt2-breakdown-table" style="min-width:420px">
+      <thead>${headerRow}</thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <p class="bt2-opt-note" style="margin-top:10px">
+      <strong>Reading guide:</strong> High equity breadth + risk-on → strongest tailwind for bullish setups.
+      Low breadth + risk-off → strongest tailwind for bearish setups.
+    </p>
+  `;
 }

@@ -25,6 +25,7 @@
 | S | v12.5 | Backtest dedup fix — zone_rejection zone-level bucket key (0.25 ATR), 60-min per-direction cooldown cross-TF shared at symbol scope; A5 full-period run |
 | T | v12.6 | A5 isolation runs — or_breakout@65: Net +$262K, PF 1.86, 5m-only, MNQ leads; zone_rejection@80: Net -$204K, raising conf doesn't fix R:R mismatch; recommended config: or_breakout+pdh_breakout |
 | U | v12.7 | DX/VIX pipeline — Phase 1b loop 5 (DX zips → raw/DX/), Phase 1d DX block (dxy.json 2251 dates), historicalVolatility.js + Phase 1g (vix.json 1767 dates, March 2020=80.5%), engine enrichment (vixRegime/vixLevel/dxyDirection/dxyClose on trades, byVixRegime/byDxyDirection stats), zone_rejection disabled default, OR breakout 5m-only guard. Final A5: Net +$233K PF 1.69 |
+| V | v12.8 | Market breadth scoring — marketBreadth.js (16 CME instruments, classifyInstrumentRegime, riskAppetite composite), breadth in applyMarketContext (±15 pts cap), trade record breadth fields, Optimize tab Market Breadth + Inter-market sub-tabs |
 
 ---
 
@@ -351,11 +352,66 @@ Update via `POST /api/settings/span` or the SPAN Margins panel in the dashboard 
 
 ---
 
+## Market Breadth System — Phase V (v12.8)
+
+### File: `server/analysis/marketBreadth.js`
+16-instrument cross-market regime scoring. Called once per scan cycle (live) and pre-computed once per trading date (backtest).
+
+**16 CME symbols used:**
+- Equity indices: MNQ, MES, M2K, MYM
+- Metals: MGC, SIL, MHG (copper)
+- Energy: MCL
+- FX: M6E (EUR/USD — inverse USD proxy), M6B
+- Fixed income: ZT, ZF, ZN, ZB, UB
+- Crypto futures: MBT
+
+**Regime classifier** (`classifyInstrumentRegime(closes)`): 20-bar price position (vs 20-bar high × 0.95 / low × 1.05) combined with 10-bar SMA direction (0.05% threshold). Both agree → direction; one neutral → follow the other; disagree → neutral.
+
+**Risk appetite composite score formula** (−20 to +20):
+```
+score += equityBreadth  × 3   // +0 to +12
+score -= equityBearish  × 3   // −12 to 0
+if bondRegime == 'bearish': score += 2  // yields rising = mild risk-on
+if bondRegime == 'bullish': score -= 2  // flight to safety = risk-off
+if copperRegime == 'bullish': score += 3
+if copperRegime == 'bearish': score -= 3
+if dollarRegime == 'falling': score += 1  // weak USD = commodity/equity tailwind
+if dollarRegime == 'rising':  score -= 1
+if btcRegime == 'bullish':    score += 1
+if btcRegime == 'bearish':    score -= 1
+riskAppetite = score >= 5 ? 'on' : score <= -5 ? 'off' : 'neutral'
+```
+
+**Dollar direction**: M6E (EUR/USD micro) bullish → USD falling; M6E bearish → USD rising.
+**Bond direction**: ZN bullish = bond prices up = yields down = flight to safety (risk-off). ZN bearish = yields rising = mild risk-on.
+**Yield curve**: steepening when ZN more bearish than ZT (10yr yield rising faster than 2yr); flattening when ZT more bearish.
+**Fixed income breadth**: count of bearish bonds (selling = yields rising).
+
+**Breadth additive scoring in applyMarketContext (cap ±15 pts):**
+
+| Category | Condition | Points |
+|---|---|---|
+| Equity setups — breadth alignment | ≥3 bullish indices confirm direction | +6 |
+| Equity setups — breadth against | ≤1 bullish index, going bullish | −5 |
+| Equity setups — bond tailwind | Bond regime confirms direction | ±3/4 |
+| Equity + commodity — copper | Copper confirms direction | ±4 |
+| Commodity — dollar | Dollar falling = commodity tailwind | ±3 |
+| MGC/SIL/MHG — metals breadth | ≥2 of 3 metals bullish | ±4 |
+| All symbols — risk appetite | on/off vs setup direction | ±3/5 |
+
+**Backtest integration:**
+- `_precomputeBreadth(startDate, endDate)`: loads daily closes for all 16 symbols once at job start, computes per-date breadth using prior 21 trading days (no lookahead).
+- Trade fields: `equityBreadth`, `bondRegime`, `copperRegime`, `dollarRegime`, `riskAppetite`, `riskAppetiteScore`
+- Stats breakdowns: `byRiskAppetite`, `byBondRegime`, `byCopperRegime`, `byEquityBreadth`
+
+---
+
 ## Backtest System (v10.x / v11.0) — Phase L/M/N
 
 ### Engine (`server/backtest/engine.js`)
 - `runBacktestMTF()` — bar-by-bar replay, no lookahead, current-bar filter, OR dedup per session/direction
-- Trade object fields: `symbol`, `date`, `timeframe`, `setupType`, `direction`, `entryTs`, `entry`, `sl`, `tp`, `confidence`, `outcome`, `exitTs`, `exitPrice`, `netPnl`, `grossPnl`, `hour` (ET), `hpProximity`, `resilienceLabel`, `dexBias`, `ddBandLabel`, `ddBandScore`
+- Trade object fields: `symbol`, `date`, `timeframe`, `setupType`, `direction`, `entryTs`, `entry`, `sl`, `tp`, `confidence`, `outcome`, `exitTs`, `exitPrice`, `netPnl`, `grossPnl`, `hour` (ET), `hpProximity`, `resilienceLabel`, `dexBias`, `ddBandLabel`, `ddBandScore`, `vixRegime`, `vixLevel`, `dxyDirection`, `dxyClose`
+- **Breadth fields** (v12.8+): `equityBreadth` (0–4), `bondRegime` (bullish/bearish/neutral), `copperRegime`, `dollarRegime` (rising/falling/flat), `riskAppetite` (on/off/neutral), `riskAppetiteScore` (−20 to +20)
 - **No** `regime`, `nearEvent`, `mtfConfluence`, or `rMultiple` on trade objects (applied upstream)
 - `excludeHours` config: array of ET hours (0–23) to skip at entry
 - `spanMargin` config: object keyed by symbol — defaults to settings.json value if not provided

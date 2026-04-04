@@ -19,7 +19,8 @@ const { computeIndicators, computeDDBands }  = require('../analysis/indicators')
 const { classifyRegime }     = require('../analysis/regime');
 const { detectSetups }       = require('../analysis/setups');
 const { buildMarketContext } = require('../analysis/marketContext');
-const { POINT_VALUE, HP_PROXY } = require('../data/instruments');
+const { POINT_VALUE, HP_PROXY, ALL_SYMBOLS } = require('../data/instruments');
+const { computeMarketBreadthHistorical } = require('../analysis/marketBreadth');
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -72,6 +73,80 @@ function computeDxyDirection(dxyData, date) {
   if (today > avg * 1.001) return 'rising';
   if (today < avg * 0.999) return 'falling';
   return 'flat';
+}
+
+// ─── Market breadth helpers ───────────────────────────────────────────────────
+
+/**
+ * Load the last-close price for every available date for a single symbol.
+ * Reads the last bar of each daily 1m file — one file read per date.
+ * Returns { 'YYYY-MM-DD': close, ... }
+ */
+function _loadDailyClosesForSymbol(sym) {
+  const dir = path.join(DATA_DIR, 'futures', sym, '1m');
+  if (!fs.existsSync(dir)) return {};
+  const closes = {};
+  const files = fs.readdirSync(dir)
+    .filter(f => f.endsWith('.json'))
+    .sort();
+  for (const f of files) {
+    const date = f.replace('.json', '');
+    const bars = readJSON(path.join(dir, f)) || [];
+    if (bars.length > 0) {
+      const last = bars[bars.length - 1];
+      const close = last.close ?? last.c ?? 0;
+      if (close > 0) closes[date] = close;
+    }
+  }
+  return closes;
+}
+
+/**
+ * Pre-compute market breadth for every trading date in the backtest range.
+ * Loads daily closes once per symbol across all available dates, then
+ * classifies breadth for each date using prior 21 trading days (no lookahead).
+ *
+ * Returns { 'YYYY-MM-DD': breadthObject } covering startDate→endDate.
+ * Dates with insufficient warmup data return null in the map.
+ */
+function _precomputeBreadth(startDate, endDate) {
+  console.log('[BT-MTF] Precomputing market breadth for 16 symbols…');
+  const t0 = Date.now();
+
+  // Load daily closes for all 16 CME symbols
+  const dailyClosesBySym = {};
+  for (const sym of ALL_SYMBOLS) {
+    dailyClosesBySym[sym] = _loadDailyClosesForSymbol(sym);
+  }
+
+  // Collect all trading dates across all symbols (for proper sorted-date index)
+  const allDates = new Set();
+  for (const closes of Object.values(dailyClosesBySym)) {
+    for (const d of Object.keys(closes)) allDates.add(d);
+  }
+  const sortedDates = [...allDates].sort();
+
+  // Compute breadth for each date in the backtest range
+  const breadthByDate = {};
+  const targetDates = sortedDates.filter(d => d >= startDate && d <= endDate);
+  for (const date of targetDates) {
+    breadthByDate[date] = computeMarketBreadthHistorical(dailyClosesBySym, sortedDates, date);
+  }
+
+  const nonNull = Object.values(breadthByDate).filter(Boolean).length;
+  console.log(`[BT-MTF] Breadth: ${nonNull}/${targetDates.length} dates populated (${Date.now() - t0}ms)`);
+  return breadthByDate;
+}
+
+/** Build a minimal neutral market context (used when HP unavailable but breadth is). */
+function _minimalContext() {
+  return {
+    hp:      { multiplier: 1.0, inCorridor: false, nearestLevel: null,
+               pressureDirection: 'neutral', freshnessDecayPts: 0 },
+    options: { dexScore: 0, dexBias: 'neutral', resilienceLabel: 'neutral' },
+    vix:     { regime: 'normal', direction: 'flat', stressFlag: false },
+    dxy:     { direction: 'flat', alignmentBonusLong: 0, alignmentBonusShort: 0, applicable: false },
+  };
 }
 
 /** Load bars for a symbol+date+timeframe. Normalizes ts→time for indicators.js. */
@@ -364,6 +439,17 @@ function computeStats(trades, equity) {
     byResilienceLabel: breakdown(t => t.resilienceLabel ?? 'unknown'),
     byVixRegime:     breakdown(t => t.vixRegime ?? 'unknown'),
     byDxyDirection:  breakdown(t => t.dxyDirection ?? 'unknown'),
+    // Market breadth breakdowns
+    byRiskAppetite:  breakdown(t => t.riskAppetite  ?? 'unknown'),
+    byBondRegime:    breakdown(t => t.bondRegime     ?? 'unknown'),
+    byCopperRegime:  breakdown(t => t.copperRegime   ?? 'unknown'),
+    byEquityBreadth: breakdown(t => {
+      const eb = t.equityBreadth;
+      if (eb == null) return 'unknown';
+      if (eb <= 1) return '0-1';
+      if (eb === 2) return '2';
+      return '3-4';
+    }),
   };
 }
 
@@ -597,6 +683,9 @@ async function runBacktestMTF(config) {
   if (Object.keys(vixData).length > 0) console.log(`[BT-MTF] Loaded vix.json: ${Object.keys(vixData).length} dates`);
   if (Object.keys(dxyData).length > 0) console.log(`[BT-MTF] Loaded dxy.json: ${Object.keys(dxyData).length} dates`);
 
+  // Pre-compute market breadth for all dates — uses 16-symbol daily closes (no lookahead)
+  const breadthByDate = _precomputeBreadth(startDate, endDate);
+
   // Per-symbol: track exit timestamp of last trade (1-trade-at-a-time across all TFs)
   const lastExitTs = {};
   for (const sym of symbols) lastExitTs[sym] = 0;
@@ -671,14 +760,22 @@ async function runBacktestMTF(config) {
           try { regime = classifyRegime(indicators); } catch { continue; }
 
           const currentPrice = visibleBars[visibleBars.length - 1]?.close ?? 0;
-          const mktCtx = useHP && hp ? buildMarketContextFromHP(hp, { ...indicators, close: currentPrice }) : null;
+          const mktCtxBase = useHP && hp ? buildMarketContextFromHP(hp, { ...indicators, close: currentPrice }) : null;
+
+          // Inject market breadth into context (breadthByDate is pre-computed, no lookahead)
+          const breadth = breadthByDate[date] ?? null;
+          const mktCtx = (mktCtxBase || breadth)
+            ? { ...(mktCtxBase || _minimalContext()), breadth }
+            : null;
 
           // Compute DD Bands from visible bars (no lookahead — same slice seen by indicators)
           const ddBandsHist = computeDDBands(visibleBars, symbol, spanMargin);
 
           let setups;
           try {
-            setups = detectSetups(visibleBars, indicators, regime, { marketContext: mktCtx, ddBands: ddBandsHist });
+            setups = detectSetups(visibleBars, indicators, regime, {
+              symbol, marketContext: mktCtx, ddBands: ddBandsHist,
+            });
           } catch { continue; }
           if (!setups?.length) continue;
 
@@ -775,14 +872,21 @@ async function runBacktestMTF(config) {
               netPnl:         +netPnl.toFixed(2),
               hour:           etHour,
               hpProximity,
-              resilienceLabel: mktCtx?.hp?.resilienceLabel ?? null,
-              dexBias:        mktCtx?.hp?.dexBias ?? null,
+              resilienceLabel: mktCtxBase?.hp?.resilienceLabel ?? null,
+              dexBias:        mktCtxBase?.hp?.dexBias ?? null,
               ddBandLabel:    setup.ddBandLabel || 'no_data',
               ddBandScore:    setup.scoreBreakdown?.ddBand || 0,
               vixRegime,
               vixLevel,
               dxyDirection,
               dxyClose,
+              // Market breadth fields
+              equityBreadth:  breadth?.equityBreadth        ?? null,
+              bondRegime:     breadth?.bondRegime            ?? null,
+              copperRegime:   breadth?.copperRegime          ?? null,
+              dollarRegime:   breadth?.dollarRegime          ?? null,
+              riskAppetite:   breadth?.riskAppetite          ?? null,
+              riskAppetiteScore: breadth?.riskAppetiteScore  ?? null,
             };
 
             alerts.push(trade);

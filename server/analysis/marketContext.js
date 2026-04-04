@@ -1,8 +1,11 @@
 'use strict';
-// Builds market context for a symbol — HP levels, VIX regime, DXY alignment.
+// Builds market context for a symbol — HP levels, VIX regime, DXY alignment,
+// and 16-instrument market breadth scoring.
 // Consumed by applyMarketContext() in setups.js to apply multipliers and
 // additive bonuses on top of the existing BaseScore from setup detection.
 // Pure context builder: all side effects (fetching) are handled via injected getCandles.
+
+const { computeMarketBreadth } = require('./marketBreadth');
 
 // Symbols where DXY alignment is applicable
 const DXY_APPLICABLE = new Set(['MNQ', 'MES', 'MGC', 'MCL']);
@@ -35,7 +38,15 @@ async function buildMarketContext(symbol, indicators, options, getCandles, corrM
   const hpCtx  = _buildHpContext(options, currentPrice, atr);
   const optCtx = _buildOptionsContext(options, vixCtx);
 
-  return { hp: hpCtx, options: optCtx, vix: vixCtx, dxy: dxyCtx };
+  // Market breadth from 16 CME instruments — supplementary, never required
+  let breadth = null;
+  try {
+    breadth = await computeMarketBreadth(getCandles, symbol);
+  } catch (_) {
+    // Breadth unavailable — continue without it
+  }
+
+  return { hp: hpCtx, options: optCtx, vix: vixCtx, dxy: dxyCtx, breadth };
 }
 
 // ---------------------------------------------------------------------------

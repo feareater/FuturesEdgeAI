@@ -143,8 +143,13 @@ function detectSetups(candles, indicators, regime, opts = {}) {
     }
   }
 
+  // Stamp symbol onto every setup so applyMarketContext can classify the instrument.
+  if (symbol) {
+    for (const setup of top) setup.symbol = symbol;
+  }
+
   // Market context scoring: HP multiplier, Resilience × setup-type, VIX × setup-type,
-  // DEX bonus, DXY alignment bonus, freshness decay. Applied after all base scoring.
+  // DEX bonus, DXY alignment bonus, freshness decay, breadth. Applied after all base scoring.
   if (opts.marketContext) {
     for (const setup of top) {
       const { finalScore, contextBreakdown } = applyMarketContext(setup.confidence, setup, opts.marketContext);
@@ -1096,39 +1101,35 @@ function applyMarketContext(baseScore, setup, marketContext) {
   const isBreakout = ['pdh_breakout', 'trendline_break'].includes(setup.type);
   const isBullish  = setup.direction === 'bullish';
 
-  // ── HP multiplier ──────────────────────────────────────────────────────────
-  let hpMult = marketContext.hp.multiplier ?? 1.0;
+  // ── HP multiplier (optional — absent in breadth-only or when HP data unavailable) ──
+  let hpMult = marketContext.hp?.multiplier ?? 1.0;
 
-  // Corridor overrides base distance multiplier
-  if (marketContext.hp.inCorridor) {
+  if (marketContext.hp?.inCorridor) {
     hpMult = isReversal
       ? (marketContext.hp.corridorMultiplierReversal ?? 1.08)
       : (marketContext.hp.corridorMultiplierBreakout ?? 0.88);
-  } else if (marketContext.hp.nearestLevel?.distance_atr <= 0.3) {
-    // At level (≤0.3 ATR): adjust for pressure direction vs setup direction
+  } else if (marketContext.hp?.nearestLevel?.distance_atr <= 0.3) {
     const pd = marketContext.hp.pressureDirection;
     if ((isBullish && pd === 'support') || (!isBullish && pd === 'resistance')) {
-      hpMult = 1.20; // aligned — HP pushes price toward setup direction
+      hpMult = 1.20;
     } else if ((isBullish && pd === 'resistance') || (!isBullish && pd === 'support')) {
-      hpMult = 0.85; // opposing — HP pushes against setup direction
+      hpMult = 0.85;
     }
-    // neutral pd: keep 1.05 from buildMarketContext
   }
 
-  // ── Resilience multiplier (setup-type aware) ───────────────────────────────
-  const rl = marketContext.options.resilienceLabel;
+  // ── Resilience multiplier ──────────────────────────────────────────────────
+  const rl = marketContext.options?.resilienceLabel ?? 'neutral';
   let resilienceMult = 1.0;
   if      (rl === 'resilient') resilienceMult = isReversal ? 1.15 : 0.90;
   else if (rl === 'fragile')   resilienceMult = isReversal ? 0.90 : 1.15;
 
-  // ── VIX multiplier (regime + direction, setup-type aware) ─────────────────
-  const vr = marketContext.vix.regime;
-  const vd = marketContext.vix.direction;
+  // ── VIX multiplier ─────────────────────────────────────────────────────────
+  const vr = marketContext.vix?.regime    ?? 'normal';
+  const vd = marketContext.vix?.direction ?? 'flat';
   let vixMult = 1.0;
   if      (vr === 'low')      vixMult = isBreakout ? 1.10 : 1.00;
   else if (vr === 'elevated') vixMult = isReversal ? 1.10 : 0.90;
   else if (vr === 'crisis')   vixMult = isReversal ? 0.90 : 0.85;
-  // Direction nudge
   if (vd === 'rising')  vixMult += isBreakout ? 0.05 : -0.05;
   if (vd === 'falling') vixMult += isReversal ? 0.05 : -0.05;
 
@@ -1136,44 +1137,110 @@ function applyMarketContext(baseScore, setup, marketContext) {
   let combinedMult = hpMult * resilienceMult * vixMult;
   combinedMult = Math.max(0.80, Math.min(1.30, combinedMult));
 
-  // ── DEX bonus (direction-aware) ────────────────────────────────────────────
-  const dexScore  = marketContext.options.dexScore ?? 0;
-  const dexBias   = marketContext.options.dexBias  ?? 'neutral';
-  const setupDir  = isBullish ? 'bullish' : 'bearish';
-  const absScore  = Math.abs(dexScore);
+  // ── DEX bonus ─────────────────────────────────────────────────────────────
+  const dexScore = marketContext.options?.dexScore ?? 0;
+  const dexBias  = marketContext.options?.dexBias  ?? 'neutral';
+  const setupDir = isBullish ? 'bullish' : 'bearish';
+  const absScore = Math.abs(dexScore);
   let dexBonus = 0;
-  if      (absScore >= 50 && dexBias === setupDir)   dexBonus = +8;
-  else if (absScore >= 50 && dexBias !== 'neutral')  dexBonus = -6;
-  else if (absScore >= 20 && dexBias === setupDir)   dexBonus = +4;
-  else if (absScore >= 20 && dexBias !== 'neutral')  dexBonus = -3;
+  if      (absScore >= 50 && dexBias === setupDir)  dexBonus = +8;
+  else if (absScore >= 50 && dexBias !== 'neutral') dexBonus = -6;
+  else if (absScore >= 20 && dexBias === setupDir)  dexBonus = +4;
+  else if (absScore >= 20 && dexBias !== 'neutral') dexBonus = -3;
 
   // ── DXY alignment bonus ────────────────────────────────────────────────────
   const dxyBonus = isBullish
-    ? (marketContext.dxy.alignmentBonusLong  ?? 0)
-    : (marketContext.dxy.alignmentBonusShort ?? 0);
+    ? (marketContext.dxy?.alignmentBonusLong  ?? 0)
+    : (marketContext.dxy?.alignmentBonusShort ?? 0);
 
-  const freshnessDecay = marketContext.hp.freshnessDecayPts ?? 0;
+  const freshnessDecay = marketContext.hp?.freshnessDecayPts ?? 0;
+
+  // ── Market breadth additive adjustment ────────────────────────────────────
+  let breadthPts = 0;
+  let breadthDetail = null;
+
+  if (marketContext.breadth) {
+    const b          = marketContext.breadth;
+    const sym        = setup.symbol || '';
+    const isBearish  = !isBullish;
+    const isEquity   = ['MNQ', 'MES', 'M2K', 'MYM'].includes(sym);
+    const isCommodity = ['MGC', 'MCL', 'SIL', 'MHG'].includes(sym);
+
+    // Equity breadth (equity setups only)
+    if (isEquity) {
+      if (isBullish && b.equityBreadth >= 3)        breadthPts += 6;
+      if (isBullish && b.equityBreadth <= 1)        breadthPts -= 5;
+      if (isBearish && b.equityBreadthBearish >= 3) breadthPts += 6;
+      if (isBearish && b.equityBreadthBearish <= 1) breadthPts -= 5;
+    }
+
+    // Bond regime (equity setups)
+    if (isEquity) {
+      if (isBullish && b.bondRegime === 'bearish') breadthPts -= 4; // rising yields = headwind
+      if (isBullish && b.bondRegime === 'bullish') breadthPts += 3; // falling yields = tailwind
+      if (isBearish && b.bondRegime === 'bullish') breadthPts += 3; // flight to safety confirms bear
+    }
+
+    // Copper regime (equity + commodity setups)
+    if (isEquity || isCommodity) {
+      if (isBullish && b.copperRegime === 'bullish') breadthPts += 4;
+      if (isBullish && b.copperRegime === 'bearish') breadthPts -= 4;
+      if (isBearish && b.copperRegime === 'bearish') breadthPts += 4;
+    }
+
+    // Dollar regime (commodity setups — inverse relationship)
+    if (isCommodity) {
+      if (isBullish && b.dollarRegime === 'falling') breadthPts += 3; // weak dollar = tailwind
+      if (isBullish && b.dollarRegime === 'rising')  breadthPts -= 3; // strong dollar = headwind
+    }
+
+    // Metals breadth (MGC/SIL/MHG setups)
+    if (['MGC', 'SIL', 'MHG'].includes(sym)) {
+      if (isBullish && b.metalsBreadth >= 2) breadthPts += 4;
+      if (isBullish && b.metalsBreadth === 0) breadthPts -= 4;
+    }
+
+    // Risk appetite composite (all symbols)
+    if (isBullish && b.riskAppetite === 'on')  breadthPts += 3;
+    if (isBullish && b.riskAppetite === 'off') breadthPts -= 5;
+    if (isBearish && b.riskAppetite === 'off') breadthPts += 3;
+    if (isBearish && b.riskAppetite === 'on')  breadthPts -= 5;
+
+    // Cap total breadth adjustment at ±15
+    breadthPts = Math.max(-15, Math.min(15, breadthPts));
+
+    breadthDetail = {
+      equityBreadth: b.equityBreadth,
+      bondRegime:    b.bondRegime,
+      copperRegime:  b.copperRegime,
+      riskAppetite:  b.riskAppetite,
+    };
+  }
 
   // ── Final score ────────────────────────────────────────────────────────────
   const afterMultipliers = baseScore * combinedMult;
   const finalScore = Math.round(
-    Math.max(0, Math.min(100, afterMultipliers + dexBonus + dxyBonus + freshnessDecay))
+    Math.max(0, Math.min(100,
+      afterMultipliers + dexBonus + dxyBonus + freshnessDecay + breadthPts
+    ))
   );
 
   const contextBreakdown = {
     baseScore,
-    hpMultiplier:        +hpMult.toFixed(2),
+    hpMultiplier:         +hpMult.toFixed(2),
     resilienceMultiplier: +resilienceMult.toFixed(2),
     vixMultiplier:        +vixMult.toFixed(2),
     combinedMultiplier:   +combinedMult.toFixed(2),
     dexBonus,
     dxyBonus,
     freshnessDecay,
-    stressFlag:    marketContext.vix.stressFlag ?? false,
-    hpNearest:     marketContext.hp.nearestLevel ?? null,
-    inCorridor:    marketContext.hp.inCorridor   ?? false,
-    vixRegime:     marketContext.vix.regime,
-    dxyDirection:  marketContext.dxy.direction,
+    breadth:       breadthPts,
+    breadthDetail,
+    stressFlag:    marketContext.vix?.stressFlag ?? false,
+    hpNearest:     marketContext.hp?.nearestLevel ?? null,
+    inCorridor:    marketContext.hp?.inCorridor   ?? false,
+    vixRegime:     marketContext.vix?.regime       ?? null,
+    dxyDirection:  marketContext.dxy?.direction    ?? null,
   };
 
   return { finalScore, contextBreakdown };
