@@ -23,6 +23,7 @@
 | Q | v12.2 | OPRA pipeline correctness — fetchETFDailyCloses (Databento ohlcv-1d), Phase 1d rewrite, Phase 1e strike/OI parsing fix, hpCompute.js openInterest compat |
 | R | v12.3 | ETF close pipeline from XNYS.PILLAR ohlcv-1d zips — Phase 1b loop 4, Phase 1d local parser, Phase 1e remove lastKnownPrice fallback, Phase 1f HP complete (~1736/ETF) |
 | S | v12.5 | Backtest dedup fix — zone_rejection zone-level bucket key (0.25 ATR), 60-min per-direction cooldown cross-TF shared at symbol scope; A5 full-period run |
+| T | v12.6 | A5 isolation runs — or_breakout@65: Net +$262K, PF 1.86, 5m-only, MNQ leads; zone_rejection@80: Net -$204K, raising conf doesn't fix R:R mismatch; recommended config: or_breakout+pdh_breakout |
 
 ---
 

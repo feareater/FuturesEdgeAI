@@ -4,6 +4,40 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v12.6] — 2026-04-04 — A5 isolation backtest runs: or_breakout + zone_rejection@80
+
+### Backtest jobs (config-only, no code changes)
+
+**Job 1 — or_breakout isolation (conf≥65, full period)**
+- 7,577 trades (4.2/day), WR 32.7%, PF 1.86, Gross +$292,773, **Net +$262,465**, MaxDD $2,859
+- AvgWin $146.84, AvgLoss -$87.60, AvgR $38.64
+- OR breakout fires on **5m only** (7,576/7,577 trades): 15m/30m almost never trigger OR breakout
+- By symbol (net): MNQ +$115,051 > MGC +$65,200 > MES +$56,781 > MCL +$25,433
+- By confidence (net): all buckets profitable; 90%+ bucket has WR 45.6% vs 30% at 65-70%
+- **Confirmed real edge**: large avg winner ($147) vs avg loser ($88) = 1.68 R:R; low WR is expected for breakout strategy
+
+**Job 2 — zone_rejection isolation (conf≥80, full period)**
+- 24,118 trades (13.5/day), WR 48.2%, PF 0.643, Gross -$107,338, **Net -$203,810**, MaxDD $108,000
+- AvgWin $16.38, AvgLoss -$24.28, AvgR -$4.45
+- Still fires on **5m only** (24,117/24,118 trades)
+- WR remains ~48% at conf≥80 — raising the floor did NOT fix the WR problem; the avg loser is too large vs avg winner
+- All symbols uniformly negative gross — no symbol is salvageable within zone_rejection
+
+### Combined strategy calculation (from on-file jobs, no new run)
+Combined = or_breakout@65 + zone_rejection@80 + pdh_breakout@65
+- or_breakout@65: net +$231,465 (6,868 trades)
+- zone_rejection@80: net -$203,810 (24,118 trades)
+- pdh_breakout@65: net -$14,742 (2,497 trades)
+- **Combined net: +$12,912 over 7.5 years** — barely profitable; zone_rejection still destroys the or_breakout edge
+
+### Key findings
+1. **or_breakout is a viable standalone strategy**: +$262K net over 7.5 years, PF 1.86, MaxDD only $2.9K, 4.2 trades/day
+2. **zone_rejection is not salvageable at current R:R structure**: at conf≥80 the WR is still 48% but avg loser exceeds avg winner ($24 vs $16) — raising confidence doesn't fix the R:R mismatch
+3. **15m/30m timeframes produce almost zero or_breakout signals**: 5m is entirely responsible for OR breakout edge; 15m/30m can be disabled for this setup
+4. **MNQ drives majority of or_breakout P&L** (+$115K of $262K net); MGC/MES contribute meaningfully; MCL is lowest contributor
+
+---
+
 ## [v12.5] — 2026-04-04 — Backtest zone_rejection dedup fix + full A5 run
 
 ### Backtest engine: zone_rejection dedup overhaul (`server/backtest/engine.js`)
