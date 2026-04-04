@@ -4,6 +4,37 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v12.4] — 2026-04-04 — Full Pipeline Complete: Phase 1e/1f + ETF close fixes (Phase R)
+
+### Phase 1b: XNYS.PILLAR ETF close extraction (`server/data/historicalPipeline.js`)
+- Loop 3 (OPRA ohlcv-1d) now also validates `dataset=OPRA.PILLAR`; rejects XNYS.PILLAR zips with a clear warning directing Jeff to use `Historical_data/ETF_closes/`
+- Loop 4 (new): scans `Historical_data/ETF_closes/` for XNYS.PILLAR ohlcv-1d zips; verifies both `dataset=XNYS.PILLAR` and `schema=ohlcv-1d`; derives ticker from `metadata.json query.symbols[0]` (strips suffix); extracts to `raw/ETF_closes/{ticker}/`; skip-if-exists per file
+
+### Phase 1d: rewritten — XNYS.PILLAR local file parser (`server/data/historicalPipeline.js`)
+- Reads `raw/ETF_closes/{ticker}/` (written by Phase 1b loop 4); no Databento API dependency
+- Auto-detects price format: `parseFloat(close) > 100000` → fixed-point ÷ 1e9, else plain decimal
+- Per-ETF expected price range sanity check with `⚠ UNEXPECTED` flag and warn count on out-of-range values
+- Expected ranges updated to 2018–2026+ actuals: QQQ $50–$700, SPY $100–$750, GLD $100–$500, SLV $10–$100, USO $5–$200, IWM $70–$300
+- Run result: 1740 dates per ETF, 0 errors; 2019-04-12→2019-11-18 gap is a data gap in purchased XNYS data (expected)
+
+### Phase 1e: remove lastKnownPrice fallback (`server/data/historicalPipeline.js`)
+- Removed `lastKnownPrice` map and all seeding/update logic — was propagating a wrong/stale price for dates with no ETF close (e.g. seeding from 2026 price and applying it to 2013 OPRA data)
+- Now: when `etfCloses[etf][date]` is null/undefined, logs `[WARN] Phase 1e: {etf} {date}: no ETF close available — skipping` and continues to next date
+- Skip-if-exists simplified: no longer reads existing output file to accumulate `underlyingPrice` back into map
+- Run result: 10,427 option chain files written (1738/ETF); 9,198 dates correctly skipped (pre-2018-09-24 + 2019 gap); 0 errors
+
+### Phase 1f: HP computation complete
+- No code changes required — Phase 1f was already writing to the correct path (`options/{etf}/computed/{date}.json`); engine reads from same path
+- HP snapshot path confirmed: `data/historical/options/{etf}/computed/YYYY-MM-DD.json` (NOT a top-level `computed/` dir — docs corrected)
+- Run result: ~1736 HP snapshots per ETF (QQQ/SPY/GLD/IWM/SLV: 1736, USO: 1733); date range 2018-09-24 → 2026-04-01; fields: `etfClose`, `futuresClose`, `atmIV`, `totalGex`, `dexBias`, `resilienceLabel`, `scaledMaxPain`, `scaledOiWalls`, `scaledGexFlip`, `computedAt`
+- Removed unused `sleep()` helper and stale `symManifest` read in verify phase
+
+### Docs
+- CONTEXT_SUPPLEMENT.md: corrected output structure — `options/{etf}/computed/` not `computed/{etf}/`; added note explaining HP path matches engine read path
+- CLAUDE.md: added Phase R (v12.3) row to build phases table
+
+---
+
 ## [v12.3] — 2026-04-03 — ohlcv-1d ETF Close Extraction (Phase 1b/1d local files)
 
 ### Phase 1b: ohlcv-1d zip detection and extraction (`server/data/historicalPipeline.js`)

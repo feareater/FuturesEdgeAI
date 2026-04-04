@@ -427,15 +427,18 @@ Additional flags: `--symbol MNQ` (1c only), `--from-date YYYY-MM-DD`, `--recompu
 **Output structure:**
 ```
 data/historical/
-  manifest.json              ← zip inventory (Phase 1a)
-  errors.log                 ← per-date errors (non-fatal)
-  etf_closes.json            ← unified ETF close prices (Phase 1d)
-  raw/GLBX/{SYMBOL}/         ← per-symbol extracted .csv.zst files (Phase 1b)
-  raw/OPRA/{etf}/            ← extracted OPRA .csv.zst files (Phase 1b)
-  futures/{SYMBOL}/          ← per-date OHLCV JSON files (Phase 1c)
-  options/{etf}/             ← per-date option chain files (Phase 1e)
-  computed/{etf}/            ← per-date HP snapshot files (Phase 1f)
+  manifest.json                    ← zip inventory (Phase 1a)
+  errors.log                       ← per-date errors (non-fatal)
+  etf_closes.json                  ← unified ETF close prices (Phase 1d)
+  raw/GLBX/{SYMBOL}/               ← per-symbol extracted .csv.zst files (Phase 1b)
+  raw/OPRA/{etf}/                  ← extracted OPRA .csv.zst files (Phase 1b)
+  raw/ETF_closes/{etf}/            ← extracted XNYS.PILLAR ohlcv-1d files (Phase 1b)
+  futures/{SYMBOL}/                ← per-date OHLCV JSON files (Phase 1c)
+  options/{etf}/                   ← per-date option chain files (Phase 1e)
+  options/{etf}/computed/          ← per-date HP snapshot files (Phase 1f)  ← NOTE: inside options/{etf}/, not a top-level computed/ dir
 ```
+
+**Note on HP computed path:** HP snapshots are written to `options/{etf}/computed/{date}.json` (inside the options directory, not a separate top-level `computed/`). The backtest engine reads from `path.join(DATA_DIR, 'options', proxy, 'computed', date + '.json')` — same path.
 
 ### Streaming zip extraction
 `unzipper` replaces `adm-zip` — supports >2 GiB archives (QQQ OPRA zip is 3.3 GB). `adm-zip` uses `fs.readFileSync` on the whole archive which hits Node's 2 GiB buffer limit.
