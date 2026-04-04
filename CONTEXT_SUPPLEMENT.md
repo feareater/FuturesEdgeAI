@@ -435,6 +435,32 @@ riskAppetite = score >= 5 ? 'on' : score <= -5 ? 'off' : 'neutral'
 
 ---
 
+## A5 Backtest Findings — Active Setup Configuration
+
+**Validated configuration (as of 2026-04-04):**
+- Active setups: `or_breakout`, `pdh_breakout` only
+- `zone_rejection` disabled — R:R structurally inverted at all confidence levels (AvgWin $16 vs AvgLoss $24 at conf≥80). Not salvageable by confidence filter.
+- OR breakout: 5m only — 15m/30m produce <1% of OR breakout signals
+- Min confidence: 65%
+
+**Final A5 results (or_breakout + pdh_breakout, VIX+DXY active, 2018-09-24 → 2026-04-01):**
+- 9,679 trades (5.4/day), WR 37.3%, PF 1.69, Net +$233,540, MaxDD $3,208
+- or_breakout alone: Net +$248K, PF 1.86, AvgWin $147, AvgLoss $88
+- pdh_breakout alone: Net -$14.6K (marginal, not harmful)
+- VIX regime: edge holds across all regimes (strongest in normal: +$110K net)
+- DXY direction: no meaningful filter signal (rising +$103K, falling +$97K)
+
+**By symbol (or_breakout net):**
+- MNQ: +$115K (44% of total)
+- MGC: +$65K
+- MES: +$57K
+- MCL: +$25K
+
+**Key structural finding:**
+zone_rejection R:R is inverted because Supply/Demand zones in the backtest attract price repeatedly — the zone gets tested, rejected, retested, and eventually broken. Each rejection fires a signal but the average loss on failed rejections exceeds the average win on successful ones. The setup needs fundamental redesign (tighter SL, zone quality filter, or different TP structure) before it can be re-enabled.
+
+---
+
 ## Historical Pipeline — Phase P (v12.1)
 
 ### instruments.js — `server/data/instruments.js`

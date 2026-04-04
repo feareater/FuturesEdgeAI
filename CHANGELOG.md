@@ -40,6 +40,13 @@ All notable changes to this project are documented here, newest first.
 - **Market Breadth sub-tab** (Optimize tab): four breakdown tables — by riskAppetite (on/neutral/off), by bondRegime (bullish/bearish/neutral), by copperRegime, by equityBreadth bucket (0–1/2/3–4). Min 10 trades per row.
 - **Inter-market sub-tab** (Optimize tab): equityBreadth (0/1/2/3/4) × riskAppetite (on/neutral/off) WR heatmap. Green ≥60%, amber 45–59%, red <45%, gray n<5.
 
+### New file: `AI_ROADMAP.md`
+- Documents the full AI/ML enhancement roadmap: Phase 1 (Claude batch analysis of trade records), Phase 2 (loss analysis), Phase 3 (decision tree `mlScoring.js`), Phase 4 (pattern discovery)
+- Alert commentary re-enable plan (already built in `commentary.js`, currently dormant)
+- Prerequisites checklist — Phase V breadth fields complete; B5 + 500 forward-test trades remaining
+- Key principles: AI nudges (±15%), interpretability over accuracy, n≥30 minimum, loss analysis first
+- Deferred decisions documented: local LLM, neural nets, AI signal generation
+
 ---
 
 ## [v12.7] — 2026-04-04 — DX/VIX pipeline + backtest engine enrichment (Phase U)

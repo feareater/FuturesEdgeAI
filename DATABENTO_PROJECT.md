@@ -531,6 +531,4 @@ Merge each feature branch to main only after its acceptance criteria are met and
 ---
 
 *Last updated: 2026-04-04*
-*B1–B4 complete. A1–A5 complete. Full historical pipeline (1b→1c→1d→1e→1f) has run successfully: 16 CME symbols processed (Phase 1c), ETF closes from XNYS.PILLAR zips (Phase 1d, 1740 dates/ETF, 2018–2026), 10,427 OPRA option chain files (Phase 1e, skipping pre-2018 dates with no ETF close), ~1736 HP snapshots per ETF (Phase 1f, options/{etf}/computed/). A5 final validation complete: Net +$233K, PF 1.69, or_breakout+pdh config.*
-
-*All 16 GLBX symbols (MNQ, MES, M2K, MYM, MGC, SIL, MHG, MCL, M6E, M6B, ZT, ZF, ZN, ZB, UB, MBT) are now fully active in the analysis engine — daily closes are used by `_precomputeBreadth()` in engine.js for market breadth scoring on every backtest trade. Next: B5 (forward-test harness); C (live vs backtest validation).*
+*A1–A5 complete. Full pipeline (1b→1g) operational. Final A5: Net +$233K, PF 1.69, or_breakout+pdh_breakout only, zone_rejection disabled. Market breadth scoring (marketBreadth.js, 16 instruments) in progress as Phase V. Next: B5 (forward-test harness). C (validation) requires B5 + 30 days live data.*
