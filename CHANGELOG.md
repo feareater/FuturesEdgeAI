@@ -18,7 +18,11 @@ All notable changes to this project are documented here, newest first.
   - `zone_rejection`: 3,928 trades (15.6/day), WR 47.3%, gross -$22,781
   - `or_breakout`: 1,031 trades (4.1/day), WR 32.2%, gross +$53,524
   - `pdh_breakout`: 427 trades (1.7/day), WR 49.4%, gross -$1,411
-- Full-period (2018-09-24 → 2026-04-01) results pending
+- Full-period (2018-09-24 → 2026-04-01): 34,807 trades, WR 45.1%, PF 1.05, Gross +$136,591, Net -$2,637 (fees $139,228)
+  - `or_breakout` sole gross-profitable setup: +$258,937 gross, 3.8/day, 32.4% WR (large avg winners)
+  - `zone_rejection` gross loser: -$117,591, 14.2/day, 48.0% WR
+  - `pdh_breakout`: -$4,754, 1.4/day, 51.1% WR
+  - Pre-fix comparison: zone_rejection 34,122→25,442 (-25%); total 43,735→34,807 (-21%); net P&L -$96K→-$2.6K
 
 ---
 

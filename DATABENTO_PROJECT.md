@@ -30,7 +30,7 @@ These tracks are fully parallel — they touch different files and have zero cod
 | A2 | Historical | Rewrite pipeline for 16 symbols, 13yr scale, instruments.js | ✅ **Done** | instruments.js, pipeline rewrite, per-symbol extraction fix, OPRA parsing correctness, ohlcv-1d local extraction (see A2 notes) |
 | A3 | Historical | Audit front-month roll logic in Phase 1c | ✅ **Done** | Roll audit complete via Phase 1c log evidence: GLBX zips use stype_in=parent (individual contracts), Phase 1c selects front-month by volume per day, 0 lookahead errors confirmed, no phantom gaps. No code fix needed. |
 | A4 | Historical | HP recompute over full date range | ✅ **Done** | Phase 1f complete: ~1736 HP snapshots per ETF (2018-09-24 → 2026-04-01), written to options/{etf}/computed/. USO: 1733, all others: 1736. |
-| A5 | Historical | Full backtest run, validate edge across 12m | 🔵 In progress | Dedup fix (v12.5) deployed; full-period job running. 2022 validation: 5,386 trades, WR 44.6%, PF 1.063, Gross +$29,332. zone_rejection dedup reduced ~42%. Full-period results pending. |
+| A5 | Historical | Full backtest run, validate edge across 12m | ✅ **Done** | Full period (2018-09-24 → 2026-04-01): 34,807 trades, WR 45.1%, PF 1.05, Gross +$136,591, Net -$2,637 (fees $139K). Key finding: or_breakout is the only gross-profitable setup (+$258,937 gross, 3.8/day, 32.4% WR with large average winners); zone_rejection gross loser (-$117,591 at conf≥65). Dedup fix (v12.5) reduced zone_rejection 34K→25K (-25%) vs pre-fix. |
 | C  | Validation | Compare live WR vs backtest WR per setup | ⬜ To do | Depends on A5 + B5 + 30 days live |
 
 **Status key:** ⬜ To do · 🔵 In progress · ✅ Done · 🔴 Blocked · ⏸ Paused
