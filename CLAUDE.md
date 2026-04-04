@@ -272,7 +272,8 @@ Default view (Reset to Default): all layers ON.
 | 10 | Performance analytics page, Alert Replay/Backtest page, sound alerts, RS widget | ✅ Complete |
 | N (v11.0) | DD Band / CME SPAN margin levels — confidence modifier, chart layer, topbar widget, backtest analysis | ✅ Complete |
 | O (v12.0) | Databento live data feed — REST adapter, live gate in snapshot.js, 1m→5m/15m/30m aggregation, event-driven scan | ✅ Complete (B1–B4) |
-| P (v12.1) | Historical pipeline v2 — instruments.js single source of truth, 16 symbols, 13yr scale, streaming zip extraction | ✅ Complete (A2) |
+| P (v12.1) | Historical pipeline v2 — instruments.js, 16 symbols, per-symbol zip extraction (Phase 1b), per-symbol directory scan (Phase 1c), --clean-raw/--force flags, DATABENTO_ROOT_TO_INTERNAL fixes for MGC/SIL/MHG | ✅ Complete (A2) |
+| Q (v12.2) | OPRA pipeline correctness — fetchETFDailyCloses (Databento ohlcv-1d via DBEQ.BASIC), Phase 1d ETF close fetch, Phase 1e strike/OI parsing fix (plain parseFloat, OI-only stats, underlyingPrice from etf_closes.json), hpCompute.js openInterest compat | ✅ Complete |
 
 ---
 

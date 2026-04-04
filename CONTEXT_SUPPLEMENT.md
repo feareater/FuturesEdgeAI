@@ -20,6 +20,7 @@
 | N | v11.0 | DD Band / CME SPAN margin levels — confidence modifier, chart layer, topbar widget, backtest analysis |
 | O | v12.0 | Databento live data feed — REST adapter, live gate, 1m→5m/15m/30m aggregation, event-driven scan (B1–B4) |
 | P | v12.1 | Historical pipeline v2 — instruments.js single source of truth, 16 CME symbols, 13yr scale, streaming zip (A2) |
+| Q | v12.2 | OPRA pipeline correctness — fetchETFDailyCloses (Databento ohlcv-1d), Phase 1d rewrite, Phase 1e strike/OI parsing fix, hpCompute.js openInterest compat |
 
 ---
 
@@ -394,36 +395,46 @@ DATABENTO_ROOT_TO_INTERNAL // { GC:'MGC', SI:'SIL', HG:'MHG', MNQ:'MNQ', ... }
 ```
 
 **Proxy instruments** (Databento dbRoot ≠ internal symbol):
-- `MGC` → Databento `GC.c.0` (Micro Gold proxies full Gold — same price/oz)
-- `SIL` → Databento `SI.c.0` (Micro Silver proxies full Silver)
-- `MHG` → Databento `HG.c.0` (Micro Copper proxies full Copper)
+- `MGC` → Databento continuous `GC.c.0`; individual contracts use `MGC` prefix (`MGCJ6`)
+- `SIL` → Databento continuous `SI.c.0`; individual contracts use `SIL` prefix (`SILH9`)
+- `MHG` → Databento continuous `HG.c.0`; individual contracts use `MHG` prefix (`MHGN2`)
+- `DATABENTO_ROOT_TO_INTERNAL` contains both the continuous roots (`GC→MGC`, `SI→SIL`, `HG→MHG`) and explicit individual-contract overrides (`MGC→MGC`, `SIL→SIL`, `MHG→MHG`)
+
+**Downloaded zip format:** Each GLBX zip covers one symbol, uses `stype_in=parent`, so CSV rows contain individual contract tickers (`MNQM9`, `MGCJ6`). `metadata.json` inside each zip has `query.symbols: ["MNQ.FUT"]`.
 
 ### historicalPipeline.js — Phases and CLI
 
 ```bash
 node server/data/historicalPipeline.js --phase 1a   # Inventory zips → manifest.json
-node server/data/historicalPipeline.js --phase 1b   # Extract zips → raw/GLBX/ and raw/OPRA/{etf}/
+node server/data/historicalPipeline.js --phase 1b   # Extract zips → raw/GLBX/{SYMBOL}/ and raw/OPRA/{etf}/
 node server/data/historicalPipeline.js --phase 1c   # Parse CSVs → per-symbol candle files
 node server/data/historicalPipeline.js --phase 1d   # Fetch ETF closes (QQQ/SPY/GLD/SLV/USO/IWM) from Yahoo
 node server/data/historicalPipeline.js --phase 1e   # Parse OPRA chains → per-date contract files
 node server/data/historicalPipeline.js --phase 1f   # Compute HP snapshots (Black-Scholes)
 ```
 
-Additional flags: `--symbol MNQ` (1c only), `--from-date YYYY-MM-DD`, `--recompute`, `--dry-run`, `--verify`
+Additional flags: `--symbol MNQ` (1c only), `--from-date YYYY-MM-DD`, `--recompute`, `--force`, `--clean-raw`, `--dry-run`, `--verify`
 
-**Resumability:** Each phase is fully resumable — skip-if-exists at write time; Phase 1c pre-computes `existingDates` Set per symbol to skip reading/storing already-processed bars.
+- `--force` — Phase 1c: reprocess all dates, bypass skip-if-exists on derived files
+- `--clean-raw` — Delete `raw/GLBX/` tree and all derived `futures/{sym}/` directories before running. Use before first extraction with the per-symbol layout, or to reset completely.
+
+**Resumability:** Each phase is fully resumable — skip-if-exists at write time; Phase 1c pre-computes `existingDates` Set per symbol.
+
+**Phase 1b — per-symbol extraction:** Each GLBX zip is identified via its `metadata.json` (`query.symbols[0]` → strip `.FUT`) and extracted into `raw/GLBX/{SYMBOL}/`. This prevents the filename-collision bug where a flat layout caused all non-first-alphabetical symbols to be silently overwritten.
+
+**Phase 1c — per-symbol scan:** Iterates `raw/GLBX/{SYMBOL}/` for each target symbol; processes one symbol at a time. Bars whose `csvSymbolToInternal()` result doesn't match the directory symbol are discarded (sanity check).
 
 **Output structure:**
 ```
 data/historical/
-  manifest.json          ← zip inventory (Phase 1a)
-  errors.log             ← per-date errors (non-fatal)
-  etf_closes.json        ← unified ETF close prices (Phase 1d)
-  raw/GLBX/              ← extracted .csv.zst files (Phase 1b)
-  raw/OPRA/{etf}/        ← extracted OPRA .csv.zst files (Phase 1b)
-  futures/{SYMBOL}/      ← per-date OHLCV JSON files (Phase 1c)
-  options/{etf}/         ← per-date option chain files (Phase 1e)
-  computed/{etf}/        ← per-date HP snapshot files (Phase 1f)
+  manifest.json              ← zip inventory (Phase 1a)
+  errors.log                 ← per-date errors (non-fatal)
+  etf_closes.json            ← unified ETF close prices (Phase 1d)
+  raw/GLBX/{SYMBOL}/         ← per-symbol extracted .csv.zst files (Phase 1b)
+  raw/OPRA/{etf}/            ← extracted OPRA .csv.zst files (Phase 1b)
+  futures/{SYMBOL}/          ← per-date OHLCV JSON files (Phase 1c)
+  options/{etf}/             ← per-date option chain files (Phase 1e)
+  computed/{etf}/            ← per-date HP snapshot files (Phase 1f)
 ```
 
 ### Streaming zip extraction

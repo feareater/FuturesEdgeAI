@@ -26,9 +26,9 @@ These tracks are fully parallel — they touch different files and have zero cod
 | B3 | Live | 1m → 5m/15m/30m candle aggregation | ✅ **Done** | Window-aligned; partial bars updated in-place |
 | B4 | Live | Event-driven scan on bar close | ✅ **Done** | `runScan({targetSymbols, targetTimeframes})` on each completed window |
 | B5 | Live | Forward-test harness, dedup, push notifications | ⬜ To do | Depends on B4 |
-| A1 | Historical | Purchase + download Databento data (CME + OPRA) | 🔵 **In progress** | Data downloaded; running pipeline phases now |
-| A2 | Historical | Rewrite pipeline for 16 symbols, 13yr scale, instruments.js | ✅ **Done** | instruments.js created; pipeline rewritten; engine.js updated; streaming zip fix |
-| A3 | Historical | Audit front-month roll logic in Phase 1c | ⬜ To do | Do before running A1 pipeline |
+| A1 | Historical | Purchase + download Databento data (CME + OPRA) | ✅ **Done** | 16 single-symbol GLBX zips + OPRA zips downloaded to Historical_data/ |
+| A2 | Historical | Rewrite pipeline for 16 symbols, 13yr scale, instruments.js | ✅ **Done** | instruments.js, pipeline rewrite, per-symbol extraction fix, OPRA parsing correctness, ohlcv-1d local extraction (see A2 notes) |
+| A3 | Historical | Audit front-month roll logic in Phase 1c | ⬜ To do | Do before running 1c at scale |
 | A4 | Historical | HP recompute over full date range | ⬜ To do | Depends on A2 |
 | A5 | Historical | Full backtest run, validate edge across 12m | ⬜ To do | Depends on A4 |
 | C  | Validation | Compare live WR vs backtest WR per setup | ⬜ To do | Depends on A5 + B5 + 30 days live |
@@ -123,24 +123,59 @@ Helper `_mergeWindow(bars, tfSeconds)` handles OHLCV merge; sits alongside exist
 
 **instruments.js** (`server/data/instruments.js`) — new file, single source of truth for all 16 CME symbols and 6 OPRA underlyings. Key fields per symbol: `databento` (`.c.0` ticker), `dbRoot` (for CSV symbol matching), `category`, `pointValue`, `tickSize`, `tickValue`, `optionsProxy`, `rthOnly`, `sessionHours`, `pdh_rr`.
 
-**Proxy instruments** — three CME symbols use a different Databento root:
-- `MGC` → `GC.c.0` (Micro Gold shares price with full Gold contract)
-- `SIL` → `SI.c.0` (Micro Silver shares price with full Silver contract)
-- `MHG` → `HG.c.0` (Micro Copper shares price with full Copper contract)
-- `DATABENTO_ROOT_TO_INTERNAL` map handles this automatically: `GC→MGC`, `SI→SIL`, `HG→MHG`
+**Proxy instruments** — three CME symbols use a different Databento root for continuous contracts, but their individual contracts use the micro-prefix:
+- `MGC` → continuous `GC.c.0`; individual contracts are `MGCJ6`, `MGCM6` etc.
+- `SIL` → continuous `SI.c.0`; individual contracts are `SILH9`, `SILZ6` etc.
+- `MHG` → continuous `HG.c.0`; individual contracts are `MHGN2` etc.
+- `DATABENTO_ROOT_TO_INTERNAL` map covers both: `GC→MGC`, `SI→SIL`, `HG→MHG` (continuous roots) **and** `MGC→MGC`, `SIL→SIL`, `MHG→MHG` (individual contract roots — added as explicit overrides)
+
+**Zip format (confirmed from downloaded data):** Each downloaded GLBX zip contains data for exactly **one** symbol. Files inside use `stype_in=parent` (not `continuous`) so the CSV rows contain individual contract tickers (`MNQM9`, `MGCJ6`, etc.) rather than `.c.0` notation. Each zip's `metadata.json` has `query.symbols: ["MNQ.FUT"]` — this is used by `getGlbxSymbolFromZip()` in Phase 1b to route extraction.
 
 **historicalPipeline.js rewrite** — major changes:
 - Phase CLI: `--phase 1a|1b|1c|1d|1e|1f` — run any single phase
-- Phase 1c: all 16 symbols, pre-computes `existingDates` Set to avoid re-reading already-processed dates (memory-safe at 3,250 trading days × 16 symbols)
-- Phase 1d: all 6 ETFs (QQQ/SPY/GLD/SLV/USO/IWM), unified `etf_closes.json`, 3× retry per date with 2s delay
+- **Phase 1b** — per-symbol subdirectory extraction: each zip extracts to `raw/GLBX/{SYMBOL}/` (not a flat directory). Uses `getGlbxSymbolFromZip()` to read `metadata.json` from inside each zip to determine the symbol before extracting. Eliminates the filename-collision/skip-if-exists bug that caused all non-first-alphabetical symbols to be silently discarded.
+- **Phase 1c** — per-symbol directory scan: reads `raw/GLBX/{SYMBOL}/` for each target symbol; processes one symbol at a time. Progress logged every 500 read files and 200 write dates.
+- **`--clean-raw` flag** — deletes `raw/GLBX/` tree and all derived `futures/{sym}/` directories before running. Required before first extraction with the new per-symbol layout.
+- **`--force` flag** — Phase 1c bypasses skip-if-exists for derived files (reprocesses all dates).
+- Phase 1d: all 6 ETFs (QQQ/SPY/GLD/SLV/USO/IWM), unified `etf_closes.json` via `fetchETFDailyCloses()` from `databento.js` — one call per ETF over full date range using `ohlcv-1d` schema on `DBEQ.BASIC` dataset; incremental (starts from last known date)
 - `csvSymbolToInternal()`: handles both `.c.0` continuous (`MNQ.c.0`) and individual contract (`MNQM6`) CSV formats
 - `aggregateBars()`: window-aligned using `Math.floor(ts/tfSec)*tfSec` — matches live aggregation in snapshot.js
 - `errLog()`: appends to `data/historical/errors.log` (non-fatal per-date errors)
-- `eta()`: progress estimation logged every 100 dates during Phase 1c
 
 **engine.js refactor** — removed hardcoded `POINT_VALUE` and `HP_PROXY` maps; both now imported from `instruments.js`. All backtest symbols now work automatically.
 
 **Streaming zip fix** — `adm-zip` replaced with `unzipper`. The QQQ OPRA zip is 3.3 GB; `adm-zip` hits Node's 2 GiB buffer limit. `unzipper.Open.file()` reads the zip central directory to seek directly to entries without loading the full archive. `adm-zip` removed from `package.json`.
+
+**OPRA Phase 1e correctness notes (confirmed via `--diagnostic`):**
+- OPRA `strike_price` field is already dollar-denominated (`"580.000000000"` = $580) — plain `parseFloat()`, no ÷1e9
+- OPRA statistics files contain only per-option-contract rows — there is NO underlying ETF spot price in any `stat_type`; `stat_type=9` = open interest (quantity field); all other types are per-option prices
+- `parseDefinitionText` returns plain `Map<id → {strike,expiry,type}>`; `parseStatisticsText` returns `{ oiMap }` only
+- Underlying price for Phase 1e comes exclusively from `etf_closes.json` written by Phase 1d
+- Phase 1d must run before Phase 1e; Phase 1e reads `etf_closes.json` at start and uses it for every date
+
+**Phase 1d — ohlcv-1d local file extraction (updated v12.3):**
+
+Phase 1d no longer calls the Databento API. Instead it parses files already extracted by Phase 1b from the ohlcv-1d zips Jeff downloaded and placed in `Historical_data/OPRA/{etf}/`.
+
+Identification: Phase 1b finds any non-OPRA-prefixed zip (e.g. `DBEQ-*`) in each ETF folder and confirms `schema === 'ohlcv-1d'` via `metadata.json` before extracting to `raw/OPRA/{etf}/ohlcv-1d/`. Phase 1d then reads those extracted files.
+
+Price format auto-detected per row: `parseFloat(close) > 100000` → fixed-point integer ÷ 1e9; otherwise plain decimal. Handles both `pretty_px=true` and `pretty_px=false` downloads.
+
+**Run sequence for first full extraction:**
+```bash
+# Clean old flat raw files + old derived data, then extract all zips into per-symbol dirs
+# (also extracts ohlcv-1d ETF close zips if present in Historical_data/OPRA/{etf}/)
+node server/data/historicalPipeline.js --phase 1b --clean-raw
+
+# Process all 16 symbols (expect 20–40 min — ~55k raw files total)
+node server/data/historicalPipeline.js --phase 1c
+
+# Parse ohlcv-1d files → etf_closes.json (must run before phase 1e)
+node server/data/historicalPipeline.js --phase 1d
+
+# Process OPRA options data (reads etf_closes.json for underlying prices)
+node server/data/historicalPipeline.js --phase 1e
+```
 
 ### B4 — Implementation
 
@@ -440,7 +475,7 @@ If any setup diverges beyond the acceptable gap: investigate before paper tradin
 | File | Steps | Status |
 |------|-------|--------|
 | `server/data/instruments.js` | A2 (create) | ✅ Done |
-| `server/data/databento.js` | B1 (create) | ✅ Done |
+| `server/data/databento.js` | B1 (create), A2 (`fetchETFDailyCloses` for phase 1d) | ✅ Done |
 | `server/data/snapshot.js` | B2, B3 | ✅ Done |
 | `server/data/historicalPipeline.js` | A2 (rewrite), A3 (audit before running) | ✅ Code done / ⬜ Run pending |
 | `server/backtest/engine.js` | A2 (imports from instruments.js) | ✅ Done |
@@ -449,7 +484,7 @@ If any setup diverges beyond the acceptable gap: investigate before paper tradin
 | `server/trading/simulator.js` | B5 | ⬜ To do |
 | `server/storage/log.js` | B5 | ⬜ To do |
 | `sw.js` | B5 | ⬜ To do |
-| `server/data/hpCompute.js` | A4 (run) | ⬜ To do |
+| `server/data/hpCompute.js` | A2 (`openInterest ?? oi` backward compat), A4 (run) | ✅ Code done / ⬜ Run pending |
 | `config/settings.json` | B2 (`liveData` flag added) | ✅ Done |
 | `.env` | B1 (`DATABENTO_API_KEY`), B5 (VAPID keys) | B1 ✅ / B5 ⬜ |
 | `package.json` | A2 (adm-zip → unzipper) | ✅ Done |
@@ -495,4 +530,4 @@ Merge each feature branch to main only after its acceptance criteria are met and
 ---
 
 *Last updated: 2026-04-03*
-*B1–B4 complete. A2 code complete (instruments.js, pipeline rewrite, streaming zip fix). A1 pipeline run in progress. Next actions: A3 (audit roll logic) → run pipeline phases 1a–1f; B5 (forward-test harness).*
+*B1–B4 complete. A1 data downloaded (16 GLBX + OPRA zips). A2 fully complete including: instruments.js, per-symbol extraction (Phase 1b), per-symbol directory scan (Phase 1c), Phase 1e OPRA parsing correctness (plain parseFloat strikes, OI-only stats, underlyingPrice from etf_closes.json), hpCompute.js openInterest backward compat. Phase 1d rewritten (v12.3) to parse local ohlcv-1d files extracted by Phase 1b — no longer requires Databento API for ETF closes. Next actions: Jeff downloads ohlcv-1d zips into Historical_data/OPRA/{etf}/, then run `--phase 1b --clean-raw` → `--phase 1c` → `--phase 1d` → `--phase 1e`; then A3 (roll audit); then A4 (HP recompute); B5 (forward-test harness).*

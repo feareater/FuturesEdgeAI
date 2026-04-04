@@ -102,6 +102,13 @@ const DATABENTO_ROOT_TO_INTERNAL = {};
 for (const [sym, meta] of Object.entries(INSTRUMENTS)) {
   DATABENTO_ROOT_TO_INTERNAL[meta.dbRoot] = sym;
 }
+// Individual contract tickers for some micro instruments use the micro-prefix,
+// not the standard-sized dbRoot used for continuous contracts.
+// e.g., Micro Gold individual contracts are MGCJ6 (not GCJ6) even though
+// the continuous contract is GC.c.0.  Add explicit overrides for these.
+DATABENTO_ROOT_TO_INTERNAL['MGC'] = 'MGC';  // Micro Gold: MGCJ6, MGCM6, etc.
+DATABENTO_ROOT_TO_INTERNAL['SIL'] = 'SIL';  // Micro Silver: SILH9, SILZ6, etc.
+DATABENTO_ROOT_TO_INTERNAL['MHG'] = 'MHG';  // Micro Copper: MHGN2, etc.
 
 // ── Convenience groupings ────────────────────────────────────────────────────
 

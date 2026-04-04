@@ -408,7 +408,84 @@ function getLiveFeedStatus() {
 }
 
 // ---------------------------------------------------------------------------
+// fetchETFDailyCloses — daily OHLCV for US equity ETFs
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetch daily OHLCV bars for a US equity ETF from Databento.
+ *
+ * Dataset: DBEQ.BASIC (Databento US Equities consolidated, daily bars)
+ *   — Override via DATABENTO_EQUITY_DATASET env var if your subscription uses
+ *     a different dataset (e.g. ARCX.PILLAR for NYSE Arca-listed ETFs).
+ *
+ * Symbols: raw equity ticker, e.g. 'QQQ', 'SPY', 'GLD'.
+ *   stype_in = 'raw_symbol' for US equity tickers on equity datasets.
+ *
+ * Prices: same Databento fixed-point convention as futures (÷ 1e9).
+ *
+ * @param {string} ticker    Equity ticker, e.g. 'QQQ'
+ * @param {string} startIso  ISO 8601 start, e.g. '2013-01-01T00:00:00Z'
+ * @param {string} endIso    ISO 8601 end,   e.g. '2026-04-02T00:00:00Z'
+ * @returns {Promise<Object>} { 'YYYY-MM-DD': closePrice, ... } — UTC date from ts_event
+ */
+async function fetchETFDailyCloses(ticker, startIso, endIso) {
+  const apiKey = process.env.DATABENTO_API_KEY;
+  if (!apiKey) {
+    console.warn('[databento] DATABENTO_API_KEY not set — fetchETFDailyCloses returning {}');
+    return {};
+  }
+
+  const dataset = process.env.DATABENTO_EQUITY_DATASET || 'DBEQ.BASIC';
+
+  const params = new URLSearchParams({
+    dataset,
+    schema:   'ohlcv-1d',
+    symbols:  ticker,
+    stype_in: 'raw_symbol',
+    start:    startIso,
+    end:      endIso,
+    encoding: 'json',
+  });
+
+  const path = `/v0/timeseries.get_range?${params.toString()}`;
+  console.log(`[databento] fetchETFDailyCloses ${ticker} (${dataset}) ${startIso} → ${endIso}`);
+
+  try {
+    const body    = await _dbGet(path, apiKey);
+    const records = _parseBody(body);
+
+    if (!Array.isArray(records) || records.length === 0) {
+      console.warn(`[databento] fetchETFDailyCloses(${ticker}): empty response`);
+      return {};
+    }
+
+    const closes = {};
+    for (const r of records) {
+      if (!r || r.close == null) continue;
+      const tsEvent = r.hd?.ts_event ?? r.ts_event;
+      if (!tsEvent) continue;
+
+      // Convert ts_event to UTC date string 'YYYY-MM-DD'
+      // Daily bars: ts_event is the bar open timestamp (e.g. midnight or 9:30 AM UTC)
+      const tsMs   = typeof tsEvent === 'string' && tsEvent.includes('T')
+        ? Date.parse(tsEvent)
+        : Number(BigInt(String(tsEvent)) / 1_000_000n);
+      const date   = new Date(tsMs).toISOString().substring(0, 10);
+      const close  = _price(r.close);
+      if (close > 0) closes[date] = +close.toFixed(4);
+    }
+
+    console.log(`[databento] fetchETFDailyCloses(${ticker}): ${Object.keys(closes).length} daily closes`);
+    return closes;
+
+  } catch (err) {
+    console.warn(`[databento] fetchETFDailyCloses(${ticker}) error: ${err.message}`);
+    return {};
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Exports
 // ---------------------------------------------------------------------------
 
-module.exports = { startLiveFeed, fetchHistoricalCandles, getLiveFeedStatus };
+module.exports = { startLiveFeed, fetchHistoricalCandles, getLiveFeedStatus, fetchETFDailyCloses };

@@ -100,10 +100,11 @@ function computeMaxPain(contracts) {
   for (const testStrike of strikes) {
     let pain = 0;
     for (const c of contracts) {
+      const oi = c.openInterest ?? c.oi;
       if (c.type === 'C') {
-        pain += Math.max(0, testStrike - c.strike) * c.oi;
+        pain += Math.max(0, testStrike - c.strike) * oi;
       } else {
-        pain += Math.max(0, c.strike - testStrike) * c.oi;
+        pain += Math.max(0, c.strike - testStrike) * oi;
       }
     }
     if (pain < minPain) {
@@ -196,7 +197,8 @@ function computeResilienceScore(totalGex, totalDex, gexFlip, spot) {
  * @param {string} params.futuresProxy  'MNQ' | 'MES'
  * @param {number} params.etfClose      ETF closing price
  * @param {number} params.futuresClose  Futures closing price on same date
- * @param {Array}  params.contracts     [{ symbol, strike, expiry, type, oi }]
+ * @param {Array}  params.contracts     [{ strike, expiry, type, openInterest }]
+ *                                      Also accepts legacy { ..., oi } field.
  * @param {Array}  params.dailyLogReturns  Recent 20-day log returns of ETF (for IV)
  *
  * @returns {object} HP snapshot — same field names as options.js live output
@@ -206,9 +208,11 @@ function computeHP({ date, underlying, futuresProxy, etfClose, futuresClose, con
   const scalingRatio = (futuresClose && etfClose) ? futuresClose / etfClose : null;
 
   // Filter contracts to valid range: ±25% from spot, OI > 0, expiry within 45 days
+  // Accepts both new 'openInterest' field and legacy 'oi' field.
   const dateObj = new Date(date + 'T00:00:00Z');
   const filtered = contracts.filter(c => {
-    if (c.oi <= 0) return false;
+    const oi = c.openInterest ?? c.oi;
+    if (!(oi > 0)) return false;
     if (c.strike < S * 0.75 || c.strike > S * 1.25) return false;
     const expDate = new Date(c.expiry + 'T00:00:00Z');
     const dte = (expDate - dateObj) / 86400000;
@@ -251,22 +255,23 @@ function computeHP({ date, underlying, futuresProxy, etfClose, futuresClose, con
     const T = (expDate - dateObj) / (365 * 86400000); // years
     if (T <= 0) continue;
 
+    const oi    = c.openInterest ?? c.oi;
     const gamma = bsGamma(S, c.strike, T, RISK_FREE, atmIV);
     const delta = bsDelta(S, c.strike, T, RISK_FREE, atmIV, c.type);
 
     const contractSign = c.type === 'C' ? 1 : -1;
-    const gex = contractSign * gamma * c.oi * 100 * S;
-    const dex = delta * c.oi * 100;
+    const gex = contractSign * gamma * oi * 100 * S;
+    const dex = delta * oi * 100;
 
     totalGex += gex;
     totalDex += dex;
 
-    if (c.type === 'C') totalCallOI += c.oi;
-    else totalPutOI += c.oi;
+    if (c.type === 'C') totalCallOI += oi;
+    else totalPutOI += oi;
 
     if (!strikeData[c.strike]) strikeData[c.strike] = { callOI: 0, putOI: 0, netGex: 0 };
-    if (c.type === 'C') strikeData[c.strike].callOI += c.oi;
-    else strikeData[c.strike].putOI += c.oi;
+    if (c.type === 'C') strikeData[c.strike].callOI += oi;
+    else strikeData[c.strike].putOI += oi;
     strikeData[c.strike].netGex += gex;
   }
 

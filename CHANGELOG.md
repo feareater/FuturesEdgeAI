@@ -4,6 +4,61 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v12.3] — 2026-04-03 — ohlcv-1d ETF Close Extraction (Phase 1b/1d local files)
+
+### Phase 1b: ohlcv-1d zip detection and extraction (`server/data/historicalPipeline.js`)
+- New helper `findETFCloseZips(etf)` — finds any non-OPRA zip in `Historical_data/OPRA/{etf}/` (e.g. `DBEQ-*` downloads placed alongside the options zips)
+- New helper `findAllETFCloseZips()` — calls above for all 6 ETFs
+- New helper `getZipSchema(zipPath)` — reads `metadata.json` inside a zip and returns its `query.schema` string
+- Phase 1b now runs a third extraction loop after the OPRA section: identifies ohlcv-1d zips by confirming `schema === 'ohlcv-1d'` via `getZipSchema` (warns and skips any mismatched file), extracts `.csv.zst` files to `data/historical/raw/OPRA/{etf}/ohlcv-1d/` — separate from the options raw files which stay in `raw/OPRA/{etf}/`
+- Skip-if-exists applies per extracted file; dry-run mode supported
+
+### Phase 1d: rewritten to parse local extracted files (`server/data/historicalPipeline.js`)
+- **Replaced Databento API call** with local file parser — no longer requires `DATABENTO_API_KEY` or `DBEQ.BASIC` subscription; reads files already extracted by Phase 1b
+- New helper `tsEventToDate(tsVal)` — converts both `pretty_ts=true` ISO strings and raw nanosecond integers to `YYYY-MM-DD`
+- New helper `dateFromFilename(fname)` — extracts 8-digit date from Databento filename pattern (`dbeq-basic-20130401.ohlcv-1d.csv.zst`)
+- **Auto-detects price format**: if `parseFloat(close) > 100000` → fixed-point integer, divides by 1e9; otherwise treats as plain decimal. Handles both `pretty_px=true` and `pretty_px=false` downloads
+- Logs progress every 200 files per ETF; logs total date count and 3 spot-check samples per ETF (first / middle / last date → close price) for visual sanity check
+- Always overwrites `etf_closes.json` as a full rebuild (Phase 1d reads all extracted files each run)
+- Warns and continues if a per-file decompression or CSV parse error occurs (`errLog`)
+
+### Run sequence
+```bash
+node server/data/historicalPipeline.js --phase 1b   # extract ohlcv-1d zips → raw/OPRA/{etf}/ohlcv-1d/
+node server/data/historicalPipeline.js --phase 1d   # parse → etf_closes.json
+node server/data/historicalPipeline.js --phase 1e   # reads etf_closes.json for underlying prices
+```
+
+---
+
+## [v12.2] — 2026-04-03 — OPRA Pipeline Correctness Fixes (Phase P, A2 continued)
+
+### Phase 1d: ETF daily closes via Databento `ohlcv-1d`
+- `fetchETFDailyCloses(ticker, startIso, endIso)` added to `server/data/databento.js`
+  - Dataset: `DBEQ.BASIC` (configurable via `DATABENTO_EQUITY_DATASET` env var)
+  - Schema: `ohlcv-1d`, `stype_in: raw_symbol`
+  - Prices: fixed-point ÷ 1e9; date derived from `ts_event` nanosecond timestamp
+  - Returns `{ 'YYYY-MM-DD': closePrice }` map
+- `phase1d()` rewritten — fetches QQQ/SPY/GLD/SLV/USO/IWM closes from Databento in one call per ETF over full date range; writes/merges `data/historical/etf_closes.json`
+  - Incremental: starts from last known date per ticker so re-runs only fetch new dates
+  - Graceful no-op if `DATABENTO_API_KEY` not set
+
+### Phase 1e: OPRA parsing correctness fixes
+- **Strike price confirmed dollar-denominated**: OPRA `strike_price` field is already in dollars (`"580.000000000"` = $580). Changed to plain `parseFloat()` — no ÷1e9 scaling applied
+- **`parseDefinitionText`** simplified: returns plain `Map<id → {strike,expiry,type}>` (previously returned `{ optionMap, nonOptionIds }`); captures only C/P rows; no strike scaling heuristic
+- **`parseStatisticsText`** rewritten to OI-only extraction:
+  - Removed `nonOptionIds` parameter, `underlyingCandidates`, `UNDERLYING_PRICE_STAT_TYPES`, `underlyingPrice` return value — all dead code
+  - Root cause confirmed via `--diagnostic`: OPRA statistics files contain only per-option-contract rows; no underlying ETF spot price row exists in any `stat_type`
+  - Now scans only `stat_type=9` (open interest) rows, returns `{ oiMap }` only
+- **Phase 1e main loop** updated: loads `etf_closes.json` (written by Phase 1d) at start; `underlyingPrice` resolved from `etfCloses[etf][date]` with rolling last-known-price fallback; removed dead `etf_closes.json` write side-effect at end of loop
+- **`phase1e_diagnostic`**: updated to new signatures; loads `underlyingPrice` from `etf_closes.json`; removed "non-option IDs" section; notes that Phase 1d must run first
+
+### `hpCompute.js`: backward-compatible OI field
+- All OI reads changed to `c.openInterest ?? c.oi` — supports both old (`oi`) and new (`openInterest`) field name
+- Phase 1e output contracts use `openInterest` field; old files with `oi` continue to work
+
+---
+
 ## [v12.1] — 2026-04-03 — Historical Pipeline v2 + instruments.js (Phase P, A2)
 
 ### A2: instruments.js — single source of truth (`server/data/instruments.js`)
