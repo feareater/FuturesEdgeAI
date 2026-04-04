@@ -1443,17 +1443,9 @@ async function phase1e() {
     : allEtfs;
 
   // Load etf_closes.json written by Phase 1d — used for underlyingPrice lookup
-  const etfCloses      = readJSON(path.join(DATA, 'etf_closes.json')) || {};
+  const etfCloses = readJSON(path.join(DATA, 'etf_closes.json')) || {};
   for (const etf of allEtfs) {
     if (!etfCloses[etf]) etfCloses[etf] = {};
-  }
-
-  // Fallback: last known underlying price per ETF (for dates missing from etf_closes.json)
-  const lastKnownPrice = Object.fromEntries(allEtfs.map(e => [e, null]));
-  // Seed from existing etf_closes.json if present
-  for (const etf of allEtfs) {
-    const dates = Object.keys(etfCloses[etf]).sort();
-    if (dates.length > 0) lastKnownPrice[etf] = etfCloses[etf][dates[dates.length - 1]];
   }
 
   let totalFilesProcessed = 0;
@@ -1479,13 +1471,8 @@ async function phase1e() {
 
       const outPath = path.join(OPT_DIR, etf, `${date}.json`);
 
-      // Skip-if-exists (resumable). Still accumulate underlying price from existing file.
+      // Skip-if-exists (resumable)
       if (!RECOMPUTE && !FORCE && fs.existsSync(outPath)) {
-        const existing = readJSON(outPath);
-        if (existing?.underlyingPrice) {
-          etfCloses[etf][date]  = existing.underlyingPrice;
-          lastKnownPrice[etf]   = existing.underlyingPrice;
-        }
         skipped++;
         continue;
       }
@@ -1514,18 +1501,11 @@ async function phase1e() {
         const statBuf   = await decompress(fs.readFileSync(path.join(dir, fname)));
         const { oiMap } = parseStatisticsText(statBuf.toString('utf8'));
 
-        // Resolve underlying price: etf_closes.json (Phase 1d) → last known → log error
-        let underlyingPrice = etfCloses[etf]?.[date] ?? null;
+        // Resolve underlying price from etf_closes.json — no fallback
+        const underlyingPrice = etfCloses[etf]?.[date] ?? null;
         if (underlyingPrice == null) {
-          underlyingPrice = lastKnownPrice[etf];
-          if (underlyingPrice == null) {
-            errLog(`Phase 1e: ${etf} ${date}: underlyingPrice unavailable (not in etf_closes.json, no fallback — run phase 1d first)`);
-          }
-        }
-
-        // Update rolling last-known price
-        if (underlyingPrice != null) {
-          lastKnownPrice[etf] = underlyingPrice;
+          warn(`Phase 1e: ${etf} ${date}: no ETF close available — skipping`);
+          continue;
         }
 
         // Step 3 — Join and filter
