@@ -28,7 +28,7 @@ These tracks are fully parallel — they touch different files and have zero cod
 | B5 | Live | Forward-test harness, dedup, push notifications | ⬜ To do | Depends on B4 |
 | A1 | Historical | Purchase + download Databento data (CME + OPRA) | ✅ **Done** | 16 single-symbol GLBX zips + OPRA zips downloaded to Historical_data/ |
 | A2 | Historical | Rewrite pipeline for 16 symbols, 13yr scale, instruments.js | ✅ **Done** | instruments.js, pipeline rewrite, per-symbol extraction fix, OPRA parsing correctness, ohlcv-1d local extraction (see A2 notes) |
-| A3 | Historical | Audit front-month roll logic in Phase 1c | ⬜ To do | Do before running 1c at scale |
+| A3 | Historical | Audit front-month roll logic in Phase 1c | ✅ **Done** | Roll audit complete via Phase 1c log evidence: GLBX zips use stype_in=parent (individual contracts), Phase 1c selects front-month by volume per day, 0 lookahead errors confirmed, no phantom gaps. No code fix needed. |
 | A4 | Historical | HP recompute over full date range | ⬜ To do | Depends on A2 |
 | A5 | Historical | Full backtest run, validate edge across 12m | ⬜ To do | Depends on A4 |
 | C  | Validation | Compare live WR vs backtest WR per setup | ⬜ To do | Depends on A5 + B5 + 30 days live |
@@ -530,4 +530,4 @@ Merge each feature branch to main only after its acceptance criteria are met and
 ---
 
 *Last updated: 2026-04-03*
-*B1–B4 complete. A1 data downloaded (16 GLBX + OPRA zips). A2 fully complete including: instruments.js, per-symbol extraction (Phase 1b), per-symbol directory scan (Phase 1c), Phase 1e OPRA parsing correctness (plain parseFloat strikes, OI-only stats, underlyingPrice from etf_closes.json), hpCompute.js openInterest backward compat. Phase 1d rewritten (v12.3) to parse local ohlcv-1d files extracted by Phase 1b — no longer requires Databento API for ETF closes. Next actions: Jeff downloads ohlcv-1d zips into Historical_data/OPRA/{etf}/, then run `--phase 1b --clean-raw` → `--phase 1c` → `--phase 1d` → `--phase 1e`; then A3 (roll audit); then A4 (HP recompute); B5 (forward-test harness).*
+*B1–B4 complete. A1 data downloaded (16 GLBX + OPRA zips). A2 fully complete including: instruments.js, per-symbol extraction (Phase 1b), per-symbol directory scan (Phase 1c), Phase 1e OPRA parsing correctness (plain parseFloat strikes, OI-only stats, underlyingPrice from etf_closes.json), hpCompute.js openInterest backward compat. Phase 1d rewritten (v12.3) to parse local ohlcv-1d files extracted by Phase 1b — no longer requires Databento API for ETF closes. Next actions: Jeff downloads ohlcv-1d zips into Historical_data/OPRA/{etf}/, then run `--phase 1b` (extracts ohlcv-1d files only — options already extracted) → `--phase 1d` → `--phase 1e` → `--phase 1f`; then A4 (HP recompute); B5 (forward-test harness).*
