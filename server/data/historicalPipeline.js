@@ -6,14 +6,15 @@
  *   1a. Inventory zip files and write manifest.json
  *   1b. Extract raw files (GLBX → raw/GLBX/, OPRA → raw/OPRA/{underlying}/)
  *   1c. Process futures OHLCV → daily JSON files (all 16 symbols)
- *   1d. No-op stub — ETF closes derived from OPRA statistics in Phase 1e
+ *   1d. Parse ETF daily closes (XNYS.PILLAR) + DX (US Dollar Index) closes
  *   1e. Process OPRA options data for all 6 underlyings
  *   1f. Compute HP levels (Black-Scholes) for all 6 OPRA underlyings
+ *   1g. Build realized volatility index (VIX proxy) from MNQ 1m closes
  *
  * Usage:
  *   node server/data/historicalPipeline.js [flags]
  *
- *   --phase 1a|1b|1c|1d|1e|1f  Run only this phase (run all if omitted)
+ *   --phase 1a|1b|1c|1d|1e|1f|1g  Run only this phase (run all if omitted)
  *   --inventory-only            Alias for --phase 1a
  *   --futures-only              Alias for --phase 1b + 1c
  *   --options-only              Alias for --phase 1d + 1e + 1f
@@ -51,6 +52,8 @@ const OPT_DIR      = path.join(DATA, 'options');
 const HIST_DATA    = path.join(ROOT, 'Historical_data');
 const CME_ZIP_DIR  = path.join(HIST_DATA, 'CME');      // GLBX zip files
 const OPRA_ZIP_DIR = path.join(HIST_DATA, 'OPRA');     // per-underlying OPRA zips
+const DX_ZIP_DIR   = path.join(HIST_DATA, 'DX');       // IFEU.IMPACT DX ohlcv-1d zips
+const DX_RAW_DIR   = path.join(RAW_DIR, 'DX');         // extracted DX csv.zst files
 const ERRORS_LOG   = path.join(DATA, 'errors.log');
 
 // ─── CLI args ────────────────────────────────────────────────────────────────
@@ -73,6 +76,7 @@ const PHASE_ARG      = ARG('--phase');
 const INVENTORY_ONLY = HAS('--inventory-only') || PHASE_ARG === '1a';
 const FUTURES_ONLY   = HAS('--futures-only')   || PHASE_ARG === '1b' || PHASE_ARG === '1c';
 const OPTIONS_ONLY   = HAS('--options-only')   || ['1d','1e','1f'].includes(PHASE_ARG);
+const PHASE_1G       = PHASE_ARG === '1g';
 const SINGLE_PHASE   = PHASE_ARG; // e.g. '1c' → run ONLY that phase
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -667,6 +671,47 @@ async function phase1b() {
     }
   }
 
+  // Loop 5: IFEU.IMPACT ohlcv-1d DX (US Dollar Index futures) → raw/DX/
+  // Jeff places ohlcv-1d zips from IFEU.IMPACT in Historical_data/DX/.
+  // Verify schema=ohlcv-1d. Extract .csv.zst files to raw/DX/.
+  if (!fs.existsSync(DX_ZIP_DIR)) {
+    log(`\n── DX zip dir not found (${DX_ZIP_DIR}) — skipping loop 5 ──`);
+  } else {
+    const dxZips = fs.readdirSync(DX_ZIP_DIR)
+      .filter(f => f.endsWith('.zip'))
+      .map(f => ({ name: f, path: path.join(DX_ZIP_DIR, f) }));
+    log(`\n── Checking ${dxZips.length} zip(s) in Historical_data/DX/ → raw/DX/ ──`);
+    ensureDir(DX_RAW_DIR);
+    for (const zipInfo of dxZips) {
+      let meta = null;
+      try {
+        const metaBuf = await readZipEntry(zipInfo.path, 'metadata.json');
+        if (metaBuf) meta = JSON.parse(metaBuf.toString('utf8'));
+      } catch (_) {}
+      const schema  = meta?.query?.schema;
+      const dataset = meta?.query?.dataset;
+      if (schema !== 'ohlcv-1d') {
+        warn(`  ${zipInfo.name}: schema='${schema}' — expected 'ohlcv-1d', skipping`);
+        continue;
+      }
+      log(`\n[EXTRACT] ${zipInfo.name} (DX ohlcv-1d, dataset=${dataset}) → raw/DX/`);
+      let zipExtracted = 0;
+      let zipSkipped   = 0;
+      await streamZip(zipInfo.path, async (entry) => {
+        if (entry.type === 'Directory') return;
+        const dest = path.join(DX_RAW_DIR, entry.path);
+        if (fs.existsSync(dest)) { zipSkipped++; return; }
+        if (DRY_RUN) { log(`  [DRY] would extract: ${entry.path}`); return; }
+        ensureDir(path.dirname(dest));
+        fs.writeFileSync(dest, await entry.buffer());
+        zipExtracted++;
+        extracted++;
+      });
+      skipped += zipSkipped;
+      log(`  Extracted ${zipExtracted} file(s), skipped ${zipSkipped} existing`);
+    }
+  }
+
   log(`\n[1b COMPLETE] ${elapsed(t0)} — ${extracted} files extracted, ${skipped} already existed`);
 }
 
@@ -1084,6 +1129,84 @@ async function phase1d() {
   writeJSON(closesPath, allCloses);
   const totalDates = Object.values(allCloses).reduce((s, d) => s + Object.keys(d).length, 0);
   log(`\n  Written etf_closes.json — ${totalDates} total date entries across ${Object.keys(allCloses).length} ETFs`);
+
+  // ── DX (US Dollar Index) close parsing ────────────────────────────────────
+  // Reads raw/DX/ files extracted by Phase 1b loop 5.
+  // Auto-detects fixed-point vs decimal. Expected range: 70–130 (warn outside).
+  // Writes data/historical/dxy.json: { "YYYY-MM-DD": 95.23, ... }
+  log('\n── Parsing DX (US Dollar Index) closes from raw/DX/ ──');
+  const dxyPath = path.join(DATA, 'dxy.json');
+  if (!fs.existsSync(DX_RAW_DIR)) {
+    warn('raw/DX/ not found — run phase 1b first (place IFEU.IMPACT ohlcv-1d zip in Historical_data/DX/)');
+  } else {
+    const dxFiles = fs.readdirSync(DX_RAW_DIR)
+      .filter(f => f.endsWith('.csv.zst'))
+      .sort();
+    log(`  DX: ${dxFiles.length} ohlcv-1d file(s) to parse`);
+    const dxyCloses = {};
+    let dxProcessed = 0;
+    let dxErrors    = 0;
+    for (const fname of dxFiles) {
+      try {
+        const buf  = fs.readFileSync(path.join(DX_RAW_DIR, fname));
+        const text = (await decompress(buf)).toString('utf8');
+        const lines = text.split('\n').filter(l => l.trim());
+        if (lines.length < 2) { dxErrors++; continue; }
+        const headers  = lines[0].split(',');
+        const closeIdx = headers.indexOf('close');
+        const tsIdx    = headers.indexOf('ts_event');
+        if (closeIdx < 0) {
+          errLog(`Phase 1d DX: ${fname}: no 'close' column`);
+          dxErrors++;
+          continue;
+        }
+        const symIdx = headers.indexOf('symbol');
+        const volIdx = headers.indexOf('volume');
+        // One file = one date. Multiple rows (different contracts + spreads).
+        // We want the front-month outright (highest volume, no '-' in symbol).
+        let bestClose = null;
+        let bestVol   = -1;
+        for (let i = 1; i < lines.length; i++) {
+          const parts    = lines[i].split(',');
+          const rawClose = parts[closeIdx];
+          if (!rawClose) continue;
+          let close = parseFloat(rawClose);
+          if (close > 100000) close = close / 1e9;
+          if (close < 50 || close > 200) continue;  // skip spreads, near-zero, and out-of-range
+          // Skip spread contracts (symbol contains '-')
+          if (symIdx >= 0 && parts[symIdx]?.includes('-')) continue;
+          const vol = volIdx >= 0 ? parseInt(parts[volIdx], 10) : 0;
+          if (vol > bestVol) { bestVol = vol; bestClose = close; }
+        }
+        if (bestClose != null) {
+          const date = dateFromFilename(fname)
+            || (tsIdx >= 0 ? tsEventToDate(lines[1]?.split(',')[tsIdx]) : null);
+          if (date) dxyCloses[date] = bestClose;
+        }
+        dxProcessed++;
+        if (dxProcessed % 200 === 0) log(`  DX: processed ${dxProcessed}/${dxFiles.length} files...`);
+      } catch (e) {
+        errLog(`Phase 1d DX: ${fname}: ${e.message}`);
+        dxErrors++;
+      }
+    }
+    const dxDates = Object.keys(dxyCloses).sort();
+    log(`  DX: ${dxDates.length} dates parsed (${dxErrors} errors)`);
+    // Spot-check 3 samples; expected DXY range 85–115 (warn outside 70–130)
+    const spots = [dxDates[0], dxDates[Math.floor(dxDates.length / 2)], dxDates[dxDates.length - 1]].filter(Boolean);
+    for (const d of spots) {
+      const price = dxyCloses[d];
+      const flag  = (price < 70 || price > 130) ? ' ⚠ UNEXPECTED (expected 70–130)' : '';
+      log(`  DX sample: ${d} → ${price?.toFixed(3)}${flag}`);
+    }
+    const outOfRange = dxDates.filter(d => dxyCloses[d] < 70 || dxyCloses[d] > 130);
+    if (outOfRange.length > 0) warn(`  DX: ${outOfRange.length} date(s) outside expected 70–130 range`);
+    if (!DRY_RUN && dxDates.length > 0) {
+      writeJSON(dxyPath, dxyCloses);
+      log(`  Written dxy.json — ${dxDates.length} dates`);
+    }
+  }
+
   log(`\n[1d COMPLETE] ${elapsed(t0)}`);
   return allCloses;
 }
@@ -1742,6 +1865,73 @@ async function runVerify() {
 
 // ─── MAIN ─────────────────────────────────────────────────────────────────────
 
+// ─── PHASE 1g: REALIZED VOLATILITY (VIX PROXY) ───────────────────────────────
+
+async function phase1g() {
+  const t0 = Date.now();
+  log('\n══════════════════════════════════════════════════════');
+  log(' PHASE 1g — REALIZED VOLATILITY INDEX (VIX PROXY)');
+  log('══════════════════════════════════════════════════════');
+  log('Computes 20-day rolling realized volatility from MNQ 1m daily close prices.');
+  log('Writes data/historical/vix.json: { "YYYY-MM-DD": 18.5, ... }');
+
+  const { buildVolatilityIndex } = require('./historicalVolatility');
+  const mnqDir = path.join(FUT_DIR, 'MNQ', '1m');
+
+  if (!fs.existsSync(mnqDir)) {
+    warn(`MNQ 1m directory not found: ${mnqDir} — run phase 1c first`);
+    return;
+  }
+
+  log(`\nBuilding volatility index from ${mnqDir}...`);
+  const volMap = buildVolatilityIndex(mnqDir);
+  const dates  = Object.keys(volMap).sort();
+
+  if (dates.length === 0) {
+    warn('No volatility values computed — need at least 21 trading days of MNQ data');
+    return;
+  }
+
+  log(`  Computed ${dates.length} volatility dates`);
+
+  // Log every 200 dates
+  for (let i = 0; i < dates.length; i++) {
+    if ((i + 1) % 200 === 0) log(`  Progress: ${i + 1}/${dates.length} dates...`);
+  }
+
+  // 5 spot-checks including crisis periods
+  const spotDates = [
+    dates[0],
+    dates[Math.floor(dates.length * 0.25)],
+    '2020-03-16',  // COVID crash
+    '2022-10-13',  // late 2022 stress
+    dates[dates.length - 1],
+  ].filter(d => d && volMap[d] != null);
+  const seen = new Set();
+  for (const d of spotDates) {
+    if (seen.has(d)) continue;
+    seen.add(d);
+    const v = volMap[d];
+    let flag = '';
+    if (v < 5 || v > 100)  flag = ' ⚠ OUTSIDE VALID RANGE (5–100)';
+    else if (d.startsWith('2020-03')) flag = v >= 50 ? ' ✓ COVID crisis level' : ` ⚠ expected 50–80 for March 2020, got ${v.toFixed(1)}`;
+    else if (d >= '2022-10' && d <= '2022-12') flag = v >= 25 ? ' ✓ late-2022 stressed' : ` ⚠ expected 25–40 for late 2022, got ${v.toFixed(1)}`;
+    log(`  Sample: ${d} → ${v.toFixed(1)}%${flag}`);
+  }
+
+  // Validation: warn on any out-of-range values
+  const outOfRange = dates.filter(d => volMap[d] < 5 || volMap[d] > 100);
+  if (outOfRange.length > 0) {
+    warn(`  ${outOfRange.length} date(s) outside valid range 5–100: ${outOfRange.slice(0, 5).join(', ')}`);
+  }
+
+  const vixPath = path.join(DATA, 'vix.json');
+  writeJSON(vixPath, volMap);
+  log(`\n  Written vix.json — ${dates.length} dates`);
+  log(`  Date range: ${dates[0]} → ${dates[dates.length - 1]}`);
+  log(`\n[1g COMPLETE] ${elapsed(t0)}`);
+}
+
 async function main() {
   const T0 = Date.now();
   console.log('╔══════════════════════════════════════════════════════╗');
@@ -1776,6 +1966,8 @@ async function main() {
       await phase1e();
     } else if (SINGLE_PHASE === '1f') {
       await phase1f();
+    } else if (PHASE_1G || SINGLE_PHASE === '1g') {
+      await phase1g();
     } else if (FUTURES_ONLY) {
       await phase1b();
       await phase1c();

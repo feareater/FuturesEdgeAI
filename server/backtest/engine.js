@@ -48,6 +48,32 @@ function writeJSON(filePath, data) {
   fs.writeFileSync(filePath, JSON.stringify(data));
 }
 
+/** Load a JSON file if it exists, otherwise return null. */
+function loadJsonIfExists(relPath) {
+  const abs = path.resolve(__dirname, '../../', relPath);
+  return readJSON(abs);
+}
+
+/**
+ * Classify DXY direction vs 5-day rolling average.
+ * Returns 'rising' | 'falling' | 'flat'.
+ * Returns 'flat' if fewer than 3 prior dates are available.
+ */
+function computeDxyDirection(dxyData, date) {
+  if (!dxyData) return 'flat';
+  const allDates = Object.keys(dxyData).sort();
+  const idx = allDates.indexOf(date);
+  // Collect up to 5 dates strictly before today
+  const priorDates = allDates.slice(Math.max(0, idx - 5), idx);
+  if (priorDates.length < 3) return 'flat';
+  const avg = priorDates.reduce((s, d) => s + dxyData[d], 0) / priorDates.length;
+  const today = dxyData[date];
+  if (!today) return 'flat';
+  if (today > avg * 1.001) return 'rising';
+  if (today < avg * 0.999) return 'falling';
+  return 'flat';
+}
+
 /** Load bars for a symbol+date+timeframe. Normalizes ts→time for indicators.js. */
 function loadDailyBars(symbol, date, tf) {
   const tfDir = tf || '1m';
@@ -336,6 +362,8 @@ function computeStats(trades, equity) {
     }),
     byHPProximity:   breakdown(t => t.hpProximity ?? 'none'),
     byResilienceLabel: breakdown(t => t.resilienceLabel ?? 'unknown'),
+    byVixRegime:     breakdown(t => t.vixRegime ?? 'unknown'),
+    byDxyDirection:  breakdown(t => t.dxyDirection ?? 'unknown'),
   };
 }
 
@@ -544,7 +572,10 @@ async function runBacktestMTF(config) {
     startDate,
     endDate,
     minConfidence = 65,
-    setupTypes    = ['zone_rejection', 'pdh_breakout', 'trendline_break', 'or_breakout'],
+    // zone_rejection disabled by default — R:R inverted at all confidence levels per A5 findings
+    // (AvgWin $16 vs AvgLoss $24 at conf≥80; raising conf floor did not fix the imbalance).
+    // UI config in backtest2.html still allows manual re-enable for research purposes.
+    setupTypes    = ['pdh_breakout', 'trendline_break', 'or_breakout'],
     contracts     = { MNQ: 1, MES: 1, MGC: 1, MCL: 1 },
     useHP         = true,
     maxHoldBars   = DEFAULT_MAX_BARS,
@@ -559,6 +590,12 @@ async function runBacktestMTF(config) {
 
   let totalBarsProcessed = 0;
   const startMs = Date.now();
+
+  // Load VIX proxy and DXY data — gracefully optional (defaults to neutral if missing)
+  const vixData = loadJsonIfExists('data/historical/vix.json') || {};
+  const dxyData = loadJsonIfExists('data/historical/dxy.json') || {};
+  if (Object.keys(vixData).length > 0) console.log(`[BT-MTF] Loaded vix.json: ${Object.keys(vixData).length} dates`);
+  if (Object.keys(dxyData).length > 0) console.log(`[BT-MTF] Loaded dxy.json: ${Object.keys(dxyData).length} dates`);
 
   // Per-symbol: track exit timestamp of last trade (1-trade-at-a-time across all TFs)
   const lastExitTs = {};
@@ -681,6 +718,10 @@ async function runBacktestMTF(config) {
             const { hour: etHourCheck } = _etHourMin(barCloseTs);
             if (excludeHours.length > 0 && excludeHours.includes(etHourCheck)) continue;
 
+            // OR breakout: 5m only — A5 findings showed 1 trade in 7,577 came from 15m/30m.
+            // 15m/30m almost never form OR breakout signals; the edge is entirely in 5m.
+            if (setup.type === 'or_breakout' && tf !== '5m') continue;
+
             // 1-trade-at-a-time: skip if a previous trade hasn't exited yet
             // Use barCloseTs — that's when we'd actually enter
             if (barCloseTs <= lastExitTs[symbol]) continue;
@@ -702,6 +743,16 @@ async function runBacktestMTF(config) {
               if (d < 0.3) hpProximity = 'at_level';
               else if (d < 1.0) hpProximity = 'near_level';
             }
+
+            // VIX regime and DXY direction for this date
+            const vixLevel = vixData[date] ?? null;
+            const vixRegime = !vixLevel        ? 'normal'
+              : vixLevel < 15                  ? 'low'
+              : vixLevel < 25                  ? 'normal'
+              : vixLevel < 35                  ? 'elevated'
+              :                                  'crisis';
+            const dxyClose     = dxyData[date] ?? null;
+            const dxyDirection = computeDxyDirection(dxyData, date);
 
             const trade = {
               id:             `${symbol}-${date}-${tf}-${i}-${setup.type}`,
@@ -728,6 +779,10 @@ async function runBacktestMTF(config) {
               dexBias:        mktCtx?.hp?.dexBias ?? null,
               ddBandLabel:    setup.ddBandLabel || 'no_data',
               ddBandScore:    setup.scoreBreakdown?.ddBand || 0,
+              vixRegime,
+              vixLevel,
+              dxyDirection,
+              dxyClose,
             };
 
             alerts.push(trade);

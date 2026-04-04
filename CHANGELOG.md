@@ -4,6 +4,34 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v12.7] — 2026-04-04 — DX/VIX pipeline + backtest engine enrichment (Phase U)
+
+### Pipeline: DX extraction + parsing (Phase 1b loop 5 + Phase 1d DX block)
+- **Phase 1b loop 5** (`historicalPipeline.js`): scans `Historical_data/DX/` for zip files; reads `metadata.json` to confirm `schema=ohlcv-1d`; extracts `.csv.zst` files to `data/historical/raw/DX/`; skip-if-exists per file. Result: 2,251 DX files extracted (IFUS.IMPACT, 2018-12-24 → 2026-04-03).
+- **Phase 1d DX block** (`historicalPipeline.js`): reads `raw/DX/`, picks highest-volume non-spread DX contract per date (filters rows where `symbol` contains `-` and `close < 50`), auto-detects fixed-point vs decimal. Writes `data/historical/dxy.json`. Result: 2,251 dates, 0 errors, 0 out-of-range. Spot-checks: 2020-03-20=103.2, 2022-09-28=112.6 (USD peak), 2020-07-31=93.4. Range: 89.4–114.1.
+
+### New file: `server/data/historicalVolatility.js`
+- Exports `buildVolatilityIndex(futuresDir)`: reads MNQ 1m daily JSON files, extracts last-bar close, computes daily log returns, returns 20-day rolling realized volatility × `sqrt(252)` × 100 as `{ "YYYY-MM-DD": pct }`. Requires 21+ trading days before producing first value.
+
+### Pipeline: Phase 1g (realized volatility VIX proxy)
+- New `--phase 1g` in `historicalPipeline.js`: calls `buildVolatilityIndex()`, logs 5 spot-checks including March 2020 and late 2022, warns on values outside 5–100, writes `data/historical/vix.json`. Result: 1,767 dates (2019-06-03 → 2026-04-02). Crisis validation: March 2020 peak = **80.5%** ✓, Oct 2022 = **26.6%** ✓.
+
+### Backtest engine enrichment (`server/backtest/engine.js`)
+- Loads `data/historical/vix.json` and `data/historical/dxy.json` at job startup (gracefully optional — defaults to neutral if files absent)
+- New helper `computeDxyDirection(dxyData, date)`: compares today's DXY close to 5-day rolling average; returns `rising` / `falling` / `flat` (flat if fewer than 3 prior dates)
+- Added to every trade record: `vixRegime` (low/normal/elevated/crisis), `vixLevel` (numeric), `dxyDirection` (rising/falling/flat), `dxyClose` (numeric)
+- Added to `computeStats`: `byVixRegime` and `byDxyDirection` breakdowns
+- **zone_rejection disabled by default**: default `setupTypes` no longer includes `zone_rejection` — R:R structurally inverted at all confidence levels per A5 findings (AvgWin $16 vs AvgLoss $24 at conf≥80). UI still allows manual re-enable for research.
+- **OR breakout 5m-only guard**: if `setup.type === 'or_breakout' && tf !== '5m'` → skip. A5 showed only 1/7,577 OR breakout trades came from 15m/30m.
+
+### A5 Final validation: or_breakout + pdh_breakout, VIX+DXY active
+- **9,679 trades** (5.4/day), WR 37.3%, PF **1.689**, Gross +$272,256, **Net +$233,540**, MaxDD $3,208
+- vs or_breakout isolation (+$262K net): +$233K with pdh added — pdh still drags (-$14.6K net) but OR breakout slightly improved to $248K
+- By VIX regime (net): crisis +$30K, elevated +$47K, low +$46K, **normal +$110K** — edge holds across all regimes, strongest in normal vol
+- By DXY direction (net): falling +$97K, flat +$33K, rising +$103K — edge holds in both USD directions (no meaningful filter signal)
+
+---
+
 ## [v12.6] — 2026-04-04 — A5 isolation backtest runs: or_breakout + zone_rejection@80
 
 ### Backtest jobs (config-only, no code changes)

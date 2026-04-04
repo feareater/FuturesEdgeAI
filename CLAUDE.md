@@ -277,6 +277,7 @@ Default view (Reset to Default): all layers ON.
 | R (v12.3) | ETF close pipeline from XNYS.PILLAR ohlcv-1d zips — Phase 1b loop 4 (ETF_closes/ extraction), Phase 1d rewrite (local file parser, no API), Phase 1e remove lastKnownPrice fallback (skip dates with no ETF close), Phase 1f HP computation complete (~1736 dates/ETF, 2018–2026, written to options/{etf}/computed/) | ✅ Complete |
 | S (v12.5) | Backtest dedup fix — zone_rejection key uses zone-level bucket (0.25 ATR), 60-min per-direction cooldown shared across all TFs (cross-TF lastZoneRejTs at symbol scope); A5 full-period baseline run | ✅ Complete |
 | T (v12.6) | A5 isolation runs — or_breakout@65 (Net +$262K, PF 1.86, 5m-only, MNQ leads), zone_rejection@80 (still net -$204K, R:R unfixable by conf filter). Combined analysis: or_breakout+pdh_breakout is recommended config | ✅ Complete |
+| U (v12.7) | DX/VIX pipeline — Phase 1b loop 5 (DX extraction), Phase 1d DX parsing (dxy.json, 2251 dates, 89–114 range), historicalVolatility.js + Phase 1g (vix.json, 1767 dates, March 2020=80.5%), engine VIX/DXY enrichment + zone_rejection disabled default + OR breakout 5m-only guard. Final A5: Net +$233K, PF 1.69 | ✅ Complete |
 
 ---
 
