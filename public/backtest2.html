@@ -159,6 +159,7 @@
             <button class="bt2-tab" data-tab="replay">Replay</button>
             <button class="bt2-tab" data-tab="compare">Compare</button>
             <button class="bt2-tab" data-tab="optimize">Optimize</button>
+            <button class="bt2-tab" data-tab="ai">&#x1F916; AI Analysis</button>
           </div>
 
           <!-- Summary Tab -->
@@ -331,6 +332,61 @@
 
             </div><!-- /#bt2-opt-main -->
           </div><!-- /#bt2-tab-optimize -->
+
+          <!-- AI Analysis Tab -->
+          <div id="bt2-tab-ai" class="bt2-tab-panel">
+
+            <!-- Status bar -->
+            <div class="ai-header">
+              <div class="ai-status-row">
+                <span class="ai-status-badge">
+                  <span class="ai-status-dot" id="aiStatusDot"></span>
+                  <span id="aiStatusText">Checking Ollama...</span>
+                </span>
+                <div class="ai-model-selector">
+                  <label for="aiModelSelect">Model:</label>
+                  <select id="aiModelSelect" disabled></select>
+                  <span class="ai-model-hint" id="aiModelHint"></span>
+                </div>
+                <button class="ai-clear-btn" id="aiClearBtn">Clear conversation</button>
+              </div>
+              <div class="ai-context-bar" id="aiContextBar">
+                No backtest loaded &mdash; run a backtest first, then return to this tab.
+              </div>
+            </div>
+
+            <!-- Chat area -->
+            <div class="ai-chat-area" id="aiChatArea">
+
+              <!-- Starter chips (visible when conversation is empty) -->
+              <div class="ai-starters" id="aiStarters">
+                <div class="ai-starters-label">Suggested analysis questions:</div>
+                <div class="ai-chips">
+                  <button class="ai-chip" data-q="Which setup types are most profitable and why? Show WR and PF for each.">Which setup types are most profitable?</button>
+                  <button class="ai-chip" data-q="What 2-3 feature combinations predict winning trades? Only report combinations where n>=30. Format as conditional rules.">What conditions predict winning trades?</button>
+                  <button class="ai-chip" data-q="Analyze my losing trades. What features do they share? Give me specific avoidance rules where n>=30, formatted as: AVOID [condition] — [WR]% WR (n=[count], PF=[value])">Analyze my losing trades</button>
+                  <button class="ai-chip" data-q="What confidence threshold per setup type maximizes profit factor? Show the tradeoff between trade count and PF at each threshold from 65 to 90.">Optimal confidence threshold?</button>
+                  <button class="ai-chip" data-q="How does VIX regime (low/normal/elevated/crisis) affect win rate and profit factor? Are there regimes I should avoid?">VIX regime impact?</button>
+                  <button class="ai-chip" data-q="Which ET hours perform best per setup type? Which hours should I avoid? Use the byHour breakdown.">Best hours of day?</button>
+                  <button class="ai-chip" data-q="How does risk appetite (on/neutral/off) affect win rate across my setup types? Should I gate any setup on risk appetite?">Risk appetite impact?</button>
+                  <button class="ai-chip" data-q="Does equity breadth (0-4) predict trade outcome? At what breadth level does edge break down?">Equity breadth analysis?</button>
+                  <button class="ai-chip" data-q="Run a full Phase 1 analysis: identify all single features that predict WR>60%, all 2-3 feature combinations predicting WR>65%, and all avoidance conditions with WR<40%. Minimum n=30 for every rule. This is a deep analysis — take your time.">Full deep analysis (slow &mdash; use overnight model)</button>
+                </div>
+              </div>
+
+              <!-- Messages render here -->
+              <div id="aiMessages"></div>
+            </div>
+
+            <!-- Input area -->
+            <div class="ai-input-area">
+              <textarea id="aiInput" placeholder="Ask about this backtest run..."
+                        rows="2" disabled></textarea>
+              <button id="aiCancelBtn" class="ai-cancel-btn" style="display:none">Cancel</button>
+              <button id="aiSendBtn" class="btn-primary" disabled>Send</button>
+            </div>
+
+          </div><!-- /#bt2-tab-ai -->
 
         </section>
       </div>

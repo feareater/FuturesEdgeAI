@@ -4,6 +4,7 @@ require('dotenv').config();
 
 const http    = require('http');
 const path    = require('path');
+const crypto  = require('crypto');
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const { authenticate }      = require('./auth/tradovate');
@@ -1962,12 +1963,91 @@ app.get('/api/realaccount/daily-pnl', (_req, res) => {
   res.json({ date: today, trades: todayTrades.length, grossPnl: netPnl, fees: totalFees, netPnl: netPnl - totalFees });
 });
 
+// ─── LOCAL LLM (OLLAMA) API ──────────────────────────────────────────────────
+
+const { checkOllamaHealth, buildBacktestSystemPrompt, streamOllamaResponse } = require('./ai/ollamaClient');
+
+// GET /api/ai/ollama/status
+app.get('/api/ai/ollama/status', async (_req, res) => {
+  try {
+    const health = await checkOllamaHealth();
+    res.json({
+      available: health.available,
+      models: health.models,
+      currentModel: process.env.OLLAMA_MODEL || 'qwen2.5:32b',
+      baseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
+      ...(health.error ? { error: health.error } : {}),
+    });
+  } catch (e) {
+    res.json({ available: false, models: [], error: e.message });
+  }
+});
+
+// POST /api/backtest/analyze — SSE streaming backtest chat via local LLM
+app.post('/api/backtest/analyze', async (req, res) => {
+  const { jobId, model, message, history } = req.body || {};
+
+  if (!jobId) return res.status(400).json({ error: 'jobId required' });
+
+  const resultsPath = require('path').join(__dirname, '../data/backtest/results', `${jobId}.json`);
+  if (!require('fs').existsSync(resultsPath)) {
+    return res.status(404).json({ error: `Job ${jobId} not found` });
+  }
+
+  const health = await checkOllamaHealth();
+  if (!health.available) {
+    return res.status(503).json({
+      error: 'Ollama is not running. In WSL2 terminal run: sudo systemctl restart ollama',
+    });
+  }
+
+  let jobResults;
+  try {
+    jobResults = JSON.parse(require('fs').readFileSync(resultsPath, 'utf8'));
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to load job results: ' + e.message });
+  }
+
+  const tradeCount = (jobResults.trades || []).length;
+  const selectedModel = model || process.env.OLLAMA_MODEL || 'qwen2.5:32b';
+  console.log(`[ollama-analyze] jobId=${jobId} trades=${tradeCount} model=${selectedModel} msg="${(message || '').substring(0, 80)}"`);
+
+  const systemPrompt = buildBacktestSystemPrompt(jobResults);
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+
+  req.on('close', () => {
+    console.log('[analyze] client disconnected, request will complete or be garbage collected');
+  });
+
+  const send = (obj) => res.write('data: ' + JSON.stringify(obj) + '\n\n');
+
+  await streamOllamaResponse(
+    selectedModel,
+    systemPrompt,
+    history || [],
+    message || '',
+    (token) => send({ type: 'token', content: token }),
+    ()      => { send({ type: 'done' }); res.end(); },
+    (err)   => { send({ type: 'error', message: err }); res.end(); },
+  );
+});
+
 // ─── BACKTEST API ────────────────────────────────────────────────────────────
 
+const { Worker } = require('worker_threads');
+
 const {
-  launchBacktest, getJob, getJobResults, listJobs, deleteJob,
+  getJob, getJobResults, listJobs, deleteJob,
   getReplayData, getFullRunReplayData, getAvailableDateRange,
 } = require('./backtest/engine');
+
+// In-progress worker jobs (running state — completed jobs live on disk)
+const MAX_CONCURRENT_JOBS = 4;
+const workerJobs = new Map(); // jobId → { jobId, status, config, startedAt, completedAt, progress, stats, error }
 
 // GET /api/backtest/available — date ranges per symbol
 app.get('/api/backtest/available', (_req, res) => {
@@ -1975,40 +2055,110 @@ app.get('/api/backtest/available', (_req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// POST /api/backtest/run — start async backtest job
+// POST /api/backtest/run — start backtest in worker thread, returns jobId immediately
 app.post('/api/backtest/run', (req, res) => {
   const config = req.body;
   if (!config || !config.startDate || !config.endDate) {
     return res.status(400).json({ error: 'config.startDate and endDate required' });
   }
+
+  // Reject if at concurrency limit
+  const runningCount = [...workerJobs.values()].filter(j => j.status === 'running').length;
+  if (runningCount >= MAX_CONCURRENT_JOBS) {
+    return res.status(429).json({ error: `Max concurrent jobs (${MAX_CONCURRENT_JOBS}) reached — try again shortly` });
+  }
+
   // Fall back to server settings.spanMargin if client didn't send one
   if (!config.spanMargin) config.spanMargin = settings.spanMargin || {};
-  try {
-    const jobId = launchBacktest(config);
-    res.json({ jobId });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+
+  const jobId = crypto.randomBytes(6).toString('hex');
+  workerJobs.set(jobId, {
+    jobId,
+    status:      'running',
+    config,
+    startedAt:   new Date().toISOString(),
+    completedAt: null,
+    progress:    { phase: 'starting', pct: 0, message: 'Starting...' },
+    stats:       null,
+    error:       null,
+  });
+
+  res.json({ jobId, status: 'running' }); // Return immediately — worker runs in background
+
+  const worker = new Worker(path.join(__dirname, 'backtest', 'worker.js'), {
+    workerData: { jobId, config },
+  });
+
+  worker.on('message', (msg) => {
+    const job = workerJobs.get(jobId);
+    if (!job) return;
+    if (msg.type === 'progress') {
+      job.progress = { phase: msg.phase, pct: msg.pct ?? 0, message: msg.message ?? '' };
+    } else if (msg.type === 'complete') {
+      job.status      = 'completed';
+      job.completedAt = new Date().toISOString();
+      job.progress    = { phase: 'done', pct: 100, message: 'Complete' };
+      job.stats       = msg.stats;
+    } else if (msg.type === 'error') {
+      job.status = 'error';
+      job.error  = msg.message;
+    }
+  });
+
+  worker.on('error', (err) => {
+    const job = workerJobs.get(jobId);
+    if (job && job.status === 'running') { job.status = 'error'; job.error = err.message; }
+    console.error(`[Worker] Job ${jobId} error: ${err.message}`);
+  });
+
+  worker.on('exit', (code) => {
+    if (code !== 0) {
+      const job = workerJobs.get(jobId);
+      if (job && job.status === 'running') { job.status = 'error'; job.error = `Worker exited with code ${code}`; }
+      console.error(`[Worker] Job ${jobId} exited with code ${code}`);
+    }
+  });
 });
 
 // GET /api/backtest/status/:jobId
 app.get('/api/backtest/status/:jobId', (req, res) => {
-  const job = getJob(req.params.jobId);
+  const jobId = req.params.jobId;
+  // Worker jobs (running or recently finished) take precedence
+  if (workerJobs.has(jobId)) {
+    const job = workerJobs.get(jobId);
+    return res.json({ jobId, status: job.status, progress: job.progress, error: job.error });
+  }
+  // Fall back to disk-based lookup (engine.js getJob)
+  const job = getJob(jobId);
   if (!job) return res.status(404).json({ error: 'Job not found' });
-  res.json({ jobId: req.params.jobId, status: job.status, progress: job.progress ?? 0, error: job.error });
+  res.json({ jobId, status: job.status, progress: job.progress ?? 0, error: job.error });
 });
 
 // GET /api/backtest/results/:jobId
 app.get('/api/backtest/results/:jobId', (req, res) => {
-  const job = getJob(req.params.jobId);
-  if (!job) return res.status(404).json({ error: 'Job not found' });
-  const results = getJobResults(req.params.jobId);
-  if (!results) return res.status(404).json({ error: 'Results not yet available' });
+  const jobId = req.params.jobId;
+  // If worker job is still running, results aren't ready yet
+  const workerJob = workerJobs.get(jobId);
+  if (workerJob && workerJob.status === 'running') {
+    return res.status(404).json({ error: 'Results not yet available' });
+  }
+  const results = getJobResults(jobId);
+  if (!results) return res.status(404).json({ error: 'Results not found' });
   res.json(results);
 });
 
 // GET /api/backtest/jobs
 app.get('/api/backtest/jobs', (_req, res) => {
-  try { res.json(listJobs()); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  try {
+    const diskJobs = listJobs();
+    const diskJobIds = new Set(diskJobs.map(j => j.jobId));
+    // Include running worker jobs that haven't been written to disk yet
+    const liveJobs = [...workerJobs.values()]
+      .filter(j => j.status === 'running' || !diskJobIds.has(j.jobId))
+      .map(j => ({ jobId: j.jobId, status: j.status, config: j.config,
+        startedAt: j.startedAt, completedAt: j.completedAt, stats: j.stats }));
+    res.json([...liveJobs, ...diskJobs]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // DELETE /api/backtest/jobs/:jobId

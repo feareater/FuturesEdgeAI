@@ -83,6 +83,8 @@ Return findings as specific conditional rules with sample sizes and win rates.
 Only report rules where n >= 30. Format each rule as:
 "[condition] → [WR]% WR (n=[count], PF=[value])"
 
+**IMPLEMENTATION STATUS:** Complete (v13.1). Built as streaming chat interface in `backtest2.html` (6th tab, AI Analysis). Uses local Ollama LLM instead of Claude API — zero cost per analysis session. Select `qwen2.5:32b` for day use or `llama3.3:70b` for overnight deep analysis from the model selector in the tab.
+
 **Expected output:** Conditional rules like:
 - `or_breakout + riskAppetite=on + first 90min RTH → 61% WR (n=312, PF=2.1)`
 - `pdh_breakout + bondRegime=bullish + MNQ → 58% WR (n=87, PF=1.7)`
@@ -257,7 +259,7 @@ This gives Claude enough context to write genuinely useful commentary rather tha
 
 These were discussed and intentionally deferred:
 
-- **Local LLM (Ollama, LM Studio)** — rejected for real-time use; models capable of financial reasoning are too slow on CPU (30–60s/response). Revisit only if Claude API costs become prohibitive at scale.
+- **Local LLM (Ollama)** — ACTIVE for batch/backtest analysis. Running in WSL2 Ubuntu on local machine, accessible at `localhost:11434` via mirrored networking. Models: `qwen2.5:32b` (day use, ~10–15 tok/s) and `llama3.3:70b:q3_k_m` (overnight deep analysis, ~5–8 tok/s). Implementation: streaming chat in `backtest2.html` AI Analysis tab via `server/ai/ollamaClient.js` and `POST /api/backtest/analyze` SSE endpoint. Still deferred for real-time alert commentary — latency too high.
 - **Neural networks** — rejected in favor of decision trees for interpretability. The marginal accuracy gain is not worth losing the ability to understand and trust the model's decisions.
 - **Signal generation from AI** — explicitly out of scope. Setup detection stays deterministic. AI is analysis and nudging only.
 - **VIX from CBOE** — no reliable free historical source found. Replaced with realized volatility proxy computed from MNQ 1m bars (Phase 1g). Adequate for regime classification.

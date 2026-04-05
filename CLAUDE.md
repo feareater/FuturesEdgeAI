@@ -33,6 +33,7 @@ FuturesEdge AI is a browser-based trading analysis dashboard for a single user (
 | Charting | TradingView Lightweight Charts |
 | Technical indicators | `technicalindicators` npm library |
 | AI commentary | Anthropic Claude API (claude-sonnet-4-6) |
+| AI analysis (local/batch) | Ollama (WSL2 Ubuntu) | `localhost:11434`; `qwen2.5:32b` day use / `llama3.3:70b` overnight; backtest analysis only |
 | Frontend | HTML / CSS / Vanilla JS |
 | Local comms | `ws` WebSocket library |
 | Storage | JSON flat files (local) |
@@ -286,6 +287,9 @@ Default view (Reset to Default): all layers ON.
 | U (v12.7) | DX/VIX pipeline — Phase 1b loop 5 (DX extraction), Phase 1d DX parsing (dxy.json, 2251 dates, 89–114 range), historicalVolatility.js + Phase 1g (vix.json, 1767 dates, March 2020=80.5%), engine VIX/DXY enrichment + zone_rejection disabled default + OR breakout 5m-only guard. Final A5: Net +$233K, PF 1.69 | ✅ Complete |
 | V (v12.8) | Market breadth scoring — marketBreadth.js (16 CME instruments), breadth additive scoring in applyMarketContext (±15 pts cap), trade record breadth fields, Optimize tab Market Breadth + Inter-market sub-tabs | ✅ Complete |
 | W (v12.9) | A5 Final with breadth active — dollarRegime spot-check (no inversion bug), full-period A5 re-run: Net +$238K, WR 33.9%, PF 1.584, 9,286 trades. Breadth marginal positive (+$4,500 vs baseline, MaxDD 9% lower). zone_rejection remains disabled. | ✅ Complete |
+| X (v13.0) | B5 forward-test harness — checkLiveOutcomes in simulator.js, alertDedup.js, pushManager.js (VAPID web-push), alert feed AGING/STALE badges | ✅ Complete |
+| Y (v13.1) | Local LLM analysis — ollamaClient.js (checkOllamaHealth, buildBacktestSystemPrompt, streamOllamaResponse), GET /api/ai/ollama/status, POST /api/backtest/analyze SSE, 6th tab in backtest2.html | ✅ Complete |
+| Z (v13.2) | Backtest performance: worker threads (non-blocking POST /api/backtest/run, MAX_CONCURRENT_JOBS=4), breadth cache (breadth_cache.json, ~4× speedup on repeat runs), TF pre-aggregation (futures_agg/ directory, skip-if-exists) | ✅ Complete |
 
 ---
 
@@ -318,6 +322,8 @@ Update at runtime via `POST /api/settings/span` or the SPAN Margins panel in the
 |---|---|
 | `GET /api/ddbands?symbol=MNQ` | Current DD/SPAN levels + currentPrice for topbar widget |
 | `POST /api/settings/span` | Update SPAN margin values (body: `{ MNQ: 1400, ... }`) |
+| `GET /api/ai/ollama/status` | Ollama health check + available models list |
+| `POST /api/backtest/analyze` | SSE streaming backtest chat via local LLM |
 
 ---
 
@@ -448,10 +454,10 @@ All toggleable at runtime via `POST /api/features { "featureName": true|false }`
 | Trendline Break | `trendline_break` | ≥3 touches required |
 | OR Breakout | `or_breakout` | After 14:00 UTC, RTH only, first-close |
 
-## Backtest System (v10.x) — Key Facts
+## Backtest System (v13.2) — Key Facts
 
 ### Engine (`server/backtest/engine.js`)
-- Primary mode: `runBacktestMTF()` — bar-by-bar replay using pre-derived TF files
+- Primary mode: `runBacktestMTF(config, onProgress?)` — bar-by-bar replay using pre-derived TF files
 - **Current-bar filter**: `if (setup.time !== detectTs) continue` — only fires setups triggered by the bar that just closed. Prevents stale entry prices from historical candles.
 - **OR breakout dedup**: keyed `${symbol}-${date}-or_breakout-${direction}` — fires once per session per direction only.
 - **maxDrawdown**: computed from trade-by-trade running sequence, not daily equity aggregates.
@@ -459,6 +465,18 @@ All toggleable at runtime via `POST /api/features { "featureName": true|false }`
 - `TF_SECONDS` map: `{ '1m':60, '5m':300, '15m':900, '30m':1800, ... }`
 - Force-close at 16:45 ET via `_forceCloseTs()` — iterates all bars, no early break.
 - 1-trade-at-a-time per symbol enforced via `lastExitTs[symbol]`.
+- **Breadth cache** (v13.2): `_precomputeBreadth()` checks `data/historical/breadth_cache.json` first; only computes missing dates; saves back to cache. First run cold, subsequent runs fast (O(dates) lookup).
+- **TF pre-agg** (v13.2): `loadDailyBars()` checks `data/historical/futures_agg/{sym}/{tf}/{date}.json` before `futures/{sym}/{tf}/{date}.json`. Optional optimization — falls back gracefully.
+
+### Worker execution (v13.2)
+- `server/backtest/worker.js` — Worker thread entry point; runs `runBacktestMTF`, writes results to disk, sends `{ type: 'progress'|'complete'|'error' }` messages
+- `server/index.js` `workerJobs` Map — tracks in-progress worker jobs (status, progress object, stats)
+- `MAX_CONCURRENT_JOBS = 4` — POST /api/backtest/run returns HTTP 429 if exceeded
+- `GET /api/backtest/status/:jobId` — returns `{ progress: { phase, pct, message } }` while running
+
+### Precompute scripts
+- `node scripts/precomputeBreadth.js [--force]` — populate `breadth_cache.json`; resumable; saves every 100 dates. Cache already populated: 4082 dates (2010–2026).
+- `node scripts/precomputeTimeframes.js [--symbol SYM] [--force]` — aggregate 1m→5m/15m/30m into `futures_agg/`. Already run for all 16 symbols (134K files, clock-aligned windows).
 
 ### Backtest UI (`public/backtest2.html`, `backtest2.js`, `backtest2.css`)
 - Config: date range, symbols, timeframes, setup types, min confidence, starting balance, HP toggle, max hold, fee/RT, contracts, trading hours filter
@@ -473,12 +491,13 @@ All toggleable at runtime via `POST /api/features { "featureName": true|false }`
   - Time of Day sub-tab: ET hour heatmap (9–18) per setup type using `trade.hour`
   - Notifications sub-tab: static tier design reference + dedup logic + staleness decay
   - State: `_bt2ActiveSubtab`, `_bt2OptSetupType`, `_bt2OptSymbol` (localStorage-persisted)
+- **Progress bar**: `pollJob()` reads `status.progress.pct` + `.message`; `showProgress(show, label, pct)` drives `#bt2-progress-fill` width
 
 ### Backtest API Routes
-- `POST /api/backtest/run` — launch async job
-- `GET /api/backtest/status/:jobId`
-- `GET /api/backtest/jobs` — list all jobs (includes `stats` for each)
-- `GET /api/backtest/jobs/:jobId/results` — full results (trades + equity)
+- `POST /api/backtest/run` — spawns Worker, returns `{ jobId }` immediately (non-blocking, ~50ms)
+- `GET /api/backtest/status/:jobId` — checks workerJobs first (progress object), falls back to disk
+- `GET /api/backtest/jobs` — merges live workerJobs + disk jobs
+- `GET /api/backtest/results/:jobId` — full results (trades + equity); 404 while running
 - `DELETE /api/backtest/jobs/:jobId`
 - `GET /api/backtest/replay/:jobId?symbol=X&date=YYYY-MM-DD`
 - `GET /api/backtest/replay/:jobId/full?symbol=X` — all bars + alerts for full-run replay

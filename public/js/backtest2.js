@@ -41,6 +41,14 @@ let _trades         = [];      // current filtered trade list
 let _sortKey        = 'date';
 let _sortAsc        = true;
 
+// AI Analysis tab state
+let _bt2AiHistory              = [];    // [{role,content}] conversation turns this session
+let _bt2AiStreaming             = false; // true while SSE response is active
+let _bt2AiJobId                = null;  // jobId currently loaded in AI context
+let _bt2AiCurrentAssistantEl   = null;  // DOM element being streamed into
+let _bt2AiOllamaOnline         = false; // tracks status badge
+let _bt2AiAbortController      = null;  // AbortController for the active fetch
+
 // Replay state
 let _replayBars     = [];
 let _replayAlerts   = [];
@@ -59,6 +67,7 @@ let _replayJobId    = null;
 document.addEventListener('DOMContentLoaded', async () => {
   initHoursGrid();
   bindEvents();
+  _initAiTab();
   loadPreviousJobs();
   await loadAvailableDates();   // sets date defaults first
   loadSavedConfig();            // then restores other prefs (NOT dates)
@@ -322,7 +331,10 @@ async function pollJob(jobId) {
   clearTimeout(_pollTimer);
   try {
     const status = await apiFetch(`/api/backtest/status/${jobId}`);
-    showProgress(true, `Running… (${status.status})`);
+    const prog = status.progress;
+    const pct  = typeof prog === 'object' ? (prog.pct ?? 0) : (typeof prog === 'number' ? prog : 0);
+    const msg  = typeof prog === 'object' ? (prog.message || prog.phase || '') : '';
+    showProgress(true, `Running… ${pct}%${msg ? ' — ' + msg : ''}`, pct);
 
     if (status.status === 'completed') {
       showProgress(false);
@@ -342,10 +354,11 @@ async function pollJob(jobId) {
   }
 }
 
-function showProgress(show, label) {
+function showProgress(show, label, pct) {
   const wrap = document.getElementById('bt2-progress-wrap');
   wrap.style.display = show ? '' : 'none';
   if (label) document.getElementById('bt2-progress-label').textContent = label;
+  if (pct != null) document.getElementById('bt2-progress-fill').style.width = pct + '%';
 }
 
 // ─── Load results ─────────────────────────────────────────────────────────────
@@ -356,6 +369,11 @@ function loadResults(results) {
 
   document.getElementById('bt2-no-results').style.display = 'none';
   document.getElementById('bt2-summary-content').style.display = '';
+
+  // Refresh AI context bar if AI tab is currently active
+  if (document.getElementById('bt2-tab-ai')?.classList.contains('active')) {
+    _refreshAiContext();
+  }
 
   const balance = getStartingBalance();
   renderStatCards(results.stats, balance);
@@ -2484,4 +2502,318 @@ function _bt2RenderIntermarket() {
       Low breadth + risk-off → strongest tailwind for bearish setups.
     </p>
   `;
+}
+
+// ─── AI Analysis Tab ──────────────────────────────────────────────────────────
+
+function _initAiTab() {
+  // AI tab button — Ollama check + context refresh on each click
+  const aiTabBtn = document.querySelector('.bt2-tab[data-tab="ai"]');
+  if (aiTabBtn) {
+    aiTabBtn.addEventListener('click', () => {
+      _checkOllamaStatus();
+      _refreshAiContext();
+    });
+  }
+
+  // All remaining bindings are null-safe so a cached/missing AI tab HTML
+  // never throws and never blocks the rest of the DOMContentLoaded handler.
+
+  const aiClearBtn = document.getElementById('aiClearBtn');
+  if (aiClearBtn) aiClearBtn.addEventListener('click', _clearAiConversation);
+
+  const aiSendBtn = document.getElementById('aiSendBtn');
+  if (aiSendBtn) aiSendBtn.addEventListener('click', _sendAiMessage);
+
+  const aiInput = document.getElementById('aiInput');
+  if (aiInput) {
+    aiInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        _sendAiMessage();
+      }
+    });
+  }
+
+  const aiStarters = document.getElementById('aiStarters');
+  if (aiStarters) {
+    aiStarters.addEventListener('click', (e) => {
+      const chip = e.target.closest('.ai-chip');
+      if (!chip) return;
+      const input = document.getElementById('aiInput');
+      if (input) input.value = chip.dataset.q || '';
+      _sendAiMessage();
+    });
+  }
+
+  const aiModelSelect = document.getElementById('aiModelSelect');
+  if (aiModelSelect) aiModelSelect.addEventListener('change', _updateModelHint);
+
+  const aiCancelBtn = document.getElementById('aiCancelBtn');
+  if (aiCancelBtn) {
+    aiCancelBtn.addEventListener('click', () => {
+      if (_bt2AiAbortController) _bt2AiAbortController.abort();
+    });
+  }
+}
+
+async function _checkOllamaStatus() {
+  const dot  = document.getElementById('aiStatusDot');
+  const text = document.getElementById('aiStatusText');
+  const sel  = document.getElementById('aiModelSelect');
+
+  dot.className  = 'ai-status-dot';
+  text.textContent = 'Checking Ollama...';
+
+  try {
+    const data = await apiFetch('/api/ai/ollama/status');
+    if (data.available) {
+      dot.classList.add('online');
+      text.textContent = 'Ollama running';
+      _bt2AiOllamaOnline = true;
+
+      // Populate model selector
+      sel.innerHTML = '';
+      const models = data.models && data.models.length > 0
+        ? data.models
+        : [data.currentModel || 'qwen2.5:32b'];
+      for (const m of models) {
+        const opt = document.createElement('option');
+        opt.value = m;
+        opt.textContent = m;
+        if (m === data.currentModel) opt.selected = true;
+        sel.appendChild(opt);
+      }
+      sel.disabled = false;
+      _updateModelHint();
+
+      if (_bt2AiJobId) {
+        document.getElementById('aiInput').disabled = false;
+        document.getElementById('aiSendBtn').disabled = false;
+      }
+    } else {
+      dot.classList.add('offline');
+      text.textContent = 'Ollama not running — in WSL2: sudo systemctl restart ollama';
+      _bt2AiOllamaOnline = false;
+      sel.innerHTML = '';
+      sel.disabled = true;
+      document.getElementById('aiInput').disabled = true;
+      document.getElementById('aiSendBtn').disabled = true;
+    }
+  } catch (err) {
+    dot.classList.add('offline');
+    text.textContent = 'Cannot reach Ollama status endpoint';
+    _bt2AiOllamaOnline = false;
+    sel.disabled = true;
+    document.getElementById('aiInput').disabled = true;
+    document.getElementById('aiSendBtn').disabled = true;
+  }
+}
+
+function _updateModelHint() {
+  const sel  = document.getElementById('aiModelSelect');
+  const hint = document.getElementById('aiModelHint');
+  const val  = (sel.value || '').toLowerCase();
+  if (val.includes('70b'))      hint.textContent = '~5-8 tok/s · best for overnight';
+  else if (val.includes('32b')) hint.textContent = '~10-15 tok/s · recommended';
+  else if (val.includes('14b')) hint.textContent = '~20-30 tok/s · fast';
+  else                          hint.textContent = '~50+ tok/s · fastest';
+}
+
+function _refreshAiContext() {
+  const bar = document.getElementById('aiContextBar');
+
+  if (!_currentResults) {
+    bar.textContent = 'No backtest loaded — run a backtest first';
+    bar.className = 'ai-context-bar';
+    document.getElementById('aiInput').disabled = true;
+    document.getElementById('aiSendBtn').disabled = true;
+    return;
+  }
+
+  const jobId = _currentResults.jobId || _currentResults.id || _currentJobId;
+  const tradeCount = _currentResults.trades?.length ?? _currentResults.stats?.totalTrades ?? '?';
+  const label = _getJobLabel(jobId, _currentResults.config);
+
+  bar.textContent = `Context: ${label} — ${tradeCount} trades loaded`;
+  bar.className = 'ai-context-bar loaded';
+
+  if (jobId !== _bt2AiJobId) {
+    _bt2AiJobId = jobId;
+    _clearAiConversation();
+  }
+
+  if (_bt2AiOllamaOnline) {
+    document.getElementById('aiInput').disabled = false;
+    document.getElementById('aiSendBtn').disabled = false;
+  }
+}
+
+function _sendAiMessage() {
+  if (_bt2AiStreaming) return;
+
+  if (!_bt2AiJobId) {
+    _appendMessage('assistant', 'Load a backtest run first before asking questions.');
+    return;
+  }
+
+  const input   = document.getElementById('aiInput');
+  const message = (input.value || '').trim();
+  if (!message) return;
+
+  const model = document.getElementById('aiModelSelect').value || 'qwen2.5:32b';
+
+  // User message bubble
+  _appendMessage('user', message);
+  _bt2AiHistory.push({ role: 'user', content: message });
+
+  // Clear input, hide starters
+  input.value = '';
+  document.getElementById('aiStarters').style.display = 'none';
+
+  // Assistant bubble — thinking state
+  _bt2AiCurrentAssistantEl = _appendThinking();
+  _scrollAiToBottom();
+
+  // Lock UI, show cancel button
+  _bt2AiStreaming = true;
+  _bt2AiAbortController = new AbortController();
+  document.getElementById('aiSendBtn').disabled = true;
+  document.getElementById('aiInput').disabled = true;
+  const cancelBtn = document.getElementById('aiCancelBtn');
+  if (cancelBtn) cancelBtn.style.display = 'inline-block';
+
+  const historyToSend = _bt2AiHistory.slice(0, -1); // all but the message we just pushed
+  let fullResponse = '';
+
+  fetch('/api/backtest/analyze', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jobId: _bt2AiJobId, model, message, history: historyToSend }),
+    signal: _bt2AiAbortController.signal,
+  }).then(res => {
+    if (!res.ok) {
+      return res.json().then(e => { throw new Error(e.error || 'Request failed'); });
+    }
+
+    const reader  = res.body.getReader();
+    const decoder = new TextDecoder();
+
+    function read() {
+      reader.read().then(({ done, value }) => {
+        if (done) return;
+
+        const text  = decoder.decode(value);
+        const lines = text.split('\n');
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const parsed = JSON.parse(line.slice(6));
+
+            if (parsed.type === 'token') {
+              fullResponse += parsed.content;
+              if (_bt2AiCurrentAssistantEl?.classList.contains('ai-thinking')) {
+                _bt2AiCurrentAssistantEl.classList.remove('ai-thinking');
+                _bt2AiCurrentAssistantEl.classList.add('ai-streaming');
+                _bt2AiCurrentAssistantEl.innerHTML = '';
+              }
+              if (_bt2AiCurrentAssistantEl) {
+                _bt2AiCurrentAssistantEl.textContent += parsed.content;
+              }
+              _scrollAiToBottom();
+            } else if (parsed.type === 'done') {
+              if (_bt2AiCurrentAssistantEl) {
+                _bt2AiCurrentAssistantEl.classList.remove('ai-streaming');
+              }
+              _bt2AiHistory.push({ role: 'assistant', content: fullResponse });
+              _unlockAiInput();
+            } else if (parsed.type === 'error') {
+              if (_bt2AiCurrentAssistantEl) {
+                _bt2AiCurrentAssistantEl.classList.remove('ai-thinking', 'ai-streaming');
+                _bt2AiCurrentAssistantEl.classList.add('ai-error');
+                _bt2AiCurrentAssistantEl.textContent = 'Error: ' + parsed.message;
+              }
+              _unlockAiInput();
+            }
+          } catch { /* skip malformed lines */ }
+        }
+
+        read();
+      });
+    }
+    read();
+
+  }).catch(err => {
+    if (err.name === 'AbortError') {
+      // User cancelled — keep partial response, mark it
+      if (_bt2AiCurrentAssistantEl) {
+        _bt2AiCurrentAssistantEl.classList.remove('ai-thinking', 'ai-streaming');
+        if (fullResponse.length > 0) {
+          const tag = document.createElement('span');
+          tag.style.cssText = 'color:#556677;font-size:11px;margin-left:6px';
+          tag.textContent = '[cancelled]';
+          _bt2AiCurrentAssistantEl.appendChild(tag);
+        } else {
+          _bt2AiCurrentAssistantEl.remove();
+        }
+      }
+      if (fullResponse.length > 20) {
+        _bt2AiHistory.push({ role: 'assistant', content: fullResponse });
+      }
+      _unlockAiInput();
+      return;
+    }
+    if (_bt2AiCurrentAssistantEl) {
+      _bt2AiCurrentAssistantEl.classList.remove('ai-thinking', 'ai-streaming');
+      _bt2AiCurrentAssistantEl.classList.add('ai-error');
+      _bt2AiCurrentAssistantEl.textContent = 'Error: ' + err.message;
+    }
+    _unlockAiInput();
+  });
+}
+
+function _appendMessage(role, content) {
+  const msgs = document.getElementById('aiMessages');
+  const el = document.createElement('div');
+  el.className = role === 'user'
+    ? 'ai-message ai-message-user'
+    : 'ai-message ai-message-assistant';
+  el.textContent = content;
+  msgs.appendChild(el);
+  return el;
+}
+
+function _appendThinking() {
+  const msgs = document.getElementById('aiMessages');
+  const el = document.createElement('div');
+  el.className = 'ai-message ai-message-assistant ai-thinking';
+  el.innerHTML = '<span class="ai-dots">Analyzing...</span>';
+  msgs.appendChild(el);
+  return el;
+}
+
+function _unlockAiInput() {
+  _bt2AiStreaming = false;
+  _bt2AiAbortController = null;
+  document.getElementById('aiSendBtn').disabled = false;
+  document.getElementById('aiInput').disabled = false;
+  const cancelBtn = document.getElementById('aiCancelBtn');
+  if (cancelBtn) cancelBtn.style.display = 'none';
+  _bt2AiCurrentAssistantEl = null;
+}
+
+function _clearAiConversation() {
+  _bt2AiHistory = [];
+  _bt2AiStreaming = false;
+  _bt2AiCurrentAssistantEl = null;
+  document.getElementById('aiMessages').innerHTML = '';
+  document.getElementById('aiStarters').style.display = '';
+  const area = document.getElementById('aiChatArea');
+  if (area) area.scrollTop = 0;
+}
+
+function _scrollAiToBottom() {
+  const area = document.getElementById('aiChatArea');
+  if (area) area.scrollTop = area.scrollHeight;
 }

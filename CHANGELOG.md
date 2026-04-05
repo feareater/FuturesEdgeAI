@@ -4,6 +4,114 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v13.2] — 2026-04-05 — Backtest performance: worker threads + breadth cache + TF pre-aggregation
+
+### Phase A — Worker Threads (non-blocking job execution)
+`runBacktestMTF` was synchronous despite being declared `async` — it blocked the Express event loop for 10–20 min per job, preventing any other requests from being served during a backtest run.
+
+**New file: server/backtest/worker.js**
+- Runs `runBacktestMTF` in a dedicated `worker_threads` Worker
+- Writes results to disk directly (`data/backtest/results/{jobId}.json`) — avoids large IPC serialization
+- Sends compact `{ type: 'progress', phase, pct, message }` messages during execution
+- Sends `{ type: 'complete', stats }` on success; `{ type: 'error', message }` on failure
+
+**Modified: server/backtest/engine.js**
+- `runBacktestMTF(config, onProgress = null)` — optional progress callback parameter
+- `onProgress` fired at: breadth start (5%), breadth done (15%), after each symbol-TF unit (15→97%), done (100%)
+
+**Modified: server/index.js**
+- Added `const { Worker } = require('worker_threads')` and `const crypto = require('crypto')`
+- `workerJobs` Map — tracks in-progress and recently completed worker jobs
+- `MAX_CONCURRENT_JOBS = 4` — returns HTTP 429 if exceeded
+- `POST /api/backtest/run` — spawns Worker, returns `{ jobId }` immediately (non-blocking)
+- `GET /api/backtest/status/:jobId` — checks `workerJobs` first (for running jobs), falls back to disk
+- `GET /api/backtest/jobs` — merges live worker jobs + disk jobs, de-duplicates by jobId
+- `GET /api/backtest/results/:jobId` — returns 404 while job is running, reads disk when complete
+- Removed `launchBacktest` from engine import (replaced by Worker-based launch)
+
+**Modified: public/js/backtest2.js**
+- `pollJob()` — extracts `pct` and `message` from `status.progress` object
+- `showProgress(show, label, pct)` — new `pct` param drives `#bt2-progress-fill` width
+
+### Phase B — Breadth Cache
+`_precomputeBreadth()` was reading ~46,470 files (16 symbols × ~2,900 dates) on every backtest run — the single largest startup cost (60–90s).
+
+**Modified: server/backtest/engine.js — `_precomputeBreadth()`**
+- Checks `data/historical/breadth_cache.json` on startup
+- Only computes dates missing from the cache
+- Saves newly computed dates back to cache file (graceful write failure — just warns)
+- Cache hit path: O(dates) lookup, no file I/O
+
+**New file: scripts/precomputeBreadth.js**
+- Standalone script to pre-populate full breadth cache
+- Resumable: re-running skips already-cached dates
+- Saves progress every 100 dates (crash-safe)
+- `--force` flag to recompute all dates
+- Usage: `node scripts/precomputeBreadth.js`
+
+### Phase C — TF Pre-aggregation
+`loadDailyBars()` was reading pre-derived 5m/15m/30m files from `data/historical/futures/{sym}/{tf}/` — these already exist from the Databento pipeline. Phase C adds an alternate path for custom pre-aggregated files.
+
+**Modified: server/backtest/engine.js — `loadDailyBars()`**
+- Checks `data/historical/futures_agg/{symbol}/{tf}/{date}.json` first (for non-1m TFs)
+- Falls back to existing `data/historical/futures/{symbol}/{tf}/{date}.json`
+- Results are identical — purely a read-path optimization
+
+**New file: scripts/precomputeTimeframes.js**
+- Aggregates 1m → 5m/15m/30m using clock-aligned windows (`:00/:05/…`)
+- OHLCV rules: open=first, high=max, low=min, close=last, volume=sum, ts=window open
+- Skip-if-exists by default; `--force` to overwrite
+- `--symbol MNQ` flag to process one symbol only
+- Usage: `node scripts/precomputeTimeframes.js [--symbol SYM] [--force]`
+
+---
+
+## [v13.1] — 2026-04-04 — Local LLM backtest analysis chat (AI Roadmap Phase 1)
+
+**Fix:** Replaced raw trade dump with pre-computed feature combination summaries in Ollama system prompt — fits within 32B context window and gives more accurate analysis. Added Rule 1 instructing model to use pre-computed stats rather than recalculating from raw records.
+**Fix:** Removed hard timeout from Ollama streaming — replaced with user-controlled Cancel button; streams run until complete or explicitly cancelled. AbortError treated as clean completion so partial responses are preserved in the UI.
+**Fix:** `_checkOllamaStatus()` moved to tab-click only — was blocking job list population on page load. `_initAiTab()` now uses null guards on every element access so a missing/cached AI tab HTML never throws and never aborts the DOMContentLoaded handler. AI tab button click listener moved from `bindEvents()` into `_initAiTab()` (single ownership).
+
+### New file: server/ai/ollamaClient.js
+- `checkOllamaHealth()` — 5s health check against Ollama `/api/tags`; returns `{ available, models, error? }`
+- `buildBacktestSystemPrompt(jobResults)` — serializes full trade records + stats breakdown into a structured system prompt with instrument definitions, context field explanations, and strict analysis rules (n≥30, conditional rule format)
+- `streamOllamaResponse()` — NDJSON streaming from Ollama `/api/chat` endpoint; 120s timeout; full conversation history support for multi-turn follow-up questions
+
+### New API routes (server/index.js)
+- `GET /api/ai/ollama/status` — Ollama health check + available models list + currentModel + baseUrl
+- `POST /api/backtest/analyze` — SSE streaming endpoint; loads job results from disk, builds full context prompt, streams Ollama response token by token
+
+### Updated: public/backtest2.html
+- New 6th tab: 🤖 AI Analysis (tab `data-tab="ai"`, panel `#bt2-tab-ai`)
+
+### Updated: public/js/backtest2.js
+- New AI state vars: `_bt2AiHistory`, `_bt2AiStreaming`, `_bt2AiJobId`, `_bt2AiCurrentAssistantEl`, `_bt2AiOllamaOnline`
+- `_initAiTab()` — wires all AI tab event listeners; called from DOMContentLoaded
+- `_checkOllamaStatus()` — fetches `/api/ai/ollama/status`, updates badge + model selector
+- `_updateModelHint()` — speed hint based on selected model name
+- `_refreshAiContext()` — reads `_currentResults` to update context bar; clears conversation on job change
+- `_sendAiMessage()` — SSE fetch + streaming reader; token-by-token update of assistant bubble
+- `_appendMessage()`, `_appendThinking()`, `_unlockAiInput()`, `_clearAiConversation()`, `_scrollAiToBottom()` — chat UI helpers
+- `loadResults()` hook — calls `_refreshAiContext()` when AI tab is active and a new job loads
+- Model selector dropdown: day use `qwen2.5:32b` / overnight `llama3.3:70b`
+- Starter question chips aligned with AI_ROADMAP.md Phase 1 analysis questions
+- Graceful degradation when Ollama not running (red badge + disabled input)
+- Context bar shows loaded job label and trade count; auto-clears conversation when job changes
+
+### Updated: public/css/backtest2.css
+- AI Analysis tab styles: `.ai-header`, `.ai-status-row`, `.ai-status-badge`, `.ai-status-dot`, `.ai-model-selector`, `.ai-context-bar`, `.ai-chat-area`, `.ai-starters`, `.ai-chips`, `.ai-chip`, `.ai-message`, `.ai-message-user`, `.ai-message-assistant`, `.ai-error`, thinking pulse animation, streaming cursor, `.ai-input-area`, `.btn-primary`
+
+### Updated: .env
+- `OLLAMA_BASE_URL=http://localhost:11434`
+- `OLLAMA_MODEL=qwen2.5:32b`
+
+### Ollama infrastructure
+- Running in WSL2 Ubuntu as systemd service
+- Models stored on D:\ollamaModels (8TB HDD), accessible at `localhost:11434` via mirrored networking
+- Models: `llama3.1:8b` (pulled), `qwen2.5:32b` and `llama3.3:70b:q3_k_m` (downloading)
+
+---
+
 ## [v13.0] — 2026-04-04 — B5: Forward-test harness, alert dedup, browser push notifications
 
 ### Piece 1: Real-time outcome tracking

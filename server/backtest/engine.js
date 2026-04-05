@@ -101,41 +101,72 @@ function _loadDailyClosesForSymbol(sym) {
   return closes;
 }
 
+const BREADTH_CACHE_PATH = path.resolve(DATA_DIR, 'breadth_cache.json');
+
 /**
  * Pre-compute market breadth for every trading date in the backtest range.
- * Loads daily closes once per symbol across all available dates, then
- * classifies breadth for each date using prior 21 trading days (no lookahead).
+ * Checks breadth_cache.json first — only computes dates not already cached.
+ * Saves newly computed dates back to the cache file.
  *
  * Returns { 'YYYY-MM-DD': breadthObject } covering startDate→endDate.
- * Dates with insufficient warmup data return null in the map.
+ * Dates with insufficient warmup data have a null value in the map.
  */
 function _precomputeBreadth(startDate, endDate) {
-  console.log('[BT-MTF] Precomputing market breadth for 16 symbols…');
   const t0 = Date.now();
 
-  // Load daily closes for all 16 CME symbols
+  // Load existing cache (may be partial or empty)
+  const cache = readJSON(BREADTH_CACHE_PATH) || {};
+
+  // Determine which dates in range are missing from cache
+  // We need sorted ALL dates (for 21-day lookback), but only target the requested range
+  const allSymDates = new Set();
+  // Peek at available dates without loading closes yet
+  for (const sym of ALL_SYMBOLS) {
+    const dir = path.join(DATA_DIR, 'futures', sym, '1m');
+    if (!fs.existsSync(dir)) continue;
+    for (const f of fs.readdirSync(dir).filter(f => f.endsWith('.json'))) {
+      allSymDates.add(f.replace('.json', ''));
+    }
+  }
+  const sortedAllDates = [...allSymDates].sort();
+  const targetDates = sortedAllDates.filter(d => d >= startDate && d <= endDate);
+  const missingDates = targetDates.filter(d => !(d in cache));
+
+  if (missingDates.length === 0) {
+    console.log(`[BT-MTF] Breadth cache hit: ${targetDates.length} dates (0ms)`);
+    const result = {};
+    for (const d of targetDates) result[d] = cache[d];
+    return result;
+  }
+
+  console.log(`[BT-MTF] Breadth: ${missingDates.length} uncached dates — loading daily closes…`);
+
+  // Load daily closes for all 16 symbols (needed for computation)
   const dailyClosesBySym = {};
   for (const sym of ALL_SYMBOLS) {
     dailyClosesBySym[sym] = _loadDailyClosesForSymbol(sym);
   }
 
-  // Collect all trading dates across all symbols (for proper sorted-date index)
-  const allDates = new Set();
-  for (const closes of Object.values(dailyClosesBySym)) {
-    for (const d of Object.keys(closes)) allDates.add(d);
-  }
-  const sortedDates = [...allDates].sort();
-
-  // Compute breadth for each date in the backtest range
-  const breadthByDate = {};
-  const targetDates = sortedDates.filter(d => d >= startDate && d <= endDate);
-  for (const date of targetDates) {
-    breadthByDate[date] = computeMarketBreadthHistorical(dailyClosesBySym, sortedDates, date);
+  // Compute breadth only for missing dates
+  let computed = 0;
+  for (const date of missingDates) {
+    cache[date] = computeMarketBreadthHistorical(dailyClosesBySym, sortedAllDates, date);
+    computed++;
   }
 
-  const nonNull = Object.values(breadthByDate).filter(Boolean).length;
-  console.log(`[BT-MTF] Breadth: ${nonNull}/${targetDates.length} dates populated (${Date.now() - t0}ms)`);
-  return breadthByDate;
+  // Persist updated cache
+  try {
+    writeJSON(BREADTH_CACHE_PATH, cache);
+  } catch (e) {
+    console.warn(`[BT-MTF] Could not save breadth cache: ${e.message}`);
+  }
+
+  const nonNull = targetDates.filter(d => cache[d]).length;
+  console.log(`[BT-MTF] Breadth: ${nonNull}/${targetDates.length} dates populated (${computed} computed, ${Date.now() - t0}ms)`);
+
+  const result = {};
+  for (const d of targetDates) result[d] = cache[d];
+  return result;
 }
 
 /** Build a minimal neutral market context (used when HP unavailable but breadth is). */
@@ -149,9 +180,19 @@ function _minimalContext() {
   };
 }
 
-/** Load bars for a symbol+date+timeframe. Normalizes ts→time for indicators.js. */
+/** Load bars for a symbol+date+timeframe. Normalizes ts→time for indicators.js.
+ *  Checks pre-aggregated futures_agg/ directory first (Phase C), falls back to futures/. */
 function loadDailyBars(symbol, date, tf) {
   const tfDir = tf || '1m';
+  // Phase C: check pre-aggregated path first (skip for 1m — no pre-agg for 1m)
+  if (tfDir !== '1m') {
+    const aggPath = path.join(DATA_DIR, 'futures_agg', symbol, tfDir, `${date}.json`);
+    if (fs.existsSync(aggPath)) {
+      const bars = readJSON(aggPath) || [];
+      return bars.map(b => b.time != null ? b : { ...b, time: b.ts });
+    }
+  }
+  // Fallback: original per-TF directory
   const f = path.join(DATA_DIR, 'futures', symbol, tfDir, `${date}.json`);
   const bars = readJSON(f) || [];
   // indicators.js uses c.time; historical files store c.ts — normalize
@@ -651,7 +692,7 @@ async function runBacktest(config) {
  * (same approach as the live server's runScan).
  * This is the primary backtest mode — it uses the pre-derived timeframe files.
  */
-async function runBacktestMTF(config) {
+async function runBacktestMTF(config, onProgress = null) {
   const {
     symbols      = ['MNQ'],
     timeframes   = ['5m', '15m'],
@@ -684,7 +725,13 @@ async function runBacktestMTF(config) {
   if (Object.keys(dxyData).length > 0) console.log(`[BT-MTF] Loaded dxy.json: ${Object.keys(dxyData).length} dates`);
 
   // Pre-compute market breadth for all dates — uses 16-symbol daily closes (no lookahead)
+  if (onProgress) onProgress({ phase: 'breadth', pct: 5, message: 'Pre-computing market breadth...' });
   const breadthByDate = _precomputeBreadth(startDate, endDate);
+  if (onProgress) onProgress({ phase: 'processing', pct: 15, message: 'Processing bars...' });
+
+  // Total symbol-TF units for progress reporting
+  const totalUnits = symbols.length * timeframes.length;
+  let completedUnits = 0;
 
   // Per-symbol: track exit timestamp of last trade (1-trade-at-a-time across all TFs)
   const lastExitTs = {};
@@ -902,6 +949,10 @@ async function runBacktestMTF(config) {
           }
         }
       }
+      // Report progress after each symbol-TF unit completes
+      completedUnits++;
+      const pct = Math.round(15 + (completedUnits / totalUnits) * 82);
+      if (onProgress) onProgress({ phase: 'processing', pct, message: `${symbol} ${tf} complete` });
     }
   }
 
