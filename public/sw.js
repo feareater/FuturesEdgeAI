@@ -5,7 +5,7 @@
 //   • Activate → delete old caches, claim clients
 //   • Fetch    → cache-first for shell assets; network-only for /api/ and /ws
 
-const CACHE_NAME = 'futuresedge-v35';
+const CACHE_NAME = 'futuresedge-v36';
 
 // All assets required to render the UI — these are cached at install time.
 // API calls are intentionally excluded: trading data must always be fresh.
@@ -66,6 +66,37 @@ self.addEventListener('activate', event => {
           .map(k => { console.log('[SW] Removing old cache:', k); return caches.delete(k); })
       ))
       .then(() => self.clients.claim())  // control all open tabs immediately
+  );
+});
+
+// ── Push: show OS notification when a push event arrives ─────────────────────
+self.addEventListener('push', event => {
+  const data    = event.data ? event.data.json() : {};
+  const title   = data.title || 'FuturesEdge Alert';
+  const options = {
+    body:              data.body  || '',
+    icon:              data.icon  || '/icons/icon-192.png',
+    badge:             '/icons/icon-192.png',
+    data:              data.data  || {},
+    requireInteraction: false,
+    silent:            false,
+  };
+  event.waitUntil(
+    self.registration.showNotification(title, options)
+  );
+});
+
+// ── Notification click: focus or open the dashboard ───────────────────────────
+self.addEventListener('notificationclick', event => {
+  event.notification.close();
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true })
+      .then(clientList => {
+        for (const client of clientList) {
+          if (client.url.includes('/') && 'focus' in client) return client.focus();
+        }
+        return clients.openWindow('/');
+      })
   );
 });
 

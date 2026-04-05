@@ -1989,7 +1989,18 @@
       `  <span class="price-label tp">TP</span><span class="price-val tp">${fmtP(setup.tp)}</span>`,
       `</div>`,
       `<div class="alert-footer">`,
-      `  <span class="alert-conf">${setup.confidence}%</span>`,
+      (() => {
+        const staleness = setup.staleness;
+        const dispConf  = (staleness === 'aging' || staleness === 'stale')
+          ? (setup.decayedConfidence ?? setup.confidence)
+          : setup.confidence;
+        const badge = staleness === 'stale'
+          ? ` <span class="staleness-badge stale" title="Alert is stale — confidence decayed by 30%">&#9888; STALE</span>`
+          : staleness === 'aging'
+            ? ` <span class="staleness-badge aging" title="Alert is aging — confidence decayed by 15%">&#8987; AGING</span>`
+            : '';
+        return `  <span class="alert-conf">${dispConf}%</span>${badge}`;
+      })(),
       `  <span class="alert-outcome ${outcomeClass}">${outcomeLabel}</span>`,
       `  <span class="alert-risk ${riskClass}">${riskText}</span>`,
       outcomeButtons,
@@ -2676,5 +2687,135 @@
 
   // ── Start ──────────────────────────────────────────────────────────────────
   boot();
+
+})();
+
+// ── Push Notifications UI ─────────────────────────────────────────────────────
+// Initialised after boot; gated on features.pushNotifications === true.
+
+(function () {
+  'use strict';
+
+  // Standard VAPID key conversion helper (no external dependency)
+  function urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+    const base64  = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const raw     = atob(base64);
+    const arr     = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+    return arr;
+  }
+
+  const section     = document.getElementById('push-notif-section');
+  const statusText  = document.getElementById('push-status-text');
+  const enableBtn   = document.getElementById('push-enable-btn');
+  const disableBtn  = document.getElementById('push-disable-btn');
+  const msgEl       = document.getElementById('push-msg');
+
+  if (!section) return;
+
+  let _vapidKey = null;
+  let _swReg    = null;
+
+  function _setStatus(msg) { if (statusText) statusText.textContent = msg; }
+  function _setMsg(msg)    { if (msgEl) msgEl.textContent = msg; }
+
+  function _showButtons(subscribed) {
+    if (enableBtn)  enableBtn.style.display  = subscribed ? 'none' : '';
+    if (disableBtn) disableBtn.style.display = subscribed ? '' : 'none';
+    _setStatus(subscribed ? 'Push: Active' : 'Push: Not subscribed');
+  }
+
+  async function _init() {
+    // Check if feature is enabled
+    let featureOn = false;
+    try {
+      const r = await fetch('/api/settings');
+      const d = await r.json();
+      featureOn = d.features?.pushNotifications === true;
+    } catch (_) {}
+
+    if (!featureOn) { section.style.display = 'none'; return; }
+    section.style.display = '';
+
+    // Check browser support
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      _setStatus('Push: Not supported');
+      return;
+    }
+
+    // Fetch VAPID public key
+    try {
+      const r = await fetch('/api/push/vapid-public-key');
+      if (!r.ok) throw new Error('VAPID not configured');
+      _vapidKey = (await r.json()).publicKey;
+    } catch (err) {
+      _setStatus('Push: Server not configured');
+      return;
+    }
+
+    // Get service worker registration
+    try {
+      _swReg = await navigator.serviceWorker.ready;
+    } catch (err) {
+      _setStatus('Push: Service worker unavailable');
+      return;
+    }
+
+    // Check existing subscription
+    const existing = await _swReg.pushManager.getSubscription();
+    _showButtons(!!existing);
+  }
+
+  async function _enable() {
+    if (!_swReg || !_vapidKey) return;
+    try {
+      _setMsg('Requesting permission...');
+      const sub = await _swReg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(_vapidKey),
+      });
+      await fetch('/api/push/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subscription: sub }),
+      });
+      _showButtons(true);
+      _setMsg('Push notifications enabled.');
+      setTimeout(() => _setMsg(''), 4000);
+    } catch (err) {
+      _setMsg('Failed: ' + err.message);
+    }
+  }
+
+  async function _disable() {
+    if (!_swReg) return;
+    try {
+      const sub = await _swReg.pushManager.getSubscription();
+      if (sub) {
+        await sub.unsubscribe();
+        await fetch('/api/push/subscribe', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ endpoint: sub.endpoint }),
+        });
+      }
+      _showButtons(false);
+      _setMsg('Push notifications disabled.');
+      setTimeout(() => _setMsg(''), 4000);
+    } catch (err) {
+      _setMsg('Failed: ' + err.message);
+    }
+  }
+
+  if (enableBtn)  enableBtn.addEventListener('click',  _enable);
+  if (disableBtn) disableBtn.addEventListener('click', _disable);
+
+  // Re-run init whenever the pushNotifications feature flag is toggled
+  // (the POST /api/features endpoint triggers a data_refresh WS event)
+  document.addEventListener('pushFeatureFlagChanged', _init);
+
+  // Init after a short delay to let the page settle
+  setTimeout(_init, 1200);
 
 })();

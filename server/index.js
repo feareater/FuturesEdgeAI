@@ -24,6 +24,7 @@ const coinbaseWS                = require('./data/coinbaseWS');
 const { getForexRate, getOptionsFlow, getGammaData } = require('./data/polygonFetch');
 const autotrader                = require('./trading/autotrader');
 const simulator                 = require('./trading/simulator');
+const { checkLiveOutcomes }    = require('./trading/simulator');
 const { computeRelativeStrength } = require('./analysis/relativeStrength');
 const { computeCorrelationMatrix } = require('./analysis/correlation');
 const { computePerformanceStats, computeOptimizeStats } = require('./analysis/performanceStats');
@@ -31,6 +32,8 @@ const { predict }                  = require('./analysis/predictor');
 const { getCalendarEvents } = require('./data/calendar');
 const { getOptionsData }    = require('./data/options');
 const { buildMarketContext } = require('./analysis/marketContext');
+const { isDuplicate, applyStaleness, pruneExpired } = require('./analysis/alertDedup');
+const pushManager = require('./push/pushManager');
 const settings              = require('../config/settings.json');
 const fs                    = require('fs');
 
@@ -53,6 +56,8 @@ let   _refreshIntervalId  = null; // setInterval handle for rescheduling
 const alertCache    = [];           // newest-first ordered alert objects
 const alertSeenKeys = new Set();   // dedup: symbol:tf:type:time
 const reEvalKeys    = new Set();   // open-outcome keys being re-evaluated (not "new")
+// ATR cache: keyed 'symbol:tf' → atrCurrent; updated during runScan for dedup proximity
+const _lastAtr      = new Map();
 
 const MAX_ALERTS = 100;
 
@@ -109,6 +114,13 @@ function _cacheAlert(alert) {
   const key      = `${alert.symbol}:${alert.timeframe}:${alert.setup.type}:${alert.setup.time}`;
   const isReEval = reEvalKeys.delete(key); // consume: true if this was an open-outcome re-eval
   if (alertSeenKeys.has(key)) return false;
+
+  // Zone-level dedup: suppress if a matching open alert already exists at the same level
+  if (!isReEval) {
+    const atr = _lastAtr.get(`${alert.symbol}:${alert.timeframe}`) || 0;
+    if (isDuplicate(alert, alertCache, atr)) return false;
+  }
+
   alertSeenKeys.add(key);
   alertCache.unshift(alert);
   if (alertCache.length > MAX_ALERTS) alertCache.pop();
@@ -120,6 +132,24 @@ function _cacheAlert(alert) {
   } else {
     // First appearance: snapshot to archive
     appendToArchive(alert);
+
+    // Push notification — fires on high-confidence fresh alerts (feature-flag gated)
+    const s = alert.setup;
+    const shouldPush = (
+      settings.features?.pushNotifications === true &&
+      (s.confidence || 0) >= 80 &&
+      (s.staleness === 'fresh' || !s.staleness) &&
+      (s.ddBandLabel == null || s.ddBandLabel === 'room_to_run')
+    );
+    if (shouldPush) {
+      const dir = s.direction === 'bullish' ? '\u25b2' : '\u25bc';
+      pushManager.sendPushNotification({
+        title: `${alert.symbol} ${(s.type || '').replace(/_/g, ' ')}`,
+        body:  `${dir} ${s.confidence}% conf \u2014 ${s.entry ?? s.price}`,
+        icon:  '/icons/icon-192.png',
+        data:  { symbol: alert.symbol, ts: s.time },
+      }).catch(err => console.error('[Push] sendPushNotification error:', err.message));
+    }
   }
   return !isReEval; // not "new" if re-evaluating an open outcome — avoids false-positive toasts
 }
@@ -259,6 +289,36 @@ app.post('/api/features', (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// ── Push notification API ─────────────────────────────────────────────────────
+
+// GET /api/push/vapid-public-key — returns VAPID public key for browser subscription
+app.get('/api/push/vapid-public-key', (_req, res) => {
+  const key = pushManager.getVapidPublicKey();
+  if (!key) return res.status(503).json({ error: 'Push not configured' });
+  res.json({ publicKey: key });
+});
+
+// POST /api/push/subscribe — save a new PushSubscription (feature-flag gated)
+app.post('/api/push/subscribe', (req, res) => {
+  if (!settings.features?.pushNotifications) {
+    return res.status(403).json({ error: 'Push notifications not enabled' });
+  }
+  const { subscription } = req.body || {};
+  if (!subscription || !subscription.endpoint) {
+    return res.status(400).json({ error: 'subscription.endpoint required' });
+  }
+  pushManager.saveSubscription(subscription);
+  res.json({ ok: true });
+});
+
+// DELETE /api/push/subscribe — remove a PushSubscription by endpoint
+app.delete('/api/push/subscribe', (req, res) => {
+  const { endpoint } = req.body || {};
+  if (!endpoint) return res.status(400).json({ error: 'endpoint required' });
+  pushManager.removeSubscription(endpoint);
+  res.json({ ok: true });
 });
 
 // GET /api/alerts?limit=20&minConfidence=0&symbol=MNQ&timeframe=5m&start=ISO&end=ISO
@@ -2136,6 +2196,8 @@ async function runScan({ targetSymbols = null, targetTimeframes = null } = {}) {
           symbol,
           spanMargin:       settings.spanMargin || {},
         });
+        // Cache ATR for zone-level dedup proximity checks in _cacheAlert
+        if (ind.atrCurrent) _lastAtr.set(`${symbol}:${tf}`, ind.atrCurrent);
         const regime     = { ...classifyRegime(ind), alignment };
         const trendlines = detectTrendlines(candles, ind.atrCurrent);
         const setups     = detectSetups(candles, ind, regime, {
@@ -2235,6 +2297,14 @@ async function runScan({ targetSymbols = null, targetTimeframes = null } = {}) {
           .catch(err => console.error('[autotrader] Error:', err.message));
       }
     }
+  }
+
+  // Apply staleness decay and prune expired open alerts once per scan cycle
+  applyStaleness(alertCache);
+  const pruned = pruneExpired(alertCache);
+  if (pruned.length !== alertCache.length) {
+    // pruneExpired returns a filtered array — splice alertCache in place
+    alertCache.splice(0, alertCache.length, ...pruned);
   }
 
   console.log(`[scan] Done — ${newCount} new alerts  (${alertCache.length} cached total)`);
@@ -2347,6 +2417,30 @@ async function _onLiveCandle(symbol, candle) {
     } catch (err) {
       console.error(`[live] Scan error ${symbol} ${tf}: ${err.message}`);
     }
+  }
+
+  // Check open alert outcomes against this live 1m bar
+  try {
+    const resolved = await checkLiveOutcomes(symbol, candle);
+    if (resolved.length > 0) {
+      // Sync in-memory alertCache with the resolved outcomes
+      for (const r of resolved) {
+        const [sym, tf, type, timeStr] = r.key.split(':');
+        const cached = alertCache.find(a =>
+          a.symbol === sym && a.timeframe === tf &&
+          a.setup?.type === type && String(a.setup?.time) === timeStr
+        );
+        if (cached) {
+          cached.setup.outcome     = r.outcome;
+          cached.setup.exitPrice   = r.exitPrice;
+          cached.setup.outcomeTime = r.outcomeTime;
+          cached.setup.resolvedAt  = Date.now();
+        }
+      }
+      broadcast({ type: 'outcome_update', resolved: resolved.map(r => r.key) });
+    }
+  } catch (err) {
+    console.error(`[live] checkLiveOutcomes error ${symbol}: ${err.message}`);
   }
 }
 
@@ -2497,6 +2591,10 @@ async function start() {
 
   server.listen(PORT, () => {
     console.log(`[server] Listening on http://localhost:${PORT}`);
+
+    // Load persisted push subscriptions
+    pushManager.loadSubscriptions();
+
     if (DATA_SOURCE === 'seed') {
       // Restore persisted alerts + commentary before scanning so the feed is
       // instantly populated and existing commentary doesn't need regeneration.

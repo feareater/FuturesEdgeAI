@@ -155,9 +155,41 @@ function updateArchiveOutcome(key, outcome, outcomeTime, userOverride = false) {
   }
 }
 
+// ── Alert outcome update ──────────────────────────────────────────────────────
+
+/**
+ * Update the outcome of an alert in alerts.json by its composite key.
+ * Sets outcome, exitPrice, outcomeTime, and resolvedAt on the matching alert.
+ * Returns the updated alert object, or null if not found.
+ */
+function updateAlertOutcome(alertKey, outcome, exitPrice, outcomeTime) {
+  try {
+    _ensureDir();
+    const alerts = loadAlertCache();
+    const [symbol, timeframe, type, timeStr] = alertKey.split(':');
+    const alert = alerts.find(a =>
+      a.symbol === symbol &&
+      a.timeframe === timeframe &&
+      a.setup?.type === type &&
+      String(a.setup?.time) === timeStr
+    );
+    if (!alert) return null;
+    alert.setup.outcome     = outcome;
+    alert.setup.exitPrice   = exitPrice;
+    alert.setup.outcomeTime = outcomeTime;
+    alert.setup.resolvedAt  = Date.now();
+    saveAlertCache(alerts);
+    return alert;
+  } catch (err) {
+    console.error('[log] updateAlertOutcome failed:', err.message);
+    return null;
+  }
+}
+
 module.exports = {
   saveAlertCache, loadAlertCache,
   saveCommentaryCache, loadCommentaryCache,
   saveTradeLog, loadTradeLog,
   loadArchive, appendToArchive, updateArchiveOutcome,
+  updateAlertOutcome,
 };

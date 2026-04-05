@@ -167,6 +167,81 @@ function reset() {
 }
 
 // ---------------------------------------------------------------------------
+// Forward-test outcome tracking
+// ---------------------------------------------------------------------------
+
+/**
+ * Check all open alerts in the alert cache against a live 1m candle.
+ * Resolves any that hit their SL or TP and persists the outcome immediately.
+ *
+ * SL is checked before TP — if both levels are hit on the same bar
+ * (gap/spike), the SL wins (conservative, correct for live tracking).
+ *
+ * @param {string} symbol    - e.g. 'MNQ'
+ * @param {Object} candle1m  - { time, open, high, low, close, volume }
+ * @returns {string[]} Array of resolved alert keys (symbol:tf:type:time)
+ */
+async function checkLiveOutcomes(symbol, candle1m) {
+  const { loadAlertCache, updateAlertOutcome } = require('../storage/log');
+  const resolved = [];
+
+  let alerts;
+  try {
+    alerts = loadAlertCache();
+  } catch (err) {
+    console.error('[Simulator] checkLiveOutcomes: could not load alert cache:', err.message);
+    return resolved;
+  }
+
+  const openAlerts = alerts.filter(a =>
+    a.symbol === symbol &&
+    (a.setup?.outcome === 'open' || a.setup?.outcome == null) &&
+    !a.setup?.userOverride
+  );
+
+  for (const alert of openAlerts) {
+    const { entry, sl, tp, direction } = alert.setup || {};
+
+    // Skip malformed alerts that are missing required price fields
+    if (entry == null || sl == null || tp == null || !direction) continue;
+
+    const key = `${alert.symbol}:${alert.timeframe}:${alert.setup.type}:${alert.setup.time}`;
+    let outcome   = null;
+    let exitPrice = null;
+
+    if (direction === 'bullish') {
+      if (candle1m.low <= sl) {
+        outcome   = 'lost';
+        exitPrice = sl;
+      } else if (candle1m.high >= tp) {
+        outcome   = 'won';
+        exitPrice = tp;
+      }
+    } else {
+      // bearish
+      if (candle1m.high >= sl) {
+        outcome   = 'lost';
+        exitPrice = sl;
+      } else if (candle1m.low <= tp) {
+        outcome   = 'won';
+        exitPrice = tp;
+      }
+    }
+
+    if (outcome) {
+      updateAlertOutcome(key, outcome, exitPrice, candle1m.time);
+      resolved.push({ key, outcome, exitPrice, outcomeTime: candle1m.time });
+      console.log(
+        `[Simulator] ${symbol} alert resolved: ${outcome} at ${exitPrice}` +
+        ` (entry ${entry}, SL ${sl}, TP ${tp})`
+      );
+    }
+  }
+
+  return resolved;
+}
+
+// ---------------------------------------------------------------------------
 
 module.exports = {
   placeOrder,
@@ -175,4 +250,5 @@ module.exports = {
   getSummary,
   getAllPositions,
   reset,
+  checkLiveOutcomes,
 };

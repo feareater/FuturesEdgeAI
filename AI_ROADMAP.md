@@ -1,6 +1,6 @@
 # FuturesEdge AI — AI/ML Enhancement Roadmap
 
-> **Status: Deferred — B5 forward-test harness is the immediate next priority.**
+> **Status: Deferred — B5 complete. Now collecting 30 days of live forward-test data. Phase 1 Claude batch analysis can begin once 500+ completed forward-test trades are available.**
 > This document is the single source of truth for all planned AI/ML work.
 > Read CLAUDE.md, CONTEXT_SUPPLEMENT.md, and DATABENTO_PROJECT.md before starting any session on this track.
 
@@ -50,7 +50,7 @@ Before any ML work is useful:
 - [x] `hpProximity`, `resilienceLabel`, `dexBias`, `ddBandLabel` on trade records ✅
 - [x] `equityBreadth`, `bondRegime`, `copperRegime`, `dollarRegime`, `riskAppetite`, `riskAppetiteScore` on trade records ✅ (v12.9 A5 breadth run complete)
 - [ ] `mtfConfluence` on trade records — currently applied upstream, not recorded per trade
-- [ ] B5 forward-test harness collecting live trade outcomes
+- [x] B5 forward-test harness collecting live trade outcomes ✅ (v13.0)
 - [ ] Minimum 500 completed forward-test trades (n ≥ 30 per setup type per symbol)
 
 ---
@@ -266,6 +266,6 @@ These were discussed and intentionally deferred:
 ---
 
 *Created: 2026-04-04*
-*Status: Deferred pending B5 forward-test harness completion.*
-*Revisit after: Phase V (marketBreadth.js) complete + 500 forward-test trades collected.*
-*Next action: B5 (forward-test harness) — real-time outcome tracking, alert dedup with staleness decay, Browser Push API notifications. A5 breadth complete (v12.9). Phase 1 Claude batch analysis ready to run once B5 is stable and 500 forward-test trades are collected.*
+*Status: B5 complete (v13.0). Collecting live forward-test data.*
+*Revisit after: 500 completed forward-test trades (n ≥ 30 per setup type per symbol).*
+*Next action: Collect 30+ days of live forward-test data. Then run AI_ROADMAP Phase 1 Claude batch analysis on trade records.*

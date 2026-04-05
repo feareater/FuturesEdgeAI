@@ -65,6 +65,7 @@ FuturesEdgeAI/
 │   │   ├── iof.js             ← FVG + Order Block detection
 │   │   ├── setups.js          ← zone_rejection, pdh_breakout, trendline_break, or_breakout
 │   │   ├── confluence.js      ← Multi-TF zone stack scoring
+│   │   ├── alertDedup.js      ← isDuplicate (15-min/±0.25×ATR), applyStaleness, pruneExpired
 │   │   ├── marketBreadth.js   ← 16-instrument cross-market regime scoring (breadth + risk appetite)
 │   │   ├── volumeProfile.js   ← Session POC/VAH/VAL (70% value area)
 │   │   ├── openingRange.js    ← RTH Opening Range (09:30–10:00 ET)
@@ -76,9 +77,11 @@ FuturesEdgeAI/
 │   │   └── commentary.js      ← Claude API prompt builder + caller
 │   ├── trading/
 │   │   ├── autotrader.js      ← Kill-switch state machine for paper trading
-│   │   └── simulator.js       ← Virtual position tracker (SL/TP fill simulation)
+│   │   └── simulator.js       ← Virtual position tracker; checkLiveOutcomes() for forward-test
+│   ├── push/
+│   │   └── pushManager.js     ← VAPID push manager; subscriptions in data/push/subscriptions.json
 │   └── storage/
-│       └── log.js             ← Alert, commentary, and trade log persistence
+│       └── log.js             ← Alert, commentary, and trade log persistence; updateAlertOutcome()
 ├── public/
 │   ├── index.html             ← Main dashboard
 │   ├── commentary.html        ← AI analysis page
@@ -227,7 +230,9 @@ Alerts are persisted to `data/logs/alerts.json`. Each alert object has this shap
     "rationale": "Zone rejection at demand — bullish wick, trend aligned · 15m stack",
     "zoneLevel": 21390.00,
     "tfStack": { "stackCount": 1, "bonus": 15, "tfs": ["15m"] },
-    "commentary": "This bullish zone rejection at 21390..."
+    "commentary": "This bullish zone rejection at 21390...",
+    "staleness": "fresh",         // 'fresh' | 'aging' (30min, ×0.85) | 'stale' (60min, ×0.70)
+    "decayedConfidence": 82       // display-only; setup.confidence is immutable
   }
 }
 ```
@@ -417,7 +422,7 @@ All toggleable at runtime via `POST /api/features { "featureName": true|false }`
 | `performanceStats` | true | `/performance.html` stats rendering |
 | `alertReplay` | true | `/backtest.html` date-range replay |
 | `soundAlerts` | **false** | Web Audio API two-tone on new alert |
-| `pushNotifications` | **false** | Reserved — not yet implemented |
+| `pushNotifications` | **false** | Browser Push API — default off; enable via `POST /api/features { "pushNotifications": true }` |
 
 ### New API Routes (v3.0)
 
@@ -430,6 +435,9 @@ All toggleable at runtime via `POST /api/features { "featureName": true|false }`
 | `GET /api/performance` | WR/PF/avgR by symbol, setup type, TF, hour, direction |
 | `GET /api/alerts?start=ISO&end=ISO` | Date-range filtered alerts (for backtest) |
 | `GET /api/settings` | Now returns `risk` + `features` |
+| `GET /api/push/vapid-public-key` | Returns VAPID public key for browser push subscription |
+| `POST /api/push/subscribe` | Save a PushSubscription object (feature-flag gated) |
+| `DELETE /api/push/subscribe` | Remove a subscription by endpoint URL |
 
 ### Active Setup Types
 

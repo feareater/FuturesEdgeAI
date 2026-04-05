@@ -25,7 +25,7 @@ These tracks are fully parallel — they touch different files and have zero cod
 | B2 | Live | `snapshot.js` live gate + feature flag + `/api/datastatus` | ✅ **Done** | Hot-toggle via `POST /api/features {"liveData": true}` |
 | B3 | Live | 1m → 5m/15m/30m candle aggregation | ✅ **Done** | Window-aligned; partial bars updated in-place |
 | B4 | Live | Event-driven scan on bar close | ✅ **Done** | `runScan({targetSymbols, targetTimeframes})` on each completed window |
-| B5 | Live | Forward-test harness, dedup, push notifications | ⬜ To do | Depends on B4 |
+| B5 | Live | Forward-test harness, dedup, push notifications | ✅ **Done** | checkLiveOutcomes in simulator.js; alertDedup.js; pushManager.js; sw.js push handler |
 | A1 | Historical | Purchase + download Databento data (CME + OPRA) | ✅ **Done** | 16 single-symbol GLBX zips + OPRA zips downloaded to Historical_data/ |
 | A2 | Historical | Rewrite pipeline for 16 symbols, 13yr scale, instruments.js | ✅ **Done** | instruments.js, pipeline rewrite, per-symbol extraction fix, OPRA parsing correctness, ohlcv-1d local extraction (see A2 notes) |
 | A3 | Historical | Audit front-month roll logic in Phase 1c | ✅ **Done** | Roll audit complete via Phase 1c log evidence: GLBX zips use stype_in=parent (individual contracts), Phase 1c selects front-month by volume per day, 0 lookahead errors confirmed, no phantom gaps. No code fix needed. |
@@ -482,12 +482,14 @@ If any setup diverges beyond the acceptable gap: investigate before paper tradin
 | `server/backtest/engine.js` | A2 (imports from instruments.js) | ✅ Done |
 | `server/index.js` | B2 (datastatus route), B4 (live scan wiring) | ✅ Done |
 | `public/index.html` | B2 (status pill) | ✅ Done |
-| `server/trading/simulator.js` | B5 | ⬜ To do |
-| `server/storage/log.js` | B5 | ⬜ To do |
-| `sw.js` | B5 | ⬜ To do |
+| `server/trading/simulator.js` | B5 | ✅ Done — `checkLiveOutcomes()` added |
+| `server/storage/log.js` | B5 | ✅ Done — `updateAlertOutcome()` added |
+| `server/analysis/alertDedup.js` | B5 (new) | ✅ Done — `isDuplicate`, `applyStaleness`, `pruneExpired` |
+| `server/push/pushManager.js` | B5 (new) | ✅ Done — VAPID push manager |
+| `sw.js` | B5 | ✅ Done — push + notificationclick handlers, cache v36 |
 | `server/data/hpCompute.js` | A2 (`openInterest ?? oi` backward compat), A4 (run) | ✅ Code done / ⬜ Run pending |
 | `config/settings.json` | B2 (`liveData` flag added) | ✅ Done |
-| `.env` | B1 (`DATABENTO_API_KEY`), B5 (VAPID keys) | B1 ✅ / B5 ⬜ |
+| `.env` | B1 (`DATABENTO_API_KEY`), B5 (VAPID keys) | ✅ Done |
 | `package.json` | A2 (adm-zip → unzipper) | ✅ Done |
 
 ---
@@ -531,4 +533,4 @@ Merge each feature branch to main only after its acceptance criteria are met and
 ---
 
 *Last updated: 2026-04-04*
-*A1–A6 complete. Full pipeline (1b→1g) operational. Final A5 (breadth active): Net +$238K, WR 33.9%, PF 1.584, 9,286 trades. or_breakout+pdh_breakout only, zone_rejection disabled. Phase V (marketBreadth.js, 16 instruments) complete. dollarRegime inversion confirmed correct (no bug). Next: B5 (forward-test harness). C (validation) requires B5 + 30 days live data.*
+*A1–A6 complete. B1–B5 complete. Full pipeline (1b→1g) operational. Final A5 (breadth active): Net +$238K, WR 33.9%, PF 1.584, 9,286 trades. or_breakout+pdh_breakout only, zone_rejection disabled. Phase V (marketBreadth.js, 16 instruments) complete. B5: checkLiveOutcomes, alertDedup, pushManager all wired. Next: collect 30 days of live forward-test data, then proceed to C (validation).*

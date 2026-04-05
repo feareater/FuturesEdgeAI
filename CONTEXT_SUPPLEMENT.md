@@ -58,6 +58,9 @@ server/
   analysis/
     indicators.js       ← computeIndicators(candles, opts) — opts has {symbol, features}
     setups.js           ← detectSetups(candles, ind, regime, opts) — opts has {calendarEvents}
+    alertDedup.js       ← isDuplicate (15-min cooldown + ±0.25×ATR proximity), applyStaleness, pruneExpired
+  push/
+    pushManager.js      ← VAPID push manager; subscriptions in data/push/subscriptions.json
 public/
   scanner.html          ← Live all-symbols/all-setups scanner (Phase I / v7)
   performance.html      ← Performance analytics (WR/PF/avgR)
@@ -547,7 +550,8 @@ data/historical/
 - CBOE data is 15-min delayed (free tier) — options levels are approximate intraday
 - Pine Script levels are static until regenerated and repasted — not live-updating
 - Crypto (BTC/ETH/XRP) options data not available — options panel only shown for MNQ/MES
-- `pushNotifications` feature flag exists but is not yet implemented
+- Alert dedup uses in-memory ATR at alert creation time — if server restarts, the 15-min cooldown window resets (in-memory only; alerts.json history is preserved)
+- `decayedConfidence` is display-only — `setup.confidence` is immutable after alert creation
 - Backtest trade objects do not include regime/nearEvent/mtfConfluence fields (v10.x)
 
 ---

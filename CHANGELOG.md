@@ -4,6 +4,40 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v13.0] — 2026-04-04 — B5: Forward-test harness, alert dedup, browser push notifications
+
+### Piece 1: Real-time outcome tracking
+- `checkLiveOutcomes(symbol, candle1m)` in `server/trading/simulator.js` — checks all open alerts for the given symbol against each incoming 1m bar
+- SL checked before TP on the same bar (conservative: spike/gap resolves as SL)
+- Alerts missing entry/SL/TP fields are skipped silently
+- `updateAlertOutcome(alertKey, outcome, exitPrice, outcomeTime)` added to `server/storage/log.js` — persists resolution to `alerts.json` immediately
+- Wired into `_onLiveCandle()` in `server/index.js` after each `runScan` call
+- In-memory `alertCache` synced with resolved outcome fields immediately after file write
+- WebSocket broadcast on resolution: `{ type: 'outcome_update', resolved: [key, ...] }`
+
+### Piece 2: Alert deduplication + staleness decay
+- New module `server/analysis/alertDedup.js`
+  - `isDuplicate()`: suppresses repeat signals at the same zone — same symbol/type/direction, within 15-min cooldown, within ±0.25×ATR zone proximity
+  - `applyStaleness()`: tags open alerts `fresh` / `aging` (30 min, ×0.85) / `stale` (60 min, ×0.70); `decayedConfidence` is display-only — `confidence` is immutable
+  - `pruneExpired()`: drops open alerts older than 4 hours from the in-memory cache
+- `_lastAtr` map in `index.js` caches ATR per `symbol:tf` during `runScan` for proximity checks
+- `isDuplicate` wired into `_cacheAlert()` — zone-level dedup runs on every new alert (not re-evals)
+- `applyStaleness` + `pruneExpired` called at the end of every `runScan` cycle
+- Alert feed UI: AGING badge (amber) and STALE badge (red) on applicable alert cards; `decayedConfidence` shown in place of `confidence` when aging/stale
+- Alert schema additions: `staleness` (`fresh`|`aging`|`stale`), `decayedConfidence` (display-only)
+
+### Piece 3: Browser Push API notifications
+- `web-push` npm package installed; VAPID keys generated and stored in `.env`
+- New module `server/push/pushManager.js` — subscription store (memory + `data/push/subscriptions.json`), `sendPushNotification()`, graceful degrade if VAPID keys absent
+- Push subscriptions loaded from disk at server startup
+- Push trigger in `_cacheAlert()`: fires when `confidence ≥ 80` AND `staleness === 'fresh'` AND `ddBandLabel` is absent or `room_to_run`; gated on `features.pushNotifications`
+- New API routes: `GET /api/push/vapid-public-key`, `POST /api/push/subscribe`, `DELETE /api/push/subscribe`
+- Push Notifications collapsible section added to right panel in `public/index.html` (hidden when feature disabled)
+- Push subscription UI logic appended to `public/js/alerts.js` — checks support, fetches VAPID key, manages subscribe/unsubscribe lifecycle
+- `public/sw.js`: `push` event handler shows OS notification; `notificationclick` focuses or opens dashboard; cache bumped to `futuresedge-v36`
+
+---
+
 ## [v12.9] — 2026-04-04 — A5 Final Backtest with Breadth Scoring
 
 ### dollarRegime verification (Step 2)
