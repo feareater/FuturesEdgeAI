@@ -443,12 +443,23 @@ riskAppetite = score >= 5 ? 'on' : score <= -5 ? 'off' : 'neutral'
 - OR breakout: 5m only — 15m/30m produce <1% of OR breakout signals
 - Min confidence: 65%
 
-**Final A5 results (or_breakout + pdh_breakout, VIX+DXY active, 2018-09-24 → 2026-04-01):**
+**Final A5 results v12.7 (or_breakout + pdh_breakout, VIX+DXY active, 2018-09-24 → 2026-04-01):**
 - 9,679 trades (5.4/day), WR 37.3%, PF 1.69, Net +$233,540, MaxDD $3,208
 - or_breakout alone: Net +$248K, PF 1.86, AvgWin $147, AvgLoss $88
 - pdh_breakout alone: Net -$14.6K (marginal, not harmful)
 - VIX regime: edge holds across all regimes (strongest in normal: +$110K net)
 - DXY direction: no meaningful filter signal (rising +$103K, falling +$97K)
+
+**A5 re-run v12.9 (breadth+VIX+DXY active, same config):**
+- 9,286 trades, WR 33.9%, PF 1.584, Net +$238,040, MaxDD $2,908
+- vs v12.7: +$4,500 net (+1.9%), MaxDD 9% lower, WR -3.4pp, PF -0.105
+- or_breakout: 6,680 trades, WR 32.1%, net +$243,351
+- pdh_breakout: 2,606 trades, WR 38.3%, net -$5,312
+- riskAppetite=neutral → best WR (37.2%); riskAppetite=on → most trades (5,995)
+- equityBreadth=0–1 → best WR (36.2%); equityBreadth=3–4 → most net (+$117,867)
+- bondRegime=bullish → WR 34.0%, net +$154,829 (largest segment)
+- dollarRegime inversion confirmed correct in v12.8 (no bug found)
+- Breadth precomputation note: reads all 1m daily files for 16 symbols (~46,470 files, ~4-5GB). Full A5 run takes ~1 hour due to synchronous I/O in _precomputeBreadth.
 
 **By symbol (or_breakout net):**
 - MNQ: +$115K (44% of total)

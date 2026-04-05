@@ -48,7 +48,7 @@ Before any ML work is useful:
 - [x] `vixRegime`, `vixLevel` on trade records ✅ (v12.7)
 - [x] `dxyDirection`, `dxyClose` on trade records ✅ (v12.7)
 - [x] `hpProximity`, `resilienceLabel`, `dexBias`, `ddBandLabel` on trade records ✅
-- [ ] `equityBreadth`, `bondRegime`, `copperRegime`, `riskAppetite` on trade records — Phase V (marketBreadth.js, in progress)
+- [x] `equityBreadth`, `bondRegime`, `copperRegime`, `dollarRegime`, `riskAppetite`, `riskAppetiteScore` on trade records ✅ (v12.9 A5 breadth run complete)
 - [ ] `mtfConfluence` on trade records — currently applied upstream, not recorded per trade
 - [ ] B5 forward-test harness collecting live trade outcomes
 - [ ] Minimum 500 completed forward-test trades (n ≥ 30 per setup type per symbol)
@@ -268,4 +268,4 @@ These were discussed and intentionally deferred:
 *Created: 2026-04-04*
 *Status: Deferred pending B5 forward-test harness completion.*
 *Revisit after: Phase V (marketBreadth.js) complete + 500 forward-test trades collected.*
-*Next action: Re-run A5 with equityBreadth/bondRegime/copperRegime on trade records (Phase V), then run Phase 1 Claude batch analysis.*
+*Next action: B5 (forward-test harness) — real-time outcome tracking, alert dedup with staleness decay, Browser Push API notifications. A5 breadth complete (v12.9). Phase 1 Claude batch analysis ready to run once B5 is stable and 500 forward-test trades are collected.*

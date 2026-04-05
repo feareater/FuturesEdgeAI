@@ -31,7 +31,7 @@ These tracks are fully parallel — they touch different files and have zero cod
 | A3 | Historical | Audit front-month roll logic in Phase 1c | ✅ **Done** | Roll audit complete via Phase 1c log evidence: GLBX zips use stype_in=parent (individual contracts), Phase 1c selects front-month by volume per day, 0 lookahead errors confirmed, no phantom gaps. No code fix needed. |
 | A4 | Historical | HP recompute over full date range | ✅ **Done** | Phase 1f complete: ~1736 HP snapshots per ETF (2018-09-24 → 2026-04-01), written to options/{etf}/computed/. USO: 1733, all others: 1736. |
 | A5 | Historical | Full backtest run, validate edge across 12m | ✅ **Done** | Final run (or_breakout+pdh, VIX+DXY active): **Net +$233,540, PF 1.69, 9,679 trades**. or_breakout: Net +$248K (5m only); pdh: Net -$14.6K. VIX: edge holds across all regimes (strongest in normal: +$110K). DXY: no meaningful filter (rising=+$103K, falling=+$97K). zone_rejection disabled (R:R inverted). OR breakout 5m-only enforced by engine guard. |
-| A6 | Historical | Market breadth scoring from all 16 symbols — Phase V | ✅ **Done** | marketBreadth.js, breadth in applyMarketContext (±15 pts), trade record fields, Optimize Market Breadth + Inter-market sub-tabs. Run breadth test 2022 + A5 re-run to validate. |
+| A6 | Historical | Market breadth scoring from all 16 symbols — Phase V | ✅ **Done** | marketBreadth.js, breadth in applyMarketContext (±15 pts), trade record fields, Optimize Market Breadth + Inter-market sub-tabs. A5 re-run with breadth active: **Net +$238,040, WR 33.9%, PF 1.584** — +$4,500 vs baseline, MaxDD 9% lower. riskAppetite=neutral best WR (37.2%). dollarRegime inversion already correct in v12.8. |
 | C  | Validation | Compare live WR vs backtest WR per setup | ⬜ To do | Depends on A5 + B5 + 30 days live |
 
 **Status key:** ⬜ To do · 🔵 In progress · ✅ Done · 🔴 Blocked · ⏸ Paused
@@ -531,4 +531,4 @@ Merge each feature branch to main only after its acceptance criteria are met and
 ---
 
 *Last updated: 2026-04-04*
-*A1–A5 complete. Full pipeline (1b→1g) operational. Final A5: Net +$233K, PF 1.69, or_breakout+pdh_breakout only, zone_rejection disabled. Market breadth scoring (marketBreadth.js, 16 instruments) in progress as Phase V. Next: B5 (forward-test harness). C (validation) requires B5 + 30 days live data.*
+*A1–A6 complete. Full pipeline (1b→1g) operational. Final A5 (breadth active): Net +$238K, WR 33.9%, PF 1.584, 9,286 trades. or_breakout+pdh_breakout only, zone_rejection disabled. Phase V (marketBreadth.js, 16 instruments) complete. dollarRegime inversion confirmed correct (no bug). Next: B5 (forward-test harness). C (validation) requires B5 + 30 days live data.*

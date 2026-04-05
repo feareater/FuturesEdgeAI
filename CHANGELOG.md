@@ -4,6 +4,96 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v12.9] — 2026-04-04 — A5 Final Backtest with Breadth Scoring
+
+### dollarRegime verification (Step 2)
+- **No inversion bug found.** The `dollarRegime` mapping in `marketBreadth.js` was already correctly inverted at v12.8: `m6eRegime === 'bearish' → 'rising'`, `'bullish' → 'falling'`, `'neutral' → 'flat'`.
+- Spot-check results for 2022:
+  - 2022-01-03: M6E close 1.13870, m6eRegime=`bullish` → dollarRegime=`falling`. Correct: EUR/USD was near its local 21-day high on Jan 3 (dollar surge began late January).
+  - 2022-06-15: M6E close 1.04860, m6eRegime=`neutral` → dollarRegime=`flat`. Reflects consolidation in the 21-day window.
+  - 2022-09-28: M6E close 0.96510, m6eRegime=`neutral` → dollarRegime=`flat`. Near-trough consolidation; 20-bar position signal conflicts with SMA signal → neutral.
+- The 21-day lookback classifier measures LOCAL regime, not annual trend. No code change needed.
+
+### A5 Final Backtest — breadth+VIX+DXY active (job f3ae236b7509)
+
+**Config:** 2018-09-24 → 2026-04-01, MNQ/MES/MGC/MCL, 5m/15m/30m, or_breakout+pdh_breakout, minConf=65%, HP enabled, $10,000 starting balance
+
+**OVERALL:**
+| Metric | Value |
+|--------|-------|
+| Total trades | 9,286 |
+| Win rate | 33.9% |
+| Profit factor | 1.584 |
+| Gross/Net P&L | +$238,040 |
+| Max drawdown | $2,908 |
+| AvgWin | $113 |
+| AvgLoss | -$63 |
+| AvgR | $25.63 |
+| Sharpe | 6.160 |
+
+**BY SETUP TYPE:**
+- or_breakout: 6,680 trades, WR 32.1%, net +$243,351
+- pdh_breakout: 2,606 trades, WR 38.3%, net -$5,312
+
+**BY SYMBOL:**
+- MNQ: 2,436 trades, WR 33.5%, net +$94,392
+- MGC: 2,507 trades, WR 33.9%, net +$68,837
+- MES: 2,530 trades, WR 33.5%, net +$46,667
+- MCL: 1,813 trades, WR 34.8%, net +$28,143
+
+**BY TIMEFRAME:** All 9,286 trades on 5m (OR breakout 5m-only guard + pdh fires primarily on 5m)
+
+**BY CONFIDENCE BUCKET:**
+- 65–70%: 2,024 trades, WR 32.2%, net +$44,619
+- 70–80%: 3,369 trades, WR 32.5%, net +$78,530
+- 80–90%: 2,145 trades, WR 34.6%, net +$55,658
+- 90%+: 1,748 trades, WR 37.6%, net +$59,233
+
+**BY VIX REGIME:**
+- crisis: 691 trades, WR 32.0%, net +$25,450
+- elevated: 1,452 trades, WR 33.5%, net +$42,623
+- low: 2,676 trades, WR 33.3%, net +$52,770
+- normal: 4,467 trades, WR 34.6%, net +$117,197
+
+**BY DXY DIRECTION:**
+- falling: 3,796 trades, WR 34.1%, net +$99,989
+- flat: 1,437 trades, WR 34.2%, net +$36,747
+- rising: 4,053 trades, WR 33.5%, net +$101,303
+
+**BY RISK APPETITE (Phase V):**
+- on: 5,995 trades, WR 32.9%, net +$128,514
+- neutral: 1,936 trades, WR 37.2%, net +$60,446 ← best WR
+- off: 1,355 trades, WR 33.6%, net +$49,080
+
+**BY BOND REGIME (Phase V):**
+- bullish (bonds rallying = risk-off): 6,383 trades, WR 34.0%, net +$154,829
+- neutral: 2,112 trades, WR 34.1%, net +$58,539
+- bearish (yields rising = risk-on): 791 trades, WR 32.4%, net +$24,672
+
+**BY EQUITY BREADTH BUCKET (Phase V):**
+- 0–1 indices bullish: 2,811 trades, WR 36.2%, net +$104,282 ← best WR
+- 2 indices bullish: 823 trades, WR 34.0%, net +$15,890
+- 3–4 indices bullish: 5,652 trades, WR 32.7%, net +$117,867
+
+**COMPARISON TO v12.7 BASELINE (+$233,540):**
+| Metric | v12.7 | v12.9 (breadth) | Delta |
+|--------|-------|-----------------|-------|
+| Net P&L | +$233,540 | +$238,040 | +$4,500 (+1.9%) |
+| Trades | 9,679 | 9,286 | -393 |
+| WR | 37.3% | 33.9% | -3.4pp |
+| PF | 1.689 | 1.584 | -0.105 |
+| MaxDD | $3,208 | $2,908 | -$300 (9% lower) |
+
+**Key findings:**
+- Breadth scoring produced a **marginal net positive**: +$4,500 more P&L with 9% lower max drawdown.
+- WR and PF declined because breadth scoring changed the trade mix (added lower-WR trades that passed the new threshold, removed some higher-WR ones that fell below it).
+- **Strongest breadth edge**: `riskAppetite=neutral` → WR 37.2% (best across all breadth buckets).
+- **Weakest**: `equityBreadth=2` (mixed signal bucket) → WR 34.0%, net only +$15.9K despite 823 trades.
+- `equityBreadth=0–1` produces the highest WR (36.2%) — counter-intuitive but consistent with commodity/energy setups performing well in risk-off environments.
+- VIX and DXY edges unchanged: edge holds across all regimes; DXY still provides no meaningful filter signal.
+
+---
+
 ## [v12.8] — 2026-04-04 — Market breadth scoring from 16 CME instruments (Phase V)
 
 ### New file: `server/analysis/marketBreadth.js`
