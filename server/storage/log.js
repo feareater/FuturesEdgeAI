@@ -60,14 +60,17 @@ function saveCommentaryCache(cache) {
 /**
  * Load the commentary cache from disk.
  * Returns { generated: null, items: [] } if the file does not exist.
+ * On JSON parse failure, resets the file to a clean empty state.
  */
 function loadCommentaryCache() {
   try {
     if (!fs.existsSync(COMMENTARY_FILE)) return { generated: null, items: [] };
     return JSON.parse(fs.readFileSync(COMMENTARY_FILE, 'utf8'));
   } catch (err) {
-    console.error('[log] loadCommentaryCache failed:', err.message);
-    return { generated: null, items: [] };
+    console.warn('[log] commentary.json corrupted — resetting cache');
+    const empty = { generated: null, items: [] };
+    try { _ensureDir(); fs.writeFileSync(COMMENTARY_FILE, JSON.stringify(empty, null, 2)); } catch (_) {}
+    return empty;
   }
 }
 

@@ -66,9 +66,31 @@ function _isLiveMode() {
 function getCandles(symbol, timeframe) {
   _validate(symbol, timeframe);
 
-  // Live gate: futures symbols use the in-memory live store when liveData is enabled
+  // Live gate: futures symbols merge seed history with live bars when liveData is enabled.
+  // Seed data provides the historical backdrop; live bars extend it with bars newer than
+  // the last seed candle. This ensures the chart always shows full history even when only
+  // a handful of live bars have arrived since server start.
   if (_isLiveMode() && LIVE_FUTURES.has(symbol)) {
-    return liveCandles.get(`${symbol}:${timeframe}`) ?? [];
+    const live = liveCandles.get(`${symbol}:${timeframe}`);
+    let seed;
+    try { seed = _fromSeed(symbol, timeframe); } catch { seed = []; }
+
+    if (!live || live.length === 0) {
+      // No live bars yet — return seed only (startup / reconnect gap)
+      if (seed.length === 0) console.log(`[snapshot] Live store empty for ${symbol}:${timeframe} — falling back to seed data`);
+      return seed;
+    }
+
+    if (seed.length === 0) return live;
+
+    // Merge: seed bars up to (but not including) the first live bar timestamp,
+    // then all live bars. This avoids duplicates where seed and live overlap.
+    const firstLiveTime = live[0].time;
+    const seedPrefix    = seed.filter(c => c.time < firstLiveTime);
+    const merged        = [...seedPrefix, ...live];
+
+    // Trim to MAX_LIVE_BARS so we don't return an unbounded array
+    return merged.length > MAX_LIVE_BARS ? merged.slice(merged.length - MAX_LIVE_BARS) : merged;
   }
 
   switch (DATA_SOURCE) {

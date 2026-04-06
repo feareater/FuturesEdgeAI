@@ -104,10 +104,11 @@
         </div>
       </div>
 
-      <!-- Row 3: Timeframe selection -->
+      <!-- Row 3: Timeframe selection + chart mode toggle -->
       <div class="tb-row tb-row-tf">
         <span class="control-label">Timeframe</span>
         <div class="btn-group">
+          <button class="tf-btn"        data-tf="1m">1m</button>
           <button class="tf-btn active" data-tf="5m">5m</button>
           <button class="tf-btn"        data-tf="15m">15m</button>
           <button class="tf-btn"        data-tf="30m">30m</button>
@@ -115,6 +116,7 @@
           <button class="tf-btn"        data-tf="2h">2h</button>
           <button class="tf-btn"        data-tf="4h">4h</button>
         </div>
+        <button id="chart-mode-toggle" class="chart-mode-toggle" title="Switch to grid view">Grid</button>
       </div>
 
       <!-- Row 4: Correlation heatmap -->
@@ -254,9 +256,13 @@
       </aside>
 
       <div id="chart-wrap">
+        <div id="chart-no-data"></div>
         <div id="chart-container"></div>
         <div id="cvd-container"></div>
       </div>
+
+      <!-- Grid mode: 7 simultaneous charts (shown when chart-mode-toggle is Grid) -->
+      <div id="chart-grid-container" style="display:none"></div>
 
       <aside id="right-panel">
 
@@ -464,6 +470,8 @@
   <!-- layers.js second — reads window.ChartAPI immediately -->
   <script src="/js/layers.js"></script>
   <script src="/js/alerts.js"></script>
+  <!-- chartManager.js — grid mode and multi-chart management -->
+  <script src="/js/chartManager.js"></script>
   <!-- PWA service worker registration -->
   <script>
     if ('serviceWorker' in navigator) {

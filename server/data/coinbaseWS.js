@@ -8,10 +8,11 @@
 const { EventEmitter } = require('events');
 const { WebSocket }    = require('ws');
 
-const WS_URL    = 'wss://ws-feed.exchange.coinbase.com';
-const PRODUCTS  = ['BTC-USD', 'ETH-USD', 'XRP-USD'];
-const SYM_MAP   = { 'BTC-USD': 'BTC', 'ETH-USD': 'ETH', 'XRP-USD': 'XRP' };
-const RECONNECT = 5_000; // ms
+const WS_URL      = 'wss://ws-feed.exchange.coinbase.com';
+const PRODUCTS    = ['BTC-USD', 'ETH-USD', 'XRP-USD'];
+const SYM_MAP     = { 'BTC-USD': 'BTC', 'ETH-USD': 'ETH', 'XRP-USD': 'XRP' };
+const RECONNECT   = 5_000; // ms
+const TICK_LOG_MS = 60_000; // log current prices once per minute
 
 class CoinbaseWS extends EventEmitter {
   constructor() {
@@ -20,6 +21,7 @@ class CoinbaseWS extends EventEmitter {
     this._connected = false;
     this._prices    = {};   // symbol → last price
     this._started   = false;
+    this._lastTickLog = 0;  // timestamp of last tick summary log
   }
 
   start() {
@@ -56,6 +58,15 @@ class CoinbaseWS extends EventEmitter {
           : Math.floor(Date.now() / 1000);
         this._prices[symbol] = price;
         this.emit('price', { symbol, price, time });
+        // Log combined price snapshot once per minute
+        const now = Date.now();
+        if (now - this._lastTickLog >= TICK_LOG_MS) {
+          this._lastTickLog = now;
+          const snap = Object.entries(this._prices)
+            .map(([s, p]) => `${s} $${p.toLocaleString('en-US', { maximumFractionDigits: 4 })}`)
+            .join(' ');
+          console.log(`[coinbaseWS] Tick: ${snap}`);
+        }
       } catch {}
     });
 

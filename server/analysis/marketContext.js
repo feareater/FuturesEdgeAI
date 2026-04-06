@@ -184,7 +184,8 @@ function _buildVixContext(vixCandles, options) {
   }
 
   const recent    = vixCandles.slice(-5);
-  const level     = recent[recent.length - 1].close;
+  const last      = recent[recent.length - 1];
+  const level     = last.close;
   const prev      = (recent[recent.length - 4] ?? recent[0]).close;
   const pctChange = prev > 0 ? (level - prev) / prev : 0;
 
@@ -199,6 +200,9 @@ function _buildVixContext(vixCandles, options) {
 
   const rl        = options?.resilienceLabel ?? 'neutral';
   const stressFlag = (regime === 'elevated' || regime === 'crisis') && rl === 'fragile';
+
+  const lookupDate = last.time ? new Date(last.time * 1000).toISOString().slice(0, 10) : 'unknown';
+  console.log(`[marketContext] VIX lookup date: ${lookupDate} regime=${regime} level=${level.toFixed(2)}`);
 
   return { level: +level.toFixed(2), regime, direction, stressFlag };
 }
@@ -219,12 +223,15 @@ function _buildDxyContext(symbol, dxyCandles, corrMatrix) {
   let direction = 'flat';
   if (dxyCandles && dxyCandles.length >= 4) {
     const recent    = dxyCandles.slice(-5);
-    const last      = recent[recent.length - 1].close;
+    const lastBar   = recent[recent.length - 1];
+    const lastClose = lastBar.close;
     const prev      = (recent[recent.length - 4] ?? recent[0]).close;
-    const pctChange = prev > 0 ? (last - prev) / prev : 0;
+    const pctChange = prev > 0 ? (lastClose - prev) / prev : 0;
     direction = pctChange > 0.002 ? 'rising'
       : pctChange < -0.002 ? 'falling'
       : 'flat';
+    const lookupDate = lastBar.time ? new Date(lastBar.time * 1000).toISOString().slice(0, 10) : 'unknown';
+    console.log(`[marketContext] DXY lookup date: ${lookupDate} direction=${direction} close=${lastClose.toFixed(2)}`);
   }
 
   // Correlation from the rolling matrix (MNQ vs DXY, etc.)

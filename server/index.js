@@ -2087,6 +2087,7 @@ app.post('/api/backtest/run', (req, res) => {
 
   const worker = new Worker(path.join(__dirname, 'backtest', 'worker.js'), {
     workerData: { jobId, config },
+    resourceLimits: { maxOldGenerationSizeMb: 4096 },  // Allow 4GB heap for large backtests
   });
 
   worker.on('message', (msg) => {
@@ -2280,6 +2281,7 @@ async function runScan({ targetSymbols = null, targetTimeframes = null } = {}) {
   const scanTimeframes = targetTimeframes || SCAN_TIMEFRAMES;
   console.log('[scan] Starting…' + (targetSymbols ? ` [${scanSymbols.join(',')} × ${scanTimeframes.join(',')}]` : ''));
   let newCount = 0;
+  const _autotraderPromises = [];
 
   // Compute correlation matrix once per scan (used by all symbols for scoring)
   // Always use the full symbol set for accuracy even in targeted scans.
@@ -2434,18 +2436,37 @@ async function runScan({ targetSymbols = null, targetTimeframes = null } = {}) {
       if (_cacheAlert(alert)) {
         broadcast({ type: 'setup', ...alert });
         newCount++;
-        // Auto-order trigger — non-blocking; passes saveTradeLog + tradeLog refs
-        autotrader.onNewAlert(alert, settings, saveTradeLog, tradeLog)
-          .then(result => {
-            if (result.placed) {
-              console.log(`[autotrader] Order placed: orderId=${result.orderId} — ${alert.symbol} ${alert.setup.direction}`);
-              broadcast({ type: 'order', ...result });
-            } else {
-              console.log(`[autotrader] Skipped ${alert.symbol} ${alert.setup.type}: ${result.reason}`);
-            }
-          })
-          .catch(err => console.error('[autotrader] Error:', err.message));
+        // Collect autotrader results to summarize per scan cycle (avoid per-alert log spam)
+        _autotraderPromises.push(
+          autotrader.onNewAlert(alert, settings, saveTradeLog, tradeLog)
+            .then(result => ({ _result: result, _alert: alert }))
+            .catch(err => { console.error('[autotrader] Error:', err.message); return null; })
+        );
       }
+    }
+  }
+
+  // Resolve autotrader results and log a single summary per scan cycle
+  if (_autotraderPromises.length > 0) {
+    const results = await Promise.all(_autotraderPromises);
+    let placed = 0, skipped = 0;
+    const skipReasons = {};
+    for (const r of results) {
+      if (!r) continue;
+      const { _result: result, _alert: al } = r;
+      if (result.placed) {
+        placed++;
+        console.log(`[autotrader] Order placed: orderId=${result.orderId} — ${al.symbol} ${al.setup.direction}`);
+        broadcast({ type: 'order', ...result });
+      } else {
+        skipped++;
+        skipReasons[result.reason] = (skipReasons[result.reason] || 0) + 1;
+      }
+    }
+    if (placed > 0 || skipped > 0) {
+      const reasonStr = Object.entries(skipReasons).map(([k, v]) => `${v} ${k}`).join(', ');
+      console.log(`[autotrader] Scan complete — ${placed} trades executed` +
+        (skipped > 0 ? ` (${skipped} skipped: ${reasonStr})` : ''));
     }
   }
 
@@ -2600,11 +2621,17 @@ async function _onLiveCandle(symbol, candle) {
  */
 function _startDatabento() {
   const liveSymbols = ['MNQ', 'MES', 'MGC', 'MCL'];
-  startLiveFeed(liveSymbols, (symbol, candle) => {
-    _onLiveCandle(symbol, candle).catch(err =>
-      console.error(`[live] onCandle error ${symbol}: ${err.message}`)
-    );
-  });
+  startLiveFeed(
+    liveSymbols,
+    (symbol, candle) => {
+      _onLiveCandle(symbol, candle).catch(err =>
+        console.error(`[live] onCandle error ${symbol}: ${err.message}`)
+      );
+    },
+    (symbol, price, time) => {
+      broadcast({ type: 'live_price', symbol, price, time });
+    }
+  );
   console.log('[startup] Databento live feed started for', liveSymbols.join(', '));
 }
 
@@ -2746,6 +2773,27 @@ async function start() {
     pushManager.loadSubscriptions();
 
     if (DATA_SOURCE === 'seed') {
+      // Log seed data file ages — warn if any 5m file is older than 7 days
+      const SEED_DIR = path.join(__dirname, '..', 'data', 'seed');
+      const nowMs    = Date.now();
+      let   seedStale = false;
+      for (const sym of SCAN_SYMBOLS) {
+        const seedFile = path.join(SEED_DIR, `${sym}_5m.json`);
+        try {
+          const stat    = fs.statSync(seedFile);
+          const ageDays = (nowMs - stat.mtimeMs) / (1000 * 60 * 60 * 24);
+          const ageStr  = ageDays < 1 ? `${Math.round(ageDays * 24)}h` : `${ageDays.toFixed(1)}d`;
+          console.log(`[startup] Seed data: ${sym} 5m last updated ${ageStr} ago`);
+          if (ageDays > 7) seedStale = true;
+        } catch (_) {
+          console.warn(`[startup] Seed data: ${sym} 5m not found`);
+          seedStale = true;
+        }
+      }
+      if (seedStale) {
+        console.warn('[startup] WARNING: Seed data is stale — run node server/data/seedFetch.js');
+      }
+
       // Restore persisted alerts + commentary before scanning so the feed is
       // instantly populated and existing commentary doesn't need regeneration.
       _loadPersistedData();
@@ -2775,6 +2823,13 @@ async function start() {
         console.log('[startup] Databento live feed disabled (features.liveData=false) — seed mode');
       }
 
+      // Databento API key readiness check
+      if (process.env.DATABENTO_API_KEY) {
+        console.log('[startup] Databento API key: configured \u2713 (enable with POST /api/features {liveData:true})');
+      } else {
+        console.log('[startup] Databento API key: NOT SET — add to .env to enable live feed');
+      }
+
     // Real-time crypto prices — Coinbase Exchange WebSocket (free, no auth)
     coinbaseWS.start();
     coinbaseWS.on('price', ({ symbol, price, time }) => {
@@ -2782,6 +2837,20 @@ async function start() {
     });
     console.log('[startup] Coinbase WebSocket starting for BTC/ETH/XRP live prices');
     }
+
+    // Data source summary — printed once after all init so it's easy to spot in logs
+    const liveMode = settings.features?.liveData === true;
+    console.log('\u2501'.repeat(60));
+    console.log('[startup] DATA SOURCE SUMMARY');
+    console.log(`[startup] Market data:    ${liveMode ? 'LIVE (Databento 1m feed)' : 'SEED (Yahoo Finance snapshots)'}`);
+    console.log('[startup] Options data:   LIVE (CBOE delayed + Yahoo Finance)');
+    console.log('[startup] Crypto prices:  LIVE (Coinbase WebSocket)');
+    console.log('[startup] VIX proxy:      HISTORICAL (data/seed/VIX_5m.json)');
+    console.log('[startup] DXY proxy:      HISTORICAL (data/seed/DXY_5m.json)');
+    console.log('[startup] Calendar:       LIVE (ForexFactory)');
+    console.log('[startup] Backtest data:  HISTORICAL (Databento pipeline)');
+    console.log(`[startup] Live feed:      ${liveMode ? 'ENABLED (Databento)' : 'DISABLED (set features.liveData=true)'}`);
+    console.log('\u2501'.repeat(60));
   });
 }
 

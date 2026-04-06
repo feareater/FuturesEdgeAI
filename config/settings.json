@@ -34,7 +34,7 @@
     "soundAlerts": false,
     "pushNotifications": false,
     "ddBands": true,
-    "liveData": false
+    "liveData": true
   },
   "swingLookback": 10,
   "impulseThreshold": 1.5,

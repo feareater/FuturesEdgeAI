@@ -2595,4 +2595,198 @@ html, body {
 .partial-add-row { display: flex; gap: 4px; align-items: center; }
 .partial-add-row input { height: 24px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 3px; color: var(--text); font-size: 10px; padding: 0 4px; }
 .partial-save-btn { height: 24px; padding: 0 8px; font-size: 10px; background: rgba(38,166,154,0.2); border: 1px solid var(--bull); border-radius: 3px; color: var(--bull); cursor: pointer; white-space: nowrap; }
+
+/* ── Chart mode toggle button (Grid / Single) ──────────────────────────────── */
+
+.chart-mode-toggle {
+  margin-left: auto;
+  flex-shrink: 0;
+  background: rgba(33,150,243,0.10);
+  border: 1px solid rgba(33,150,243,0.30);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 3px 10px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s;
+}
+.chart-mode-toggle:hover {
+  background: rgba(33,150,243,0.22);
+  border-color: rgba(33,150,243,0.55);
+}
+.chart-mode-toggle.grid-active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+/* ── Chart no-data overlay ─────────────────────────────────────────────────── */
+
+#chart-wrap { position: relative; }
+
+#chart-no-data {
+  display: none;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: var(--text-dim);
+  font-size: 13px;
+  text-align: center;
+  z-index: 10;
+  pointer-events: none;
+  padding: 12px 20px;
+  background: rgba(19,23,34,0.85);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+/* ── Chart grid container ──────────────────────────────────────────────────── */
+
+#chart-grid-container {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  background: var(--bg);
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+#chart-grid-container::-webkit-scrollbar { width: 6px; }
+#chart-grid-container::-webkit-scrollbar-track { background: transparent; }
+#chart-grid-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+.chart-grid-futures {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.chart-grid-crypto {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.chart-grid-cell {
+  background: #16213e;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  position: relative;
+  height: 280px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+.chart-grid-cell:hover {
+  border-color: rgba(33,150,243,0.55);
+}
+
+.chart-grid-cell-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 5px 8px;
+  background: #1a1a2e;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+.chart-grid-symbol {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.chart-grid-price {
+  font-size: 11px;
+  font-family: 'Roboto Mono', 'Courier New', monospace;
+  color: var(--text-dim);
+  flex: 1;
+  text-align: right;
+  white-space: nowrap;
+}
+.chart-grid-price.up   { color: var(--bull); }
+.chart-grid-price.down { color: var(--bear); }
+
+.chart-grid-expand {
+  font-size: 12px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+  opacity: 0.4;
+  transition: opacity 0.15s, color 0.15s;
+  line-height: 1;
+}
+.chart-grid-cell:hover .chart-grid-expand {
+  opacity: 1;
+  color: var(--accent);
+}
+
+.chart-grid-tf-selector {
+  display: flex;
+  gap: 2px;
+  padding: 3px 6px;
+  background: #1a1a2e;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.chart-grid-tf-btn {
+  font-size: 10px;
+  font-family: inherit;
+  padding: 2px 5px;
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+.chart-grid-tf-btn:hover  { color: var(--text); border-color: var(--border); }
+.chart-grid-tf-btn.active {
+  color: var(--text);
+  border-color: var(--border);
+  background: rgba(33,150,243,0.15);
+}
+
+.chart-grid-chart-area {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+.chart-grid-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: #131722;
+  z-index: 5;
+}
+
+/* Responsive — 2 columns on medium screens */
+@media (max-width: 1200px) {
+  .chart-grid-futures { grid-template-columns: repeat(2, 1fr); }
+  .chart-grid-crypto  { grid-template-columns: repeat(3, 1fr); }
+}
+
+/* Responsive — 2 columns across the board on narrow screens */
+@media (max-width: 768px) {
+  .chart-grid-futures,
+  .chart-grid-crypto  { grid-template-columns: repeat(2, 1fr); }
+}
 .partial-save-btn:hover { background: rgba(38,166,154,0.35); }

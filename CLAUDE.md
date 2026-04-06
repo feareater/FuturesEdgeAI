@@ -18,6 +18,7 @@ FuturesEdge AI is a browser-based trading analysis dashboard for a single user (
 - **MES** — Micro E-mini S&P 500 Futures
 - **MCL** — Micro Crude Oil Futures
 - Active scan timeframes: **5m, 15m, 30m** (seed mode: 15m/30m/1h/2h/4h; live mode: 5m/15m/30m triggered on bar close)
+- Chart display timeframes: **1m/5m/15m/30m/1h/2h/4h** — 1m seed data exists for MNQ/MES/MGC/MCL/SIL; crypto 1m requires live feed
 
 ---
 
@@ -95,6 +96,7 @@ FuturesEdgeAI/
 │   │   └── backtest.css       ← Backtest page styles
 │   ├── js/
 │   │   ├── chart.js           ← TradingView chart renderer + all indicator overlays
+│   │   ├── chartManager.js    ← Multi-symbol grid mode (7 charts); mode toggle; single/grid switching
 │   │   ├── layers.js          ← Layer toggles + feature toggle panel
 │   │   ├── alerts.js          ← Alert feed, WS, RS widget, calendar badge, sound alerts
 │   │   ├── performance.js     ← Performance analytics renderer
@@ -290,6 +292,8 @@ Default view (Reset to Default): all layers ON.
 | X (v13.0) | B5 forward-test harness — checkLiveOutcomes in simulator.js, alertDedup.js, pushManager.js (VAPID web-push), alert feed AGING/STALE badges | ✅ Complete |
 | Y (v13.1) | Local LLM analysis — ollamaClient.js (checkOllamaHealth, buildBacktestSystemPrompt, streamOllamaResponse), GET /api/ai/ollama/status, POST /api/backtest/analyze SSE, 6th tab in backtest2.html | ✅ Complete |
 | Z (v13.2) | Backtest performance: worker threads (non-blocking POST /api/backtest/run, MAX_CONCURRENT_JOBS=4), breadth cache (breadth_cache.json, ~4× speedup on repeat runs), TF pre-aggregation (futures_agg/ directory, skip-if-exists) | ✅ Complete |
+| AA (v13.3) | Multi-symbol chart grid + 1m timeframe — chartManager.js (7 simultaneous mini charts, mode toggle, per-symbol TF, live prices), 1m TF button added to UI, graceful no-data overlay for missing seed files | ✅ Complete |
+| AB (v13.4) | Databento TCP live feed — CRAM auth, ohlcv-1s ticks (1s chart updates via `_liveTickBar`), ohlcv-1m bars, seed+live merge in `getCandles()`, `live_candle` WS handler, `updateLiveCandle()` in chart.js | ✅ Complete |
 
 ---
 
@@ -327,28 +331,38 @@ Update at runtime via `POST /api/settings/span` or the SPAN Margins panel in the
 
 ---
 
-## Databento Live Feed (Phase O / v12.0)
+## Databento Live Feed (v13.4 — TCP, updated 2026-04-06)
 
 ### Files
-- `server/data/databento.js` — REST adapter, polling loop, normalization
-- `server/data/snapshot.js` — live gate, `writeLiveCandle()`, 1m→5m/15m/30m aggregation
+- `server/data/databento.js` — TCP Live API adapter (CRAM auth), ohlcv-1s ticks + ohlcv-1m bars, historical REST functions
+- `server/data/snapshot.js` — live gate, seed+live merge in `getCandles()`, `writeLiveCandle()`, 1m→5m/15m/30m aggregation
 
-### Symbol map
-| Internal | Databento | Notes |
+### TCP connection
+- Host: `glbx-mdp3.lsg.databento.com:13000` (Node.js `net` module, raw TCP)
+- Auth: CRAM — `SHA256("<challenge>|<apiKey>").hex + "-" + apiKey.slice(-5)`
+- Handshake: plain-text `key=value` lines (NOT JSON): `lsg_version=…`, `cram=…`, `success=1|…`
+- Subscriptions (sent after auth): `schema=ohlcv-1s` + `schema=ohlcv-1m`, both `stype_in=parent`
+- Record types: `rtype=22` (symbol mapping), `rtype=32` (ohlcv-1s tick), `rtype=33` (ohlcv-1m bar)
+- Reconnect: exponential backoff 5s→5min
+
+### Symbol map (parent subscription)
+| Internal | Subscribe as | Notes |
 |---|---|---|
-| MNQ | `MNQ.c.0` | Micro E-mini Nasdaq-100, front-month continuous |
-| MES | `MES.c.0` | Micro E-mini S&P 500, front-month continuous |
-| MGC | `GC.c.0` | GC proxy (Micro Gold not in subscription; same price/oz) |
-| MCL | `MCL.c.0` | Micro Crude Oil, front-month continuous |
+| MNQ | `MNQ.FUT` | Micro E-mini Nasdaq-100 |
+| MES | `MES.FUT` | Micro E-mini S&P 500 |
+| MGC | `GC.FUT` | GC proxy — same price/oz, rtype=22 maps GC root → MGC |
+| MCL | `MCL.FUT` | Micro Crude Oil |
 
 ### How it works
-1. `startLiveFeed(symbols, onCandle)` — polls `hist.databento.com` every 65s, aligned to 5s after bar close
-2. `writeLiveCandle(symbol, candle)` in `snapshot.js` stores the 1m bar and returns completed 5m/15m/30m aggregates
-3. `_onLiveCandle()` in `server/index.js` broadcasts `live_candle` to the chart and fires a targeted `runScan({ targetSymbols, targetTimeframes })` per completed window
+1. `startLiveFeed(symbols, onCandle, onTick)` — connects TCP, authenticates, subscribes
+2. **ohlcv-1s** (rtype=32): `onTick(symbol, price, time)` → `broadcast({ type: 'live_price' })` → `ChartAPI.updateLivePrice()` builds in-progress forming candle, updates chart every second
+3. **ohlcv-1m** (rtype=33): `onCandle(symbol, candle)` → `writeLiveCandle()` stores bar + aggregates 5m/15m/30m → `_onLiveCandle()` broadcasts `live_candle` + fires targeted scan
+4. `getCandles()` merges seed history + live bars — chart always shows full history
+5. Completed bars: `ChartAPI.updateLiveCandle()` replaces forming candle, resets `_liveTickBar`
 
 ### Feature flag
-`features.liveData` (default: **false**) — set to `true` to start the live feed at next server startup.
-Hot-toggle: `POST /api/features { "liveData": true }` (feed starts at next boot; requires restart to activate).
+`features.liveData` (default: **false**) — set to `true` to activate live feed at next server startup.
+Hot-toggle: `POST /api/features { "liveData": true }` (requires restart to start TCP connection).
 
 ### Environment variable
 `DATABENTO_API_KEY` — in `.env`. Live feed silently disabled if not set.
@@ -356,8 +370,9 @@ Hot-toggle: `POST /api/features { "liveData": true }` (feed starts at next boot;
 ### Historical data
 Raw Databento zip downloads live in `Historical_data/` (gitignored, never committed).
 Processed candle files go in `data/historical/` (also gitignored).
+Historical REST functions (`fetchHistoricalCandles`, `fetchETFDailyCloses`) still use `hist.databento.com` with `stype_in=continuous`.
 
-### New API route (v12.0)
+### API route
 | Route | Purpose |
 |---|---|
 | `GET /api/datastatus` | Live feed health: source, lag seconds, last bar times per symbol |

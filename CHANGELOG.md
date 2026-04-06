@@ -4,7 +4,132 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v13.4] — 2026-04-06 — Databento TCP live feed + real-time chart
+
+### Rewrite: server/data/databento.js — live feed now uses Databento TCP Live API
+- Replaced REST polling loop (`_doPoll`, `POLL_INTERVAL_MS=65s`, `END_OFFSET_SECS=600`) with persistent TCP connection to `glbx-mdp3.lsg.databento.com:13000`
+- Authentication: CRAM challenge-response — `SHA256("<challenge>|<apiKey>")` hex + `-` + last 5 chars of API key
+- State machine: plain-text handshake phases `version → cram → auth → data`; only the `data` phase uses JSON.parse
+- Subscription: `stype_in=parent` with `MNQ.FUT,MES.FUT,GC.FUT,MCL.FUT`; encoding=json, ts_out=1
+- Added second subscription `schema=ohlcv-1s` on the same connection — 1s bars used as live price ticks
+- `rtype=22` (symbol mapping) → `stype_in_symbol` field (e.g. `"MNQ.FUT"`) strip `.FUT` → ROOT_TO_INTERNAL lookup → instrument_id map
+- `rtype=32` (ohlcv-1s) → extract close price → `_onTickCb(symbol, price, time)` → broadcast `live_price` to clients (same path as Coinbase WS for crypto)
+- `rtype=33` (ohlcv-1m) → normalize and emit via `_onCandleCb(symbol, candle)` → `_onLiveCandle()` → scan engine
+- `ROOT_TO_INTERNAL` map: `{ MNQ:'MNQ', MES:'MES', GC:'MGC', MCL:'MCL' }` — GC.FUT maps to MGC (same price/oz)
+- Reconnect: exponential backoff (5s base, 5min cap) on any connection close or error; `_stopped` flag prevents reconnect after `stopLiveFeed()`
+- Added `stopLiveFeed()` export — destroys socket, cancels reconnect timer
+- `startLiveFeed(symbols, onCandle, onTick)` — added optional `onTick` for 1s price ticks
+- Throttled tick log: first tick per symbol per minute logged as `[databento:live] tick SYM price`
+- `getLiveFeedStatus()` unchanged shape: `{ connected, lagSeconds, lastPollTime, lastBarTimes, symbols }`
+- All historical functions (`fetchHistoricalCandles`, `fetchETFDailyCloses`, `_dbGet`, `_parseBody`, `_normalize`) unchanged — historical pipeline unaffected
+
+### Confirmed wire format (live API, 2026-04-06)
+- Handshake: plain-text `key=value` lines (NOT JSON) — `lsg_version=0.8.0`, `cram=<challenge>`, `success=1|...`
+- Symbol mapping record: `rtype=22`, field `stype_in_symbol` = `"MNQ.FUT"` (strip `.FUT` → ROOT_TO_INTERNAL), `stype_out_symbol` = actual contract e.g. `"MNQM7"`
+- OHLCV-1s bar record: `rtype=32`; OHLCV-1m bar record: `rtype=33`
+- All 4 symbols confirmed flowing: MNQ/MES/MGC/MCL bars at 01:53 UTC 2026-04-06, ticks confirmed
+
+### Fix: server/data/snapshot.js — seed + live merge
+- `getCandles()` in live mode previously returned only live bars once any bar arrived, losing all seed history
+- Now merges: seed bars with `time < firstLiveBar.time` prepended to live bars, trimmed to `MAX_LIVE_BARS`
+- Seed data provides historical backdrop; live bars extend it seamlessly — chart shows full history from day one of live mode
+
+### Modified: server/index.js — `_startDatabento()`
+- Passes `onTick` callback to `startLiveFeed()` — broadcasts `{ type: 'live_price', symbol, price, time }` on every 1s bar close
+- Futures `live_price` events now flow to all connected clients on the same WS path as Coinbase crypto ticks
+
+### Modified: public/js/chart.js — real-time in-progress bar
+- Added `_liveTickBar` state variable — tracks the forming candle for the current TF window
+- `updateLivePrice(symbol, price, time)` rewritten: aligns tick to current TF window (`floor(time/tfSecs)*tfSecs`), builds/extends `_liveTickBar` with correct O/H/L/C, calls `candleSeries.update()` — chart moves second-by-second
+- `updateLiveCandle(symbol, timeframe, candle)` — new method; replaces `_liveTickBar` with completed bar when `live_candle` WS message arrives; resets `_liveTickBar = null`
+- `_liveTickBar` reset to `null` on each `loadData()` call
+
+### Modified: public/js/alerts.js — `live_candle` handler
+- Added `live_candle` WS message handler → calls `ChartAPI.updateLiveCandle(symbol, timeframe, candle)`
+- `live_price` comment updated: now covers both Coinbase crypto and Databento futures ticks
+
+---
+
+## [v13.3] — 2026-04-05 — Multi-symbol chart grid + 1m timeframe
+
+### New: public/js/chartManager.js
+- Manages grid vs single chart mode via `localStorage 'fe_chart_mode'`
+- **Grid mode**: 7 simultaneous TradingView mini charts — MNQ/MES/MGC/MCL (4-column) + BTC/ETH/XRP (3-column)
+- Each grid cell: symbol label, live price display (green/red up/down), candlesticks, EMA9/EMA21/VWAP overlays
+- Per-cell TF selector: 1m / 5m / 15m / 30m (selections persisted to localStorage per symbol)
+- Click any grid cell → switches to single mode and loads that symbol
+- Live price updates from Coinbase WebSocket (`livePriceTick` DOM event from alerts.js)
+- Data refresh on `dataRefresh` DOM event (Databento candle close or periodic seed refresh)
+- Mode toggle button (`Grid` / `Single`) in the timeframe row of the topbar
+- Parallel data loading via `Promise.all` — all 7 charts load simultaneously
+- Graceful no-data handling: "1m requires live feed" message for symbols without 1m seed data
+
+### Modified: public/index.html
+- Added `1m` as first option in the timeframe selector
+- Added chart mode toggle button (`#chart-mode-toggle`) in the TF row, right-aligned
+- Added `#chart-no-data` overlay div inside `#chart-wrap` (shown on 1m seed-mode errors)
+- Added `#chart-grid-container` div in `#main` (sibling to `#chart-wrap`)
+- Added `<script src="/js/chartManager.js">` load after alerts.js
+
+### Modified: public/js/chart.js
+- `loadData()`: clears `#chart-no-data` overlay on each load attempt
+- `loadData()`: on `/api/candles` 400 error with `tf=1m`, shows "1m data requires live feed" message instead of throwing — no console error for expected missing seed files
+- Added `chartLoadSymbol` DOM event listener — allows chartManager.js to switch the single chart to any symbol/TF without simulating button clicks
+
+### Modified: public/js/alerts.js
+- `live_price` WS handler: dispatches `livePriceTick` CustomEvent (detail: `{ symbol, price }`) for grid mode price cells
+- `data_refresh` WS handler: dispatches `dataRefresh` CustomEvent for grid chart refresh
+
+### Modified: public/css/dashboard.css
+- `.chart-mode-toggle` — topbar toggle button, right-aligned in TF row; `.grid-active` state fills accent color
+- `#chart-no-data` — centered overlay inside `#chart-wrap`, semi-opaque dark bg, shows on 1m seed-mode errors
+- `#chart-grid-container` — flex column, scrollable, 8px padding/gap
+- `.chart-grid-futures` — 4-column CSS grid
+- `.chart-grid-crypto` — 3-column CSS grid
+- `.chart-grid-cell` — 280px height, dark background, hover border highlight, flex column
+- `.chart-grid-cell-header` — symbol label + price display + expand icon
+- `.chart-grid-tf-selector` + `.chart-grid-tf-btn` — per-cell TF buttons (1m/5m/15m/30m)
+- `.chart-grid-chart-area` — fills remaining cell height
+- `.chart-grid-loading` — absolute overlay spinner/message per cell
+- Responsive: 2-column layout on ≤1200px (futures), 2-column across both rows on ≤768px
+
+### 1m timeframe — seed data availability
+- MNQ, MES, MGC, MCL, SIL: 1m seed files exist → 1m works in seed mode
+- BTC, ETH, XRP, XLM: no 1m seed files → shows "1m data requires live feed" message
+- In live mode (Databento): 1m futures bars are written by `writeLiveCandle()` and available via `/api/candles`
+
+---
+
 ## [v13.2] — 2026-04-05 — Backtest performance: worker threads + breadth cache + TF pre-aggregation
+
+### Fixes (added post-release)
+
+- **Fix: GET /api/candles now correctly serves seed data when live data unavailable**
+  - Root cause: `features.liveData = true` in settings.json, but Databento polling was failing with 422 errors, leaving the live candle store empty. `getCandles()` returned `liveCandles.get(...) ?? []` — an empty array — instead of falling back to seed files.
+  - Fix in `server/data/snapshot.js`: when live mode is active but the in-memory store for `symbol:timeframe` is empty, log a warning and fall through to seed data. Seed files always serve as the base layer; live data only overrides when actually populated.
+
+- **Fix: Databento poll end time offset — subtract 10 min buffer to stay within available data range and eliminate 422 errors**
+  - Root cause: `_doPoll()` set `end=now`. Databento's historical REST API has a ~5–10 minute processing lag — requesting bars from the last few minutes returns 422 "Unprocessable Entity".
+  - Fix in `server/data/databento.js`: `END_OFFSET_SECS = 600` (10 minutes). Poll window end is now `now - 10m`, keeping all requests within Databento's available data range.
+  - Also added specific 422 error message so the root cause is immediately visible in logs.
+  - `getLiveFeedStatus()` lag calculation now uses most recent bar timestamp (not last poll time) for accurate data-currency reporting.
+
+- **Note: Databento Live WebSocket API does not yet exist**
+  - Investigated switching from REST polling to Databento's Live WebSocket API. Found that Databento's WebSocket API is on their public roadmap but not yet released (as of 2026-04-05). Their live feed uses a binary TCP protocol (DBN format, port 13000) for which no Node.js client exists. The existing REST polling approach is the correct implementation for current Databento subscriptions.
+
+### Fixes and improvements (live feed diagnostics)
+- **Fix:** `commentary.json` corruption handling — `loadCommentaryCache()` now logs `[log] commentary.json corrupted — resetting cache`, writes a clean empty file, and returns the default object instead of only logging the raw parse error.
+- **Fix:** Autotrader skip logging consolidated to one summary line per scan cycle: `[autotrader] Scan complete — N trades executed (M skipped: K disabled)`. Eliminates per-alert `[autotrader] Skipped …` spam when kill switch is off.
+- **Improvement:** Startup data source summary block — printed after all init, showing market data / options / crypto / VIX / DXY / calendar / backtest / live feed status at a glance.
+- **Improvement:** Seed data staleness warning at startup — logs age of each SCAN_SYMBOL 5m file; warns if any file is older than 7 days.
+- **Improvement:** VIX/DXY lookup date logged per symbol per scan cycle (`[marketContext] VIX lookup date: …` / `[marketContext] DXY lookup date: …`) so data currency is easy to verify.
+- **Improvement:** CoinbaseWS tick summary — logs combined BTC/ETH/XRP prices once per minute when receiving live data.
+
+### B6 Backtest Results (2026-04-05)
+- Config: or_breakout only, hours 9-10 ET, minConf 65, full period 2018-09-24 → 2026-04-01, 5m only
+- Results: 5,059 trades, WR 37.89%, PF 1.949, Net $211,177, MaxDD $1,946, Sharpe 6.19
+- vs A5: WR +4.0pp, PF +0.365, Net P&L -$26,864 (45.5% fewer trades), MaxDD -$962
+- Verdict: ⚠️ B7 recommended — WR 37.9% below 40% threshold; confidence floor test (minConf 75) is next step
 
 ### Phase A — Worker Threads (non-blocking job execution)
 `runBacktestMTF` was synchronous despite being declared `async` — it blocked the Express event loop for 10–20 min per job, preventing any other requests from being served during a backtest run.

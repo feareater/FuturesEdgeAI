@@ -16,6 +16,7 @@
   let activeSymbol = 'MNQ';
   let activeTf     = '5m';
   let lastCandle   = null;
+  let _liveTickBar = null;  // in-progress bar for the current 1m window (from live_price ticks)
 
   // Chart + base series
   let chart        = null;
@@ -290,13 +291,27 @@
     alertMarkers     = [];
     alertMarkersData = [];
 
+    // Clear any previous no-data message
+    const noDataEl = document.getElementById('chart-no-data');
+    if (noDataEl) noDataEl.style.display = 'none';
+
     const [candleRes, indRes, tlRes] = await Promise.all([
       fetch(`/api/candles?symbol=${symbol}&timeframe=${tf}`),
       fetch(`/api/indicators?symbol=${symbol}&timeframe=${tf}`),
       fetch(`/api/trendlines?symbol=${symbol}`),
     ]);
 
-    if (!candleRes.ok) throw new Error(`/api/candles ${candleRes.status}`);
+    if (!candleRes.ok) {
+      // 1m seed data doesn't exist for all symbols — show friendly message instead of throwing
+      if (tf === '1m') {
+        if (noDataEl) {
+          noDataEl.textContent = '1m data requires live feed (enable Databento in features)';
+          noDataEl.style.display = 'block';
+        }
+        return;
+      }
+      throw new Error(`/api/candles ${candleRes.status}`);
+    }
     if (!indRes.ok)    throw new Error(`/api/indicators ${indRes.status}`);
 
     const { candles } = await candleRes.json();
@@ -314,7 +329,8 @@
     candleSeries.setData(candles);
     rawCandles = candles;
     chart.timeScale().scrollToRealTime();
-    lastCandle = candles[candles.length - 1];
+    lastCandle   = candles[candles.length - 1];
+    _liveTickBar = null;  // reset in-progress bar on fresh data load
 
     // Store sorted candle times for trendline timestamp snapping
     activeCandleTimes = candles.map(c => c.time);
@@ -1074,24 +1090,52 @@
         .catch(err => console.error('[chart] reload:', err.message));
     },
 
-    // Push a live price tick (from Coinbase WS) onto the last candle.
-    // Only applies when the tick matches the active symbol.
+    // Push a live price tick onto the chart as an in-progress bar for the current 1m window.
+    // Works for both Coinbase crypto ticks and Databento 1s futures bars.
     updateLivePrice(symbol, price, time) {
       if (symbol !== activeSymbol || !candleSeries || !lastCandle) return;
-      const updatedCandle = {
-        time:  lastCandle.time,
-        open:  lastCandle.open,
-        high:  Math.max(lastCandle.high, price),
-        low:   Math.min(lastCandle.low,  price),
-        close: price,
-      };
-      candleSeries.update(updatedCandle);
-      lastCandle = updatedCandle;
+
+      // Align tick to the 1m bar window it belongs to.
+      // activeTf granularity: on 1m chart use 60s, on 5m use 300s, etc.
+      const TF_SECONDS = { '1m':60, '2m':120, '3m':180, '5m':300, '15m':900, '30m':1800, '1h':3600, '2h':7200, '4h':14400 };
+      const tfSecs  = TF_SECONDS[activeTf] ?? 60;
+      const barTime = time ? Math.floor(time / tfSecs) * tfSecs : lastCandle.time;
+
+      // Only build an in-progress bar when the tick is newer than the last completed bar.
+      // If barTime === lastCandle.time the bar hasn't closed yet — update it in place.
+      // If barTime > lastCandle.time a new window has opened — start a fresh bar.
+      if (barTime < lastCandle.time) return;  // stale tick, ignore
+
+      if (!_liveTickBar || _liveTickBar.time !== barTime) {
+        // New window: open at the close of the last completed bar (gap-free)
+        _liveTickBar = {
+          time:  barTime,
+          open:  barTime === lastCandle.time ? lastCandle.open : lastCandle.close,
+          high:  Math.max(barTime === lastCandle.time ? lastCandle.high : lastCandle.close, price),
+          low:   Math.min(barTime === lastCandle.time ? lastCandle.low  : lastCandle.close, price),
+          close: price,
+        };
+      } else {
+        _liveTickBar.high  = Math.max(_liveTickBar.high,  price);
+        _liveTickBar.low   = Math.min(_liveTickBar.low,   price);
+        _liveTickBar.close = price;
+      }
+
+      candleSeries.update(_liveTickBar);
       // Update price display
       priceValue.textContent = price.toFixed(price < 10 ? 4 : price < 1000 ? 2 : 0);
     },
 
-        // Set options levels from /api/options — called by alerts.js after each symbol change.
+        // Replace the in-progress tick bar with a completed bar from the live feed.
+    // Called when a live_candle WS message arrives (1m bar close from Databento).
+    updateLiveCandle(symbol, timeframe, candle) {
+      if (symbol !== activeSymbol || timeframe !== activeTf || !candleSeries) return;
+      candleSeries.update(candle);
+      lastCandle   = candle;
+      _liveTickBar = null;  // completed bar supersedes the in-progress tick bar
+    },
+
+    // Set options levels from /api/options — called by alerts.js after each symbol change.
     setOptionsLevels(data) {
       lastOptionsLevels = data;
       clearOptionsLines();
@@ -1195,6 +1239,16 @@
       setActive('.tf-btn', 'tf', activeTf);
       loadData(activeSymbol, activeTf).catch(err => console.error('[chart]', err.message));
     });
+  });
+
+  // chartLoadSymbol — allows chartManager.js to switch to any symbol/TF directly
+  // without needing to simulate button clicks or deal with mode toggle state.
+  document.addEventListener('chartLoadSymbol', (e) => {
+    activeSymbol = e.detail.symbol;
+    if (e.detail.tf) activeTf = e.detail.tf;
+    setActive('.sym-btn', 'symbol', activeSymbol);
+    setActive('.tf-btn',  'tf',     activeTf);
+    loadData(activeSymbol, activeTf).catch(err => console.error('[chart] chartLoadSymbol:', err.message));
   });
 
   // ── Boot ───────────────────────────────────────────────────────────────────

@@ -2634,10 +2634,16 @@
           fetchAndRender();
         }
         if (msg.type === 'live_price') {
-          // Real-time tick from Coinbase WS (BTC/ETH/XRP only)
+          // Real-time tick from Coinbase WS (crypto) or Databento 1s bar (futures)
           window.ChartAPI?.updateLivePrice?.(msg.symbol, msg.price, msg.time);
           _updateDataAgeBadge(msg.symbol, msg.time);
           _checkMonitoredTrades(msg.symbol, msg.price);
+          // Broadcast for grid mode price displays
+          document.dispatchEvent(new CustomEvent('livePriceTick', { detail: { symbol: msg.symbol, price: msg.price } }));
+        }
+        if (msg.type === 'live_candle') {
+          // Completed bar from Databento live feed — replace in-progress tick bar with real one
+          window.ChartAPI?.updateLiveCandle?.(msg.symbol, msg.timeframe, msg.candle);
         }
                 if (msg.type === 'data_refresh') {
           // Snapshot prev keys before refetch so new cards can be highlighted
@@ -2651,6 +2657,8 @@
             _lastKnownCandleTime = msg.lastCandleTime[activeSymbol];
             _updateDataAgeBadge(activeSymbol, msg.lastCandleTime[activeSymbol]);
           }
+          // Broadcast for grid mode chart refresh
+          document.dispatchEvent(new CustomEvent('dataRefresh'));
         }
         if (msg.type === 'refresh_schedule') {
           // Server rescheduled the interval (e.g. settings change) — sync countdown + select

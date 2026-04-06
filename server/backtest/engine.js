@@ -114,6 +114,8 @@ const BREADTH_CACHE_PATH = path.resolve(DATA_DIR, 'breadth_cache.json');
 function _precomputeBreadth(startDate, endDate) {
   const t0 = Date.now();
 
+  console.log('[backtest] Breadth cache path:', BREADTH_CACHE_PATH, 'exists:', fs.existsSync(BREADTH_CACHE_PATH));
+
   // Load existing cache (may be partial or empty)
   const cache = readJSON(BREADTH_CACHE_PATH) || {};
 
@@ -133,7 +135,7 @@ function _precomputeBreadth(startDate, endDate) {
   const missingDates = targetDates.filter(d => !(d in cache));
 
   if (missingDates.length === 0) {
-    console.log(`[BT-MTF] Breadth cache hit: ${targetDates.length} dates (0ms)`);
+    console.log(`[backtest] Breadth cache hit — ${targetDates.length} dates loaded instantly`);
     const result = {};
     for (const d of targetDates) result[d] = cache[d];
     return result;
@@ -717,6 +719,11 @@ async function runBacktestMTF(config, onProgress = null) {
 
   let totalBarsProcessed = 0;
   const startMs = Date.now();
+
+  // One-time path diagnostics
+  const aggCheckPath = path.join(DATA_DIR, 'futures_agg', symbols[0], timeframes.find(t => t !== '1m') || '5m', `${startDate}.json`);
+  console.log('[backtest] DATA_DIR:', DATA_DIR);
+  console.log('[backtest] futures_agg check path:', aggCheckPath, 'exists:', fs.existsSync(aggCheckPath));
 
   // Load VIX proxy and DXY data — gracefully optional (defaults to neutral if missing)
   const vixData = loadJsonIfExists('data/historical/vix.json') || {};
