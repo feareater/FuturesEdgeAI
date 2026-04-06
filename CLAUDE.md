@@ -1,5 +1,5 @@
 # FuturesEdge AI — CLAUDE.md
-> Project context for Claude Code. Read this at the start of every session.
+> Project context for Claude Code. Read this, ROADMAP.md, and CONTEXT_SUPPLEMENT.md at the start of every session.
 
 ---
 
@@ -13,10 +13,23 @@ FuturesEdge AI is a browser-based trading analysis dashboard for a single user (
 
 ## Instruments & Markets
 
+### Tradeable (setup scanning active)
 - **MNQ** — Micro E-mini Nasdaq-100 Futures
-- **MGC** — Micro Gold Futures
 - **MES** — Micro E-mini S&P 500 Futures
+- **M2K** — Micro Russell 2000 Futures
+- **MYM** — Micro Dow Jones Futures
+- **MGC** — Micro Gold Futures
 - **MCL** — Micro Crude Oil Futures
+- **MHG** — Micro Copper Futures
+- **SIL** — Micro Silver Futures
+- **BTC, ETH, XRP, XLM** — Crypto perpetuals (Coinbase INTX)
+
+### Reference (charts + breadth only, no setup scanning)
+- **M6E, M6B** — Micro EUR/USD, Micro GBP/USD (FX)
+- **MBT** — Micro Bitcoin CME (btcRegime breadth)
+- **ZT, ZF, ZN, ZB, UB** — Treasury bonds (bond breadth)
+
+- `SCAN_SYMBOLS` = `['MNQ','MGC','MES','MCL','BTC','ETH','XRP','XLM','SIL','M2K','MYM','MHG']`
 - Active scan timeframes: **5m, 15m, 30m** (seed mode: 15m/30m/1h/2h/4h; live mode: 5m/15m/30m triggered on bar close)
 - Chart display timeframes: **1m/5m/15m/30m/1h/2h/4h** — 1m seed data exists for MNQ/MES/MGC/MCL/SIL; crypto 1m requires live feed
 
@@ -34,7 +47,7 @@ FuturesEdge AI is a browser-based trading analysis dashboard for a single user (
 | Charting | TradingView Lightweight Charts |
 | Technical indicators | `technicalindicators` npm library |
 | AI commentary | Anthropic Claude API (claude-sonnet-4-6) |
-| AI analysis (local/batch) | Ollama (WSL2 Ubuntu) | `localhost:11434`; `qwen2.5:32b` day use / `llama3.3:70b` overnight; backtest analysis only |
+| AI analysis (batch) | Claude API (claude-sonnet-4-6) — batch analysis + alert commentary |
 | Frontend | HTML / CSS / Vanilla JS |
 | Local comms | `ws` WebSocket library |
 | Storage | JSON flat files (local) |
@@ -105,7 +118,8 @@ FuturesEdgeAI/
 │   └── sw.js                  ← Service worker (cache-first shell, network-only /api/)
 ├── data/
 │   ├── seed/                  ← OHLCV snapshots (MNQ/MGC/MES/MCL × 5m/15m/30m)
-│   └── logs/                  ← alerts.json, commentary.json, trades.json
+│   ├── logs/                  ← alerts.json, commentary.json, trades.json
+│   └── analysis/              ← Claude API analysis outputs ({timestamp}_{type}.json/.txt) — gitignored
 └── config/
     └── settings.json          ← risk block + features block (10 hot-toggleable flags)
 ```
@@ -200,6 +214,19 @@ PORT=3000
 - MGC → 1:1 (`PDH_RR = 1.0`)
 - MCL → 1.5:1 (`PDH_RR = 1.5`)
 
+**Phase 2 Loss-Analysis Gates — `applyMarketContext()` in `setups.js` (Apr 2026)**
+
+Two additive confidence penalties derived from worst-500-loser analysis of the A5 full-period backtest. Applied after all multipliers and breadth scoring, before final score clamp. Tracked in `setup.scoreBreakdown.context.lossGatePts`.
+
+| Gate | Condition | Penalty | Basis |
+|------|-----------|---------|-------|
+| Rising DXY OR breakout | `setup.type === 'or_breakout'` AND DXY direction = `'rising'` | −20 pts | ~49% of worst 500 A5 losses; strengthening dollar drains breakout momentum across all symbols |
+| Risk-off breadth collapse | `riskAppetite === 'off'` AND `equityBreadth ≤ 1` | −15 pts | Structural headwind when ≤1 of 4 equity indices bullish and risk appetite off |
+
+Gates are **additive** — both can fire simultaneously for a maximum −35 pts penalty. A base score of 65 with both gates active → final score ≤ 30 (hard skip at 65% threshold).
+
+DXY direction source: `marketContext.breadth?.dollarRegime` (available in both live and backtest), falling back to `marketContext.dxy?.direction` (live HP feed only). The backtest engine's `mktCtx.dxy.direction` is always `'flat'` for historical dates — the breadth fallback ensures gates fire correctly in backtests.
+
 ---
 
 ## Alert Object Schema (v2.0)
@@ -290,10 +317,11 @@ Default view (Reset to Default): all layers ON.
 | V (v12.8) | Market breadth scoring — marketBreadth.js (16 CME instruments), breadth additive scoring in applyMarketContext (±15 pts cap), trade record breadth fields, Optimize tab Market Breadth + Inter-market sub-tabs | ✅ Complete |
 | W (v12.9) | A5 Final with breadth active — dollarRegime spot-check (no inversion bug), full-period A5 re-run: Net +$238K, WR 33.9%, PF 1.584, 9,286 trades. Breadth marginal positive (+$4,500 vs baseline, MaxDD 9% lower). zone_rejection remains disabled. | ✅ Complete |
 | X (v13.0) | B5 forward-test harness — checkLiveOutcomes in simulator.js, alertDedup.js, pushManager.js (VAPID web-push), alert feed AGING/STALE badges | ✅ Complete |
-| Y (v13.1) | Local LLM analysis — ollamaClient.js (checkOllamaHealth, buildBacktestSystemPrompt, streamOllamaResponse), GET /api/ai/ollama/status, POST /api/backtest/analyze SSE, 6th tab in backtest2.html | ✅ Complete |
+| Y (v13.1) | AI analysis tab — backtest2.html 6th tab (AI Analysis), POST /api/backtest/analyze SSE endpoint. Originally Ollama; migrated to Claude API (claude-sonnet-4-6) in v14.4 | ✅ Complete |
 | Z (v13.2) | Backtest performance: worker threads (non-blocking POST /api/backtest/run, MAX_CONCURRENT_JOBS=4), breadth cache (breadth_cache.json, ~4× speedup on repeat runs), TF pre-aggregation (futures_agg/ directory, skip-if-exists) | ✅ Complete |
 | AA (v13.3) | Multi-symbol chart grid + 1m timeframe — chartManager.js (7 simultaneous mini charts, mode toggle, per-symbol TF, live prices), 1m TF button added to UI, graceful no-data overlay for missing seed files | ✅ Complete |
 | AB (v13.4) | Databento TCP live feed — CRAM auth, ohlcv-1s ticks (1s chart updates via `_liveTickBar`), ohlcv-1m bars, seed+live merge in `getCandles()`, `live_candle` WS handler, `updateLiveCandle()` in chart.js | ✅ Complete |
+| AC (v14.3) | Bar validation layer (barValidator.js) + all 8 CME symbols on live feed (MNQ/MES/MGC/MCL/SIL/M2K/MYM/MHG) | ✅ Complete |
 
 ---
 
@@ -326,8 +354,7 @@ Update at runtime via `POST /api/settings/span` or the SPAN Margins panel in the
 |---|---|
 | `GET /api/ddbands?symbol=MNQ` | Current DD/SPAN levels + currentPrice for topbar widget |
 | `POST /api/settings/span` | Update SPAN margin values (body: `{ MNQ: 1400, ... }`) |
-| `GET /api/ai/ollama/status` | Ollama health check + available models list |
-| `POST /api/backtest/analyze` | SSE streaming backtest chat via local LLM |
+| `POST /api/backtest/analyze` | SSE streaming backtest analysis via Claude API |
 
 ---
 
@@ -352,12 +379,16 @@ Update at runtime via `POST /api/settings/span` or the SPAN Margins panel in the
 | MES | `MES.FUT` | Micro E-mini S&P 500 |
 | MGC | `GC.FUT` | GC proxy — same price/oz, rtype=22 maps GC root → MGC |
 | MCL | `MCL.FUT` | Micro Crude Oil |
+| SIL | `SI.FUT` | SI proxy — same price/oz, rtype=22 maps SI root → SIL |
+| M2K | `M2K.FUT` | Micro Russell 2000 |
+| MYM | `MYM.FUT` | Micro Dow Jones |
+| MHG | `HG.FUT` | HG proxy — rtype=22 maps HG root → MHG |
 
 ### How it works
 1. `startLiveFeed(symbols, onCandle, onTick)` — connects TCP, authenticates, subscribes
-2. **ohlcv-1s** (rtype=32): `onTick(symbol, price, time)` → `broadcast({ type: 'live_price' })` → `ChartAPI.updateLivePrice()` builds in-progress forming candle, updates chart every second
-3. **ohlcv-1m** (rtype=33): `onCandle(symbol, candle)` → `writeLiveCandle()` stores bar + aggregates 5m/15m/30m → `_onLiveCandle()` broadcasts `live_candle` + fires targeted scan
-4. `getCandles()` merges seed history + live bars — chart always shows full history
+2. **ohlcv-1s** (rtype=32): spike-filtered via `_isSpikePrice()` (>2% deviation rejected) → `onTick(symbol, price, time)` → `broadcast({ type: 'live_price' })` → `ChartAPI.updateLivePrice()` builds in-progress forming candle (also spike-filtered client-side), updates chart every second
+3. **ohlcv-1m** (rtype=33): spike-filtered (close rejected if >2% deviation; high/low clamped to O/C range if spiked individually) → `onCandle(symbol, candle)` → `validateBar()` (5-rule sanity check: null/zero guard, open continuity, OHLC consistency, ATR spike clamp, volume guard) → `writeLiveCandle()` stores bar + aggregates 5m/15m/30m → `_onLiveCandle()` broadcasts `live_candle` + fires targeted scan
+4. `getCandles()` merges seed history + live bars (returns **defensive copies**, not shared references) — chart always shows full history
 5. Completed bars: `ChartAPI.updateLiveCandle()` replaces forming candle, resets `_liveTickBar`
 
 ### Feature flag
@@ -471,6 +502,9 @@ All toggleable at runtime via `POST /api/features { "featureName": true|false }`
 
 ## Backtest System (v13.2) — Key Facts
 
+### Default Backtest Window
+Standard backtest window going forward: last 12–24 months (approx 2024-01-01 to present). Full-period runs (2018–present) are available but not the default — current market conditions are best reflected in recent data. B-series runs from B8 onward use the 24-month window.
+
 ### Engine (`server/backtest/engine.js`)
 - Primary mode: `runBacktestMTF(config, onProgress?)` — bar-by-bar replay using pre-derived TF files
 - **Current-bar filter**: `if (setup.time !== detectTs) continue` — only fires setups triggered by the bar that just closed. Prevents stale entry prices from historical candles.
@@ -517,5 +551,11 @@ All toggleable at runtime via `POST /api/features { "featureName": true|false }`
 - `GET /api/backtest/replay/:jobId?symbol=X&date=YYYY-MM-DD`
 - `GET /api/backtest/replay/:jobId/full?symbol=X` — all bars + alerts for full-run replay
 - `GET /api/backtest/available` — available date ranges per symbol
+
+## EdgeLog (port 3004)
+
+Deferred until paper trading is stable and producing consistent results. MVP scope to be defined at that point. Audience: futures day traders and prop firm traders. Estimated pricing: $20–35/month.
+
+---
 
 **Next step when resuming:** integrate live Ironbeam/CQG WebSocket data feed (replace seed mode) per the data-source-agnostic interface in `server/data/snapshot.js`.

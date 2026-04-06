@@ -4,6 +4,478 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v14.4] — 2026-04-06 — ROADMAP.md + documentation updates
+
+### Added: ROADMAP.md — Master project roadmap
+- Single source of truth for project status and planned work
+- Sections: Project Status Summary, Completed (grouped by theme), Active Tracks (B-series / ZR-series / Dashboard Bugs / IA-series), Gated milestones (paper trading, EdgeLog), Long-term AI/ML phases, AI Analysis Policy, Key Decisions Log, Pass/Fail Criteria Reference
+- CLAUDE.md updated to reference ROADMAP.md at session start
+
+---
+
+## [v14.4a] — 2026-04-06 — Documentation updates: Claude API migration, analysis tracks, backtest defaults
+
+### Modified: AI_ROADMAP.md
+- **AI analysis engine**: Replaced all Ollama references with Claude API (claude-sonnet-4-6). Ollama removed from analysis workflow. `POST /api/backtest/analyze` and backtest2.html AI Analysis tab now use Claude API exclusively.
+- **Output document requirement**: New key principle — every Claude API analysis session must produce saved output in `data/analysis/{timestamp}_{type}.json` + `.txt`.
+- **Zone Rejection Rescue Track (ZR-series)**: New section documenting ZR-A through ZR-E sub-runs to determine if zone_rejection can be made profitable with structural changes (ATR zone depth filter, max retest count, tighter SL, alternative TP).
+- **Indicator Weight Calibration (IA-series)**: New section documenting IA1 (HP proximity audit), IA2 (DD Band audit), IA3 (full weight calibration) runs.
+- **Paper trading status**: Updated to "B8 pending" — paper trading activates if B8 passes WR >= 40% + PF >= 1.5 on MNQ+MES+MCL (24-month window). Added B8 checklist item to prerequisites.
+- **Decisions Deferred**: Local LLM (Ollama) entry updated to "REMOVED — replaced by Claude API."
+
+### Modified: CLAUDE.md
+- **Tech stack**: AI analysis row updated from "Ollama (WSL2 Ubuntu)" to "Claude API (claude-sonnet-4-6) — batch analysis + alert commentary"
+- **API routes**: Removed `GET /api/ai/ollama/status`; updated `/api/backtest/analyze` description
+- **Build phases**: Phase Y description updated to reflect Ollama → Claude API migration
+- **Project structure**: Added `data/analysis/` directory for Claude API analysis outputs
+- **Backtest system**: Added "Default Backtest Window" note (12–24 months, B8+ uses 24-month)
+- **EdgeLog**: Added deferred status section (port 3004, $20–35/month, awaiting paper trading stability)
+
+### Modified: CONTEXT_SUPPLEMENT.md
+- **A5 findings**: Added default backtest window note (12–24 months from 2024-01-01)
+- **EdgeLog**: Added deferred status section with pricing and audience details
+
+### No code changes — documentation only.
+
+---
+
+## [v14.3] — 2026-04-06 — Bar validation layer + all 8 CME symbols on live feed
+
+### Added: server/data/barValidator.js — 1m bar validation / sanity check
+- `validateBar(symbol, bar, previousBar)` — 5-rule validation pipeline:
+  1. **Zero/null/NaN guard** — rejects bar entirely if any OHLC field is 0, null, or NaN
+  2. **Price continuity** — if open deviates >3% from previous bar's close, clamps open and flags
+  3. **Intra-bar consistency** — enforces high >= max(O,C), low <= min(O,C); reconstructs if violated
+  4. **Range spike filter** — rolling 20-bar ATR per symbol; range > 5×ATR clamped to open ± 1.5×ATR
+  5. **Volume guard** — negative volume clamped to 0; volume > 1M logged as suspect
+- `getValidatorStats()` — per-symbol counters: total, flagged, rejected
+- Wired into `_onLiveCandle()` in server/index.js — runs BEFORE chart broadcast, disk write, and aggregator
+- Defensive re-validation in `liveArchive.js writeLiveCandleToDisk()` — rejected bars skip disk write
+
+### Added: GET /api/barvalidator/stats
+- Returns `{ bySymbol: { MNQ: { total, flagged, rejected }, ... } }` for monitoring
+
+### Modified: server/data/databento.js — All 8 CME symbols on live feed
+- `LIVE_SUBSCRIBE_SYMBOLS` expanded: added `SI.FUT` (Silver) and `HG.FUT` (Copper)
+- `ROOT_TO_INTERNAL` map: added `SI → SIL`, `HG → MHG`
+- Full subscription list: MNQ, MES, GC(→MGC), MCL, M2K, MYM, SI(→SIL), HG(→MHG)
+
+### Modified: server/data/snapshot.js — LIVE_FUTURES expanded
+- Added SIL and MHG to `LIVE_FUTURES` set — enables live bar storage + seed/live merge for all 8 symbols
+
+### Modified: server/index.js — _startDatabento expanded
+- `liveSymbols` array updated to all 8 CME symbols: MNQ, MES, MGC, MCL, SIL, M2K, MYM, MHG
+- `_lastValidatedBar` per-symbol state for continuity checks across bars
+
+---
+
+## [v14.2] — 2026-04-06 — Fix phantom price spikes in live chart candles
+
+### Root cause
+Live chart candles built from Databento 1-second tick data showed incorrect
+high/low values — phantom spikes/wicks jumping to prices that never traded
+(e.g., a candle high of 24,660 when surrounding price was ~24,400). Three
+independent issues combined to produce the bug:
+
+1. **No outlier filtering** — a single bad tick from the Databento feed
+   (price deviating >2% from market) was accepted unconditionally and
+   propagated into 1m bars, aggregated 5m/15m/30m bars, and the chart.
+2. **Shared mutable references** — `getCandles()` returned direct references
+   to the live candle store arrays. When `writeLiveCandle()` mutated bars
+   (especially partial higher-TF bars) while a scan or chart read was
+   in-progress, the reader saw inconsistent OHLC values (phantom spikes).
+3. **No client-side price validation** — the chart's `updateLivePrice()`
+   accepted any tick value and immediately applied it to the forming bar
+   via `Math.max`/`Math.min`, amplifying any server-side spike that
+   slipped through.
+
+### Modified: server/data/databento.js — Spike filter (server-side)
+- Added `_lastGoodPrice` per-symbol tracker and `SPIKE_MAX_PCT = 0.02` (2%)
+- `_isSpikePrice(symbol, price)` — returns true if price deviates >2% from
+  the last accepted price for that symbol
+- **ohlcv-1s tick handler (rtype=32)**: rejects tick and logs warning if
+  spike detected; only calls `_onTickCb` after spike check passes
+- **ohlcv-1m bar handler (rtype=33)**: rejects entire bar if close is a spike;
+  clamps high/low to O/C range if they individually spike while close is valid;
+  ensures OHLC consistency after clamping (`high >= max(O,C)`, `low <= min(O,C)`)
+- `_normalize()` now validates OHLC sanity (high >= low, prices > 0) and
+  returns null on failure
+
+### Modified: server/data/snapshot.js — Defensive copies
+- `getCandles()` in live mode now returns cloned candle objects
+  (`live.map(c => ({ ...c }))`) instead of shared references to the
+  `liveCandles` Map — callers (scans, chart) can no longer see mid-mutation state
+- `writeLiveCandle()` completed bar return: `{ ...agg }` clone in the
+  `completed` array so broadcast recipients hold immutable snapshots
+- Partial (in-progress) higher-TF bar updates use `{ ...partial }` to avoid
+  mutating objects that may be referenced by earlier `getCandles()` callers
+
+### Modified: public/js/chart.js — Client-side spike filter
+- `updateLivePrice()` now rejects ticks that deviate >2% from the current
+  reference price (`_liveTickBar.close` or `lastCandle.close`) before
+  updating the forming bar — second safety net after server-side filter
+
+---
+
+## [v14.1] — 2026-04-06 — Phase 2 loss analysis gates: DXY + risk-off breadth penalties
+
+### Modified: server/analysis/setups.js — `applyMarketContext()`
+
+Two additive confidence penalties added after all existing multipliers/breadth scoring.
+Derived from worst-500-loser analysis of A5 full-period backtest (AI Roadmap Phase 2).
+
+**Gate 1 — Rising DXY + OR breakout: −20 pts**
+- Condition: `setup.type === 'or_breakout'` AND DXY direction = `'rising'`
+- Basis: `or_breakout + dxyDirection=rising` accounted for ~49% of the worst 500 losses in A5
+  (−$44,958 of −$91,787 total). A strengthening dollar consistently reduces breakout momentum
+  across all 4 symbols (MNQ/MES/MGC/MCL) and both directions.
+- DXY source: `marketContext.breadth?.dollarRegime` (primary, works in both live + backtest),
+  falling back to `marketContext.dxy?.direction` (live mode with active DXY feed)
+
+**Gate 2 — Risk-off + equity breadth collapse: −15 pts**
+- Condition: `riskAppetite === 'off'` AND `equityBreadth ≤ 1` (at most 1 of 4 equity indices bullish)
+- Basis: Structural risk-off headwind — breakout setups face poor follow-through when
+  macro conditions are universally bearish (low breadth + suppressed risk appetite)
+
+**Combined effect**
+- Gates are additive; both can fire simultaneously: max −35 pts total
+- A base score of 65 with both gates → final score ≤ 30 → hard skip at 65% threshold
+- Tracked in `setup.scoreBreakdown.context.lossGatePts` for transparency and backtest analysis
+- No UI changes — penalty is visible in the alert scoreBreakdown context field
+
+### Modified: server/backtest/engine.js — DXY direction injection
+- Both `runBacktestMTF` and `runBacktestSymbolMTF` now inject `computeDxyDirection(dxyData, date)`
+  into `mktCtx.dxy.direction` after constructing the per-bar market context. Previously the
+  backtest always passed `direction: 'flat'` (from `_minimalContext()`) so Gate 1 would never
+  fire in backtests. Now `mktCtx.dxy.direction` matches the `dxyDirection` field on trade records.
+
+### Modified: CLAUDE.md
+- Added "Phase 2 Loss-Analysis Gates" subsection to Signal Scoring section documenting
+  both gates, their conditions, penalties, and DXY source fallback behavior
+
+---
+
+## [v14.0] — 2026-04-06 — Databento OPRA live feed for HP computation
+
+### Goal
+Replace the CBOE delayed options chain (15-min lag) with a real-time Databento
+OPRA.PILLAR live TCP feed for HP/GEX/DEX/resilience calculation.  The CBOE path
+is preserved as a zero-risk fallback.
+
+### New: server/data/opraLive.js
+- `startOpraFeed()` — connects to `opra-pillar.lsg.databento.com:13000` using the
+  same CRAM auth protocol as the GLBX futures feed (separate TCP connection)
+- Subscribes to `schema=statistics|stype_in=underlying|symbols=QQQ,SPY`
+- Handles rtype=22 (symbol map) to build instrument_id → OCC contract lookup
+- Handles rtype=24 (StatMsg, stat_type=7 open interest) + direct `open_interest` field
+- Accumulates per-strike OI in `Map<etfSymbol, Map<strike, StrikeEntry>>` with
+  call/put OI, delta, gamma, IV per entry
+- `getOpraRawChain(etf)` — returns `{ options: [...], hasData: bool }` in CBOE-compatible
+  format (OCC option ticker + open_interest + gamma + delta) for drop-in use by options.js
+- `getOpraStatus()` — `{ connected, lastUpdateTime, strikeCount, totalRecords }`
+- `checkOpraSchemas()` — one-shot REST call to `GET /v0/metadata.list_schemas?dataset=OPRA.PILLAR`
+  at startup; logs available schemas (Phase A compliance check)
+- Reconnects with exponential back-off (5s → 5min) on disconnect
+- Override gateway with `DATABENTO_OPRA_HOST` env var
+
+### server/data/options.js
+- Added dual-source logic at top of `getOptionsData()`:
+  - If `features.liveOpra=true` AND `opraLive.getOpraRawChain(etf).hasData`:
+    - Builds a CBOE-compatible `{ current_price, symbol, options }` structure
+      from the live OPRA strike map
+    - Passes through existing `_computeMetrics()` unchanged
+    - Returns result with `dataSource: 'opra-live'`
+    - Cache TTL reduced to 5 min for live data (vs 1 hr for CBOE)
+  - Falls through to CBOE on any failure (connection down, no data yet, metrics fail)
+- CBOE path now sets `dataSource: 'cboe'` on result for client-side source display
+- Existing CBOE flow, `_computeMetrics()`, all return fields — fully unchanged
+
+### config/settings.json
+- Added `"liveOpra": false` to features block (default off)
+- Hot-toggle: `POST /api/features { "liveOpra": true }` — no restart needed
+
+### server/index.js
+- `require('./data/opraLive')` imported alongside existing options import
+- Startup: `opraLive.checkOpraSchemas()` called first (logs available OPRA schemas),
+  then `opraLive.startOpraFeed()` if `features.liveOpra=true`
+- Startup summary line updated: shows OPRA live vs CBOE delayed based on flag
+- `GET /api/datastatus` now includes `opra: { enabled, connected, lastUpdateTime, strikeCount, totalRecords }`
+
+### public/js/alerts.js
+- `_updateOptionsWidget()` source label: shows `"QQQ (OPRA Live)"` when
+  `data.dataSource === 'opra-live'`, `"QQQ"` otherwise
+- `dataSource` field propagated through `scaledLevels` object
+
+### Activation
+1. `POST /api/features { "liveOpra": true }` (hot-toggle, no restart)
+2. Or set `"liveOpra": true` in `config/settings.json` before starting
+3. Verify: `[opra:live]` log lines appear; `/api/datastatus` shows `opra.connected=true`
+4. Verify: options widget shows "QQQ (OPRA Live)" source label
+
+### Constraints preserved
+- CBOE path remains fully functional as fallback
+- `getOptionsData()` return shape unchanged — marketContext.js/setups.js untouched
+- No new npm dependencies — uses Node.js built-in `net`, `crypto`, `https`, `readline`
+
+---
+
+## [v13.9] — 2026-04-06 — Live bar persistence to disk (Phase AC-2)
+
+### Goal
+Every completed 1m bar received from the Databento TCP live feed is now written to disk
+in the same format as the historical pipeline. Future backtests automatically cover
+accumulated live data without re-purchasing or re-downloading historical data.
+
+### New: server/data/liveArchive.js
+- `writeLiveCandleToDisk(symbol, candle1m)` — async, fire-and-forget disk writer
+  - Derives UTC date (YYYY-MM-DD) from `candle.time`
+  - Target: `data/historical/futures/{SYMBOL}/1m/{YYYY-MM-DD}.json`
+  - Format: same as historical pipeline — flat JSON array of `{ ts, open, high, low, close, volume }`
+    (live candle `time` field mapped to `ts` for engine compatibility)
+  - Creates directory with `fs.mkdir({ recursive: true })` if it doesn't exist
+  - Deduplicates by timestamp — skips bar if last entry in file has same `ts`
+  - Errors caught and logged; never throws, never blocks the scan engine
+- `getLiveBarStats(symbols)` — counts bars per symbol, finds oldest/newest date, estimates disk MB
+  (used by `/api/livestats`)
+
+### server/index.js
+- Added `require('./data/liveArchive')` — imports `writeLiveCandleToDisk` + `getLiveBarStats`
+- `_onLiveCandle()` — calls `writeLiveCandleToDisk(symbol, candle)` immediately after
+  `writeLiveCandle()` (in-memory store). Only the raw 1m bar is persisted; derived 5m/15m/30m
+  bars are not written (the historical pipeline pre-aggregation script handles those when needed).
+- New route: `GET /api/livestats` — returns `{ liveBarCount: { MNQ: N, ... }, oldestBar, newestBar, diskMB }`
+  Futures symbols only (crypto uses Coinbase, not disk archive).
+
+### New: scripts/pruneOldLiveBars.js
+- Removes `data/historical/futures/{sym}/1m/*.json` files older than N days
+- Default retention: 90 days; configurable via `--days N`
+- `--dry-run` flag — lists files that would be removed without deleting
+- Prints summary: files removed/retained, disk space recovered
+- Run manually or monthly via Task Scheduler to prevent unbounded disk growth
+
+---
+
+## [v13.8] — 2026-04-06 — 11 new instruments (Phase AC)
+
+### Guiding principle
+**Tradeable** instruments (M2K, MYM, MHG) get full setup detection, alert scoring, and scanner presence.
+**Reference** instruments (M6B, M6E, MBT, UB, ZB, ZF, ZN, ZT) get charts and breadth data only — no setup scanning.
+
+### instruments.js
+- Added `tradeable: true/false` flag to every instrument
+- **MHG promoted**: `databento` changed to `MHG.c.0`, `dbRoot` → `MHG`, `continuousRoot: 'HG'` added; corrected `pointValue` 1250→250, `tickValue` 0.625→0.125
+- **MBT corrected**: `pointValue` 5→0.10, `tickValue` 25.00→0.50; `category` → `crypto_cme`
+- **M6B corrected**: `pointValue` 6250→62500, `tickValue` 0.625→6.25
+- **ZF corrected**: `tickSize` 0.015625→0.0078125 (1/128), `tickValue` 15.625→7.8125
+- **MYM**: `optionsProxy` → `'DIA'`
+- Added `TRADEABLE_SYMBOLS` and `REFERENCE_SYMBOLS` convenience exports
+- Added `DIA → MYM` to `OPRA_UNDERLYINGS`
+
+### server/data/databento.js
+- Added `M2K.FUT` and `MYM.FUT` to `LIVE_SUBSCRIBE_SYMBOLS`
+- Added `M2K` and `MYM` to `ROOT_TO_INTERNAL` map
+
+### server/index.js
+- `SCAN_SYMBOLS` expanded: added `M2K`, `MYM`, `MHG`
+
+### server/data/snapshot.js
+- `VALID_SYMBOLS` expanded to include all new instruments: M2K, MYM, MHG, M6E, M6B, MBT, ZT, ZF, ZN, ZB, UB
+- `MACRO_SYMBOLS` expanded to include all reference instruments (M6E, M6B, MBT, ZT, ZF, ZN, ZB, UB) — prevents VP/OR/session computation for these
+- `LIVE_FUTURES` expanded: added M2K, MYM
+
+### server/analysis/setups.js
+- `PDH_RR` map: added `M2K: 2.0`, `MYM: 2.0`, `MHG: 1.5`
+
+### public/index.html (dashboard)
+- Index group: added M2K, MYM buttons
+- Commodities group: added MHG button
+- New FX group (Futures mode): M6E, M6B buttons
+- Crypto mode: added MBT button
+- New Bonds group (Reference section): ZT, ZF, ZN, ZB, UB buttons
+
+### public/js/chartManager.js
+- Grid expanded to 3 rows, 11 charts total:
+  - Row 1 "Equity Futures" (4 cols): MNQ / MES / M2K / MYM
+  - Row 2 "Commodities & FX" (4 cols): MGC / MCL / MHG / M6E
+  - Row 3 "Crypto" (3 cols): BTC / ETH / XRP
+- Row labels added between sections
+- `PRICE_DEC` map updated for M2K (2), MYM (0), MHG (4), M6E (4)
+
+### public/css/dashboard.css
+- Added `.chart-grid-commodities` (4-col grid) and `.chart-grid-label` (row header) styles
+
+### public/js/alerts.js
+- `TICK_SIZE` / `TICK_VALUE` maps: added M2K, MYM, MHG, SIL
+- `cfg` defaults: added `m2kContracts`, `mymContracts`, `mhgContracts`, `silContracts`
+- DOM refs: added `m2kInput`, `mymInput`
+- `_calcRisk()`: handles M2K, MYM, MHG, SIL
+- Filter panel: M2K and MYM contract count inputs
+- `_saveLocal` / `_loadLocal`: persist m2k/mym contract counts
+
+### public/scanner.html
+- Symbol filter bar: added M2K, MYM, MHG, SIL buttons; reordered (equity → commodity → crypto)
+
+### marketBreadth.js (no code changes needed)
+- `EQUITY_SYMBOLS` already includes M2K, MYM ✓
+- `COPPER_SYMBOL` already `'MHG'` ✓
+- `DOLLAR_SYMBOL` already `'M6E'` ✓
+- `BTC_SYMBOL` already `'MBT'` ✓
+- `FIXED_INCOME_SYMS` already includes ZT/ZF/ZN/ZB/UB ✓
+
+---
+
+## [v13.7] — 2026-04-06 — AI Roadmap Phase 2: loss analysis export script
+
+### New: scripts/exportLossAnalysis.js
+- Scans all `data/backtest/results/*.json`, finds the job with the most trades that includes
+  `or_breakout` (A5 full-period baseline: f3ae236b7509, 9,286 trades, 3,543 losers, 38.15% loss rate)
+- Extracts all losing trades, sorts by `netPnl` ascending, takes worst 500
+- Writes three files to `data/exports/`:
+  - `loss_analysis_trades.json` — 500 slim trade records (symbol, setupType, direction, hour,
+    confidence, netPnl, all macro/market-context fields)
+  - `loss_analysis_summary.json` — aggregated stats by 14 dimensions (symbol, setupType,
+    direction, hour, vixRegime, dxyDirection, hpProximity, resilienceLabel, dexBias,
+    riskAppetite, bondRegime, copperRegime, equityBreadth bucket, dollarRegime, ddBandLabel)
+    plus top-20 feature-pair combinations by count (n ≥ 20) and worst-10 by total P&L impact
+  - `claude_analysis_prompt.txt` — complete self-contained prompt ready to paste into claude.ai,
+    includes field descriptions, analysis questions, and embedded summary + trade data (~288KB)
+
+### Phase 2 data snapshot (worst 500 losers from A5)
+- Total loss in export: −$91,787
+- Avg loss per trade: −$183.57
+- Worst single trade: −$736 (MGC 2026-02-02 or_breakout)
+- Setup mix: 1,998 or_breakout / 1,545 pdh_breakout losers total; worst 500 tilt or_breakout
+- Note: `hpProximity = "none"` for all records — HP options data was unavailable for most of
+  the backtest period (pre-2023); field is present but not analytically useful in this export
+
+### Next step
+Paste `data/exports/claude_analysis_prompt.txt` into claude.ai for Phase 2 loss analysis.
+Implement avoidance rules only after reviewing Claude's findings — do not pre-optimize.
+
+---
+
+## [v13.6] — 2026-04-05 — B7 confidence floor optimization + backtest worker stability fixes
+
+### B7 Backtest Results — OR Breakout Confidence Floor Study
+
+**Context:** B6 (minConf 65%, or_breakout, 5m, 9–10 ET, MNQ+MES+MGC+MCL, full period) achieved
+37.89% WR / PF 1.949 / Net +$211,177 — below the 40% WR go/no-go threshold. B7 tests whether
+a higher confidence floor or broader hour window can lift WR to ≥40%.
+
+**Results:**
+
+| Job | Config | Trades | WR | PF | Net P&L | MaxDD |
+|-----|--------|--------|----|----|---------|-------|
+| B6 baseline | conf65, 9–10 ET | 5,059 | 37.89% | 1.949 | +$211,177 | $1,946 |
+| B7-A | conf70, 9–10 ET | 4,520 | 38.19% | 2.048 | +$199,354 | $1,968 |
+| B7-B | conf75, 9–10 ET | 3,843 | 38.49% | 2.092 | +$174,381 | $1,696 |
+| B7-C | conf70, allRTH (9–16) | 6,416 | 32.54% | 1.867 | +$248,527 | $3,288 |
+
+**Per-symbol breakdown (B7-A, conf70, 9–10 ET):**
+
+| Symbol | Trades | WR | Net P&L |
+|--------|--------|----|---------|
+| MNQ | 1,093 | 40.16% | +$80,913 |
+| MES | 1,117 | 40.47% | +$36,453 |
+| MCL | 944 | 39.72% | +$25,002 |
+| MGC | 1,366 | **33.67%** | +$56,986 |
+
+**Go/no-go verdict: NO-GO for all B7 configurations.**
+
+- WR ≥ 40%: ❌ Best was 38.49% (B7-B). PF ≥ 1.5: ✓. Net positive: ✓. Count ≥ 500: ✓.
+- Raising confidence 65% → 75% yielded only +0.6pp WR at the cost of −24% fewer trades.
+- Extending hours (allRTH) made WR significantly worse: −5.65pp vs 9–10 ET, MaxDD +69%.
+
+**Root cause identified:** MGC is a structural drag. Its or_breakout WR is 33–34% across all
+confidence floors (28.8% in allRTH) — the filter does not fix it. MNQ+MES+MCL at conf70 9–10 ET
+achieve 40.14% WR combined (1,266 wins / 3,154 trades), which meets the threshold.
+
+**Next step → B8:** Test `or_breakout` with MGC excluded. Config: MNQ+MES+MCL, 5m, 9–10 ET,
+minConf 70%, full period. MGC gold futures may require a different setup type or much higher
+confidence floor (85%+) — to be studied in a separate B8-MGC sub-run.
+
+---
+
+### Backtest worker stability fixes
+
+**Problem observed during B7:** Full-period 4-symbol parallel backtest jobs appeared stuck at
+"15% — Processing 4 symbols in parallel..." for 15+ minutes with no progress updates, causing
+false assumption of a hang. Root causes: (1) no progress heartbeat during the 15%→100% stretch,
+(2) three concurrent full-period jobs with 12 symbol worker threads competing for synchronous I/O
+(24,000+ file reads), and (3) several defensive code gaps.
+
+**Fixes:**
+
+#### Modified: server/backtest/worker.js
+- Added `process.on('unhandledRejection', ...)` at top — forwards any uncaught rejection to parent
+  thread as `{ type: 'error' }` and exits, preventing silent indefinite hang
+- Added `else if (msg.type === 'error')` branch in `w.on('message', ...)` parallel handler — when
+  a symbol worker posts an error message (vs crashing), it is now counted as done, the active Set
+  is cleaned up, progress is sent, and `resolve()` fires correctly. Previously this message was
+  silently ignored (only the `w.on('exit')` guard handled it)
+
+#### Modified: server/backtest/symbolWorker.js
+- Added `process.on('unhandledRejection', ...)` — forwards reason to parent, exits with code 1
+
+#### Modified: server/index.js
+- Added 2-hour `workerTimeout` per job — marks job as `error` if no `complete` or `error` message
+  received within 2h; timeout is cleared on `complete`, `error`, or `exit`
+- Fixed `worker.on('exit', code)` — now handles code 0 as well as non-zero: if the outer
+  worker.js thread exits cleanly (code 0) without posting `complete`, the job is marked as
+  `error: 'Worker exited without completing (code 0)'` instead of staying `running` forever
+
+#### Modified: server/backtest/engine.js (`runBacktestSymbolMTF`)
+- Added simulation heartbeat logging: `[BT-SYM] {sym}/{tf}: starting simulation (N days)` at
+  loop start, then progress every 25% of days with trade count. Allows distinguishing between
+  "preloading", "simulating", and "truly hung" from server logs.
+
+**Performance note:** Full-period jobs (MGC = 3,986 days, MNQ/MES = 1,787 days, MCL = 1,220 days)
+take 10–20 min each when run alone. Running 3 simultaneously (12 symbol workers) causes 3–4×
+slowdown from I/O contention. Submit large jobs sequentially or one at a time.
+
+---
+
+## [v13.5] — 2026-04-05 — Backtest engine performance: async I/O + per-symbol worker parallelism
+
+### Modified: server/backtest/engine.js
+
+**Task 1 + 2 — Async `_precomputeBreadthAsync()`**
+- Replaced sync `_loadDailyClosesForSymbol` with `_loadDailyClosesForSymbolAsync`: chunked `Promise.all` reads (75 files/chunk) replacing sequential `readFileSync` — parallelizes all 16 symbol file reads simultaneously
+- Replaced sync `_precomputeBreadth` with `async _precomputeBreadthAsync`: loads all 16 symbols' daily closes in parallel via `Promise.all(ALL_SYMBOLS.map(...))`
+- Fast path preserved: if all target dates are in `breadth_cache.json`, returns immediately with zero file I/O (common case after first run)
+- Log output now distinguishes cache hits vs computed count and total elapsed ms: `Breadth: N cache hits, M to compute (Xms total)`
+- `runBacktestMTF` updated to `await _precomputeBreadthAsync()`
+
+**Task 3 — Per-symbol worker parallelism**
+- Added `async runBacktestSymbolMTF(symbol, config)`: standalone single-symbol backtest runner, functionally equivalent to the per-symbol block in `runBacktestMTF` — same dedup logic, same 1-trade-at-a-time enforcement, same trade record schema
+- `runBacktestSymbolMTF` uses scalar `lastExitTs = 0` (per-symbol, no cross-symbol state)
+- Exported `runBacktestSymbolMTF` and `computeStats` from `module.exports`
+
+**Task 4 — Pre-load date files into memory**
+- Added `_preloadSymbolBars(symbol, days, timeframes)`: loads all `futures_agg/{sym}/{tf}/{date}.json` + `futures/{sym}/1m/{date}.json` files into a `{ [tf]: { [date]: bars[] } }` map before the simulation loop
+- Both `runBacktestMTF` and `runBacktestSymbolMTF` now call `_preloadSymbolBars` once per symbol, then reference in-memory maps (`preloaded[tf][date]`) throughout the inner loop — eliminates all per-bar-iteration disk I/O
+- Pre-load timing logged per symbol: `[BT-MTF/SYM] {sym}: bars pre-loaded in Xms`
+
+### New: server/backtest/symbolWorker.js
+- Worker thread entry point for per-symbol parallel execution
+- Receives `{ symbol, config }` via `workerData`, calls `runBacktestSymbolMTF`, posts `{ type: 'complete', symbol, trades, equityMap, totalBarsProcessed }` back to parent
+- Error path posts `{ type: 'error', symbol, message }` with full stack trace to stderr
+
+### Modified: server/backtest/worker.js
+- **Parallel mode (default)**: when `config.parallelSymbols !== false` and `symbols.length > 1`, spawns one `symbolWorker.js` per symbol with concurrency cap `Math.min(symbols.length, 4)`
+- Progress messages flow correctly: `15%` on start, then `15 + (completed/total)*82 %` per symbol completion
+- Merges symbol results: combines `trades[]`, sums `equityMap` by date, recomputes equity curve and stats via `computeStats()`
+- `meta.parallelSymbols: true` flag in results for diagnostics
+- **Sequential fallback**: `parallelSymbols: false` in config → original `runBacktestMTF` path unchanged
+- Exit guard on child workers: if a worker exits without sending `complete`, counts as done and logs error rather than hanging
+
+### Performance results (verified identical outputs)
+- Smoke test: MNQ + MES, Q1 2025, `or_breakout` only, 9–10 ET — **130 trades, 43.1% WR, PF 2.173, $6,510 Net** — identical in both modes
+- Parallel: **26s** vs Sequential: **44s** — ~1.7× speedup for 2 symbols; 4-symbol jobs expected ~3–4× speedup
+- Breadth cache fast path: warm-cache precompute now logs `N cache hits, 0 computed (Xms)` — effectively instant
+
+---
+
 ## [v13.4] — 2026-04-06 — Databento TCP live feed + real-time chart
 
 ### Rewrite: server/data/databento.js — live feed now uses Databento TCP Live API

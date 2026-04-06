@@ -1,6 +1,6 @@
 # FuturesEdge AI — AI/ML Enhancement Roadmap
 
-> **Status: Deferred — B5 complete. Now collecting 30 days of live forward-test data. Phase 1 Claude batch analysis can begin once 500+ completed forward-test trades are available.**
+> **Status: B8 pending. Paper trading activates if B8 passes WR >= 40% + PF >= 1.5 on MNQ+MES+MCL (24-month window). Phase 1 Claude batch analysis begins once paper trading is active and 500+ forward-test trades are available.**
 > This document is the single source of truth for all planned AI/ML work.
 > Read CLAUDE.md, CONTEXT_SUPPLEMENT.md, and DATABENTO_PROJECT.md before starting any session on this track.
 
@@ -51,6 +51,7 @@ Before any ML work is useful:
 - [x] `equityBreadth`, `bondRegime`, `copperRegime`, `dollarRegime`, `riskAppetite`, `riskAppetiteScore` on trade records ✅ (v12.9 A5 breadth run complete)
 - [ ] `mtfConfluence` on trade records — currently applied upstream, not recorded per trade
 - [x] B5 forward-test harness collecting live trade outcomes ✅ (v13.0)
+- [ ] B8 backtest passes pass criteria (WR ≥ 40% + PF ≥ 1.5 on MNQ+MES+MCL, 24-month window)
 - [ ] Minimum 500 completed forward-test trades (n ≥ 30 per setup type per symbol)
 
 ---
@@ -83,7 +84,7 @@ Return findings as specific conditional rules with sample sizes and win rates.
 Only report rules where n >= 30. Format each rule as:
 "[condition] → [WR]% WR (n=[count], PF=[value])"
 
-**IMPLEMENTATION STATUS:** Complete (v13.1). Built as streaming chat interface in `backtest2.html` (6th tab, AI Analysis). Uses local Ollama LLM instead of Claude API — zero cost per analysis session. Select `qwen2.5:32b` for day use or `llama3.3:70b` for overnight deep analysis from the model selector in the tab.
+**IMPLEMENTATION STATUS:** Complete (v13.1, updated v14.4). Built as streaming chat interface in `backtest2.html` (6th tab, AI Analysis). Uses Claude API (`claude-sonnet-4-6`) for all batch analysis via the existing `POST /api/backtest/analyze` endpoint. Ollama has been removed from the analysis workflow.
 
 **Expected output:** Conditional rules like:
 - `or_breakout + riskAppetite=on + first 90min RTH → 61% WR (n=312, PF=2.1)`
@@ -238,6 +239,41 @@ This gives Claude enough context to write genuinely useful commentary rather tha
 - **Retrain on forward-test data, not backtest data.** Once live trading starts, retrain monthly on real outcomes. Backtest data trains the initial model only.
 - **Loss analysis first.** Before looking for new winning patterns, understand why the current losers lost. The fastest path to improved WR is eliminating the worst trades.
 - **Commentary is additive, not critical path.** Re-enable it when B5 is stable. Missing commentary doesn't affect signal quality.
+- **Every Claude API analysis session must produce a saved output document.** Analysis runs write to `data/analysis/{timestamp}_{analysisType}.json` (machine-readable) and `data/analysis/{timestamp}_{analysisType}.txt` (human-readable summary). Output files are gitignored. This ensures analysis findings can be passed back to Claude in future sessions.
+
+---
+
+## Zone Rejection Rescue Track (ZR-series)
+
+**Goal:** Determine if `zone_rejection` can be made profitable with structural changes. Currently disabled (R:R structurally inverted — AvgWin $16 vs AvgLoss $24 at all confidence levels).
+
+| Run | Description |
+|-----|-------------|
+| **ZR-A** | Claude API analysis of all zone_rejection **winners** from A5 — what do they have in common? Which feature combinations (regime, breadth, HP proximity, DD band, time of day) appear disproportionately in winning zone rejections? |
+| **ZR-B** | Test ATR-relative zone depth filter: minimum zone depth >= 0.5x ATR at detection time. Hypothesis: shallow zones get broken more easily; deeper zones have stronger institutional interest. |
+| **ZR-C** | Test maximum retest count filter: zone invalidated after 2 retests. Hypothesis: zones that have already been tested multiple times lose their edge — the third rejection is less reliable than the first. |
+| **ZR-D** | Test tighter SL: zone midpoint rather than far edge. Hypothesis: current SL at far edge of zone creates outsized losses; midpoint SL reduces average loss while maintaining win rate. |
+| **ZR-E** | Test alternative TP structure: 1:1 with partial exit, vs current 2:1 full. Hypothesis: zone rejections produce smaller moves than breakouts — a 1:1 target with 50% partial improves WR enough to turn PF positive. |
+
+**Configuration for all ZR runs:**
+- 24-month window (2024-01-01 to present)
+- `or_breakout` disabled, `zone_rejection` only
+- Each run isolates a single variable change vs the baseline
+- Output: ZR analysis documents in `data/analysis/`
+
+---
+
+## Indicator Weight Calibration (IA-series)
+
+**Goal:** Audit whether confidence score weights and gating thresholds are correctly sized relative to their actual predictive power in backtest data.
+
+| Run | Description |
+|-----|-------------|
+| **IA1** | **HP level proximity audit** — Does `at_level` vs `near_level` meaningfully split WR? Are the current multipliers correctly sized? Compare WR/PF for at_level, near_level, and no-HP-proximity trades across or_breakout and pdh_breakout. |
+| **IA2** | **DD Band audit** — `approaching_dd` showed worst avg loss (-$213 in A5); is the current +4 pts penalty sufficient? Are `beyond_dd_upper`/`beyond_dd_lower` levels gated hard enough at -12 pts? Should `at_span_extreme` (-20) be a hard skip instead of a penalty? |
+| **IA3** | **Full weight calibration** — DEX bias (bullish/bearish/neutral WR split), resilience label (resilient/neutral/fragile WR split), breadth ±15pt cap (is 15 the right cap?), VIX regime multipliers. Compare WR/PF per bucket for each indicator. Output: `calibration_recommendations.txt` |
+
+**Configuration:** All IA runs use the 24-month window and the current active setup configuration (or_breakout + pdh_breakout).
 
 ---
 
@@ -259,7 +295,7 @@ This gives Claude enough context to write genuinely useful commentary rather tha
 
 These were discussed and intentionally deferred:
 
-- **Local LLM (Ollama)** — ACTIVE for batch/backtest analysis. Running in WSL2 Ubuntu on local machine, accessible at `localhost:11434` via mirrored networking. Models: `qwen2.5:32b` (day use, ~10–15 tok/s) and `llama3.3:70b:q3_k_m` (overnight deep analysis, ~5–8 tok/s). Implementation: streaming chat in `backtest2.html` AI Analysis tab via `server/ai/ollamaClient.js` and `POST /api/backtest/analyze` SSE endpoint. Still deferred for real-time alert commentary — latency too high.
+- **Local LLM (Ollama)** — REMOVED. Replaced by Claude API (`claude-sonnet-4-6`) for all analysis tasks. The `POST /api/backtest/analyze` SSE endpoint and `backtest2.html` AI Analysis tab now use Claude API exclusively.
 - **Neural networks** — rejected in favor of decision trees for interpretability. The marginal accuracy gain is not worth losing the ability to understand and trust the model's decisions.
 - **Signal generation from AI** — explicitly out of scope. Setup detection stays deterministic. AI is analysis and nudging only.
 - **VIX from CBOE** — no reliable free historical source found. Replaced with realized volatility proxy computed from MNQ 1m bars (Phase 1g). Adequate for regime classification.
@@ -268,6 +304,8 @@ These were discussed and intentionally deferred:
 ---
 
 *Created: 2026-04-04*
-*Status: B5 complete (v13.0). Collecting live forward-test data.*
-*Revisit after: 500 completed forward-test trades (n ≥ 30 per setup type per symbol).*
-*Next action: Collect 30+ days of live forward-test data. Then run AI_ROADMAP Phase 1 Claude batch analysis on trade records.*
+*Status: B8 pending. Paper trading activates if B8 passes WR ≥ 40% + PF ≥ 1.5 on MNQ+MES+MCL (24-month window).*
+*B7 finding: No configuration meets WR ≥ 40% for the 4-symbol portfolio. MGC or_breakout is a structural drag at ~33% WR.*
+*B8 config: or_breakout with MGC excluded (MNQ+MES+MCL only, conf70, 9–10 ET, 24-month window).*
+*MGC: investigate separately — may require higher threshold (85%+) or different setup type.*
+*AI_ROADMAP Phase 1 batch analysis: deferred until paper trading begins and forward-test data accumulates.*

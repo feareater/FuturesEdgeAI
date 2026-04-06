@@ -31,9 +31,32 @@
 
 ## Instruments
 
-- **Futures**: MNQ (NQ=F), MGC (GC=F), MES (ES=F), MCL (CL=F)
-- **Crypto perpetuals**: BTC, ETH, XRP via Coinbase INTX (coinbaseFetch.js + coinbaseWS.js)
-- **Options proxies**: QQQ → MNQ, SPY → MES, GLD → MGC, USO → MCL
+### Tradeable (full setup scanning + alerts)
+| Symbol | Description | Options Proxy |
+|--------|-------------|---------------|
+| MNQ | Micro E-mini Nasdaq-100 | QQQ |
+| MES | Micro E-mini S&P 500 | SPY |
+| M2K | Micro Russell 2000 | IWM |
+| MYM | Micro Dow Jones | DIA |
+| MGC | Micro Gold (GC proxy) | GLD |
+| MCL | Micro Crude Oil | USO |
+| MHG | Micro Copper (MHG.c.0) | — |
+| SIL | Micro Silver (SI proxy) | SLV |
+
+### Reference (charts + breadth only, no setup scanning)
+| Symbol | Description | Breadth role |
+|--------|-------------|-------------|
+| M6E | Micro EUR/USD | dollarRegime |
+| M6B | Micro GBP/USD | FX context |
+| MBT | Micro Bitcoin CME | btcRegime |
+| ZT | 2yr T-Note | fixedIncomeBreadth |
+| ZF | 5yr T-Note | fixedIncomeBreadth |
+| ZN | 10yr T-Note | bondRegime (primary) |
+| ZB | 30yr T-Bond | bondRegime (confirm) |
+| UB | Ultra T-Bond | fixedIncomeBreadth |
+
+- **Crypto perpetuals**: BTC, ETH, XRP, XLM via Coinbase INTX (coinbaseFetch.js + coinbaseWS.js)
+- `SCAN_SYMBOLS` in server/index.js: `['MNQ','MGC','MES','MCL','BTC','ETH','XRP','XLM','SIL','M2K','MYM','MHG']`
 
 ---
 
@@ -52,7 +75,9 @@ VS Code shell sets PORT=54112 — always override explicitly.
 ```
 server/
   data/
-    options.js          ← CBOE options chain: OI walls, max pain, GEX, DEX, resilience
+    options.js          ← Options chain: OI walls, max pain, GEX, DEX, resilience (OPRA live or CBOE)
+    opraLive.js         ← Databento OPRA.PILLAR TCP feed; per-strike OI accumulator
+    barValidator.js     ← validateBar() 5-rule sanity check; rolling ATR spike filter; getValidatorStats()
     coinbaseFetch.js    ← Coinbase INTX BTC/ETH/XRP perpetual candles (REST)
     coinbaseWS.js       ← Coinbase INTX WebSocket live price feed
   analysis/
@@ -90,14 +115,27 @@ config/
 
 ## Options Data — server/data/options.js
 
-### Data Source
-**CBOE Delayed Quotes API** — `https://cdn.cboe.com/api/global/delayed_quotes/options/QQQ.json`
-- Free, no auth, no API key required
-- Returns full options chain with delta/gamma/iv/OI per contract
-- Yahoo Finance v7 options was abandoned (requires crumb auth — returns 401)
+### Data Source (v14.0 — dual-source)
+
+**Priority 1: Databento OPRA live TCP** (`features.liveOpra=true`)
+- `server/data/opraLive.js` — connects to `opra-pillar.lsg.databento.com:13000`
+- Same CRAM auth as the GLBX futures feed (separate connection)
+- Subscribes to `statistics` schema for QQQ + SPY underlyings
+- Accumulates per-strike OI in memory; updates on each statistics record
+- Returns OCC-format options array → passes through `_computeMetrics()` unchanged
+- No additional npm dependencies — built-in `net`/`crypto`/`readline`
+- Hot-toggle: `POST /api/features { "liveOpra": true|false }`
+
+**Priority 2: CBOE Delayed Quotes API** (fallback, always available)
+- `https://cdn.cboe.com/api/global/delayed_quotes/options/QQQ.json`
+- Free, no auth, 15-min delayed
+- Used when liveOpra=false OR OPRA feed has no data yet (startup lag)
+
+**`dataSource` field** on `getOptionsData()` result: `'opra-live'` or `'cboe'`
 
 ### Caching
 - CBOE chain: 1-hour cache (`CACHE_TTL_MS = 3_600_000`)
+- OPRA live: 5-minute effective cache (re-fetches daily Yahoo levels; OI in memory)
 - Daily OHLC: 30-minute cache (`DAILY_TTL_MS = 1_800_000`)
 
 ### Scaling: ETF → Futures Price Space
@@ -446,6 +484,8 @@ riskAppetite = score >= 5 ? 'on' : score <= -5 ? 'off' : 'neutral'
 - OR breakout: 5m only — 15m/30m produce <1% of OR breakout signals
 - Min confidence: 65%
 
+**Default backtest window going forward:** Last 12–24 months (approx 2024-01-01 to present). Full-period runs (2018–present) are available but not the default — current market conditions are best reflected in recent data. B-series runs from B8 onward use the 24-month window.
+
 **Final A5 results v12.7 (or_breakout + pdh_breakout, VIX+DXY active, 2018-09-24 → 2026-04-01):**
 - 9,679 trades (5.4/day), WR 37.3%, PF 1.69, Net +$233,540, MaxDD $3,208
 - or_breakout alone: Net +$248K, PF 1.86, AvgWin $147, AvgLoss $88
@@ -553,6 +593,12 @@ data/historical/
 - Alert dedup uses in-memory ATR at alert creation time — if server restarts, the 15-min cooldown window resets (in-memory only; alerts.json history is preserved)
 - `decayedConfidence` is display-only — `setup.confidence` is immutable after alert creation
 - Backtest trade objects do not include regime/nearEvent/mtfConfluence fields (v10.x)
+
+---
+
+## EdgeLog (port 3004)
+
+Deferred until paper trading is stable and producing consistent results. MVP scope to be defined at that point. Audience: futures day traders and prop firm traders. Estimated pricing: $20–35/month.
 
 ---
 
