@@ -70,6 +70,10 @@
   let optionsPriceLines = [];
   let lastOptionsLevels = null;
 
+  // Monthly / Quarterly HP price line handles (separate from daily HP in optionsPriceLines)
+  let monthlyHPLines   = [];
+  let quarterlyHPLines = [];
+
   // Gamma Levels price line handles (gamma flip, call wall, put wall)
   let gammaLines     = [];
   let lastGammaData  = null;
@@ -106,6 +110,8 @@
     correlationHeatmap: true,
     cvd:                true,
     optionsLevels:      true,
+    hpMonthly:          true,
+    hpQuarterly:        true,
     ddBands:            true,
   };
 
@@ -285,11 +291,11 @@
   async function loadData(symbol, tf) {
     console.log(`[chart] Loading ${symbol} ${tf}`);
 
-    // Clear alert markers before loading new data — prevents stale markers from a
-    // different symbol/TF being passed to TradingView (which errors on unknown bar times).
-    // alerts.js will re-populate via setAlertMarkers() after chartViewChange fires.
+    // Clear all symbol-specific state before loading new data — prevents stale
+    // markers, overlays, and price lines from the previous symbol persisting.
     alertMarkers     = [];
     alertMarkersData = [];
+    _clearSetupOverlay();
 
     // Clear any previous no-data message
     const noDataEl = document.getElementById('chart-no-data');
@@ -318,7 +324,16 @@
     const indicators  = await indRes.json();
     const tlData      = tlRes.ok ? await tlRes.json() : {};
 
-    if (!candles.length) throw new Error('No candles returned');
+    if (!candles || candles.length < 2) {
+      // Show "Waiting for data" overlay — auto-dismiss on next successful load
+      if (noDataEl) {
+        noDataEl.textContent = `Waiting for data… (${symbol} ${tf})`;
+        noDataEl.style.display = 'block';
+      }
+      console.warn(`[chart] No candle data for ${symbol} ${tf} — showing waiting overlay`);
+      _notifyView();
+      return;
+    }
 
     // Apply symbol-specific price format (XRP needs 4 decimal places)
     const dec = _priceDec(symbol);
@@ -413,6 +428,8 @@
 
     // Options Levels — cleared here; fresh data arrives async via setOptionsLevels()
     clearOptionsLines();
+    clearMonthlyHPLines();
+    clearQuarterlyHPLines();
     lastOptionsLevels = null;
 
     // DD Bands — cleared here; fresh data arrives async via setDDBands()
@@ -771,6 +788,64 @@
     }
   }
 
+  // ── Monthly / Quarterly HP Lines ─────────────────────────────────────────
+
+  function clearMonthlyHPLines() {
+    for (const { line } of monthlyHPLines) {
+      try { candleSeries.removePriceLine(line); } catch (_) {}
+    }
+    monthlyHPLines = [];
+  }
+
+  function clearQuarterlyHPLines() {
+    for (const { line } of quarterlyHPLines) {
+      try { candleSeries.removePriceLine(line); } catch (_) {}
+    }
+    quarterlyHPLines = [];
+  }
+
+  function _drawMonthlyHP(data) {
+    if (!data?.weeklyMonthlyHP?.zones) return;
+    const Solid = LightweightCharts.LineStyle.Solid;
+    // Show top 2 monthly HP zones
+    data.weeklyMonthlyHP.zones.slice(0, 2).forEach((z) => {
+      const price = z.scaled ?? z.strike;
+      if (price == null) return;
+      const color = z.pressure === 'support'
+        ? '#00e676'    // bright green — monthly support
+        : '#ff5252';   // bright red   — monthly resistance
+      monthlyHPLines.push({ line: candleSeries.createPriceLine({
+        price,
+        color,
+        lineWidth: 2,
+        lineStyle: Solid,
+        axisLabelVisible: true,
+        title: `HP M ${z.pressure === 'support' ? '▲' : '▼'}`,
+      })});
+    });
+  }
+
+  function _drawQuarterlyHP(data) {
+    if (!data?.quarterlyHP?.zones) return;
+    const Solid = LightweightCharts.LineStyle.Solid;
+    // Show top 1 quarterly HP zone only (single most significant level)
+    const z = data.quarterlyHP.zones[0];
+    if (!z) return;
+    const price = z.scaled ?? z.strike;
+    if (price == null) return;
+    const color = z.pressure === 'support'
+      ? '#69ff8c'    // brightest green — quarterly support
+      : '#ff8a80';   // brightest red   — quarterly resistance
+    quarterlyHPLines.push({ line: candleSeries.createPriceLine({
+      price,
+      color,
+      lineWidth: 3,
+      lineStyle: Solid,
+      axisLabelVisible: true,
+      title: `HP Q ${z.pressure === 'support' ? '▲' : '▼'}`,
+    })});
+  }
+
   // ── Gamma Levels ───────────────────────────────────────────────────────────
 
   function clearGammaLines() {
@@ -1055,6 +1130,16 @@
         if (visible && lastGammaData)     _drawGammaLevels(lastGammaData);
         break;
 
+      case 'hpMonthly':
+        clearMonthlyHPLines();
+        if (visible && lastOptionsLevels) _drawMonthlyHP(lastOptionsLevels);
+        break;
+
+      case 'hpQuarterly':
+        clearQuarterlyHPLines();
+        if (visible && lastOptionsLevels) _drawQuarterlyHP(lastOptionsLevels);
+        break;
+
       case 'ddBands':
         clearDDBandLines();
         if (visible && lastDDBands) _drawDDBands(lastDDBands);
@@ -1094,6 +1179,14 @@
     // Works for both Coinbase crypto ticks and Databento 1s futures bars.
     updateLivePrice(symbol, price, time) {
       if (symbol !== activeSymbol || !candleSeries || !lastCandle) return;
+
+      // Client-side spike filter: reject ticks that deviate > 2% from the last known close.
+      // The server also filters, but this is a second safety net for the chart.
+      const refPrice = _liveTickBar ? _liveTickBar.close : lastCandle.close;
+      if (refPrice > 0 && Math.abs(price - refPrice) / refPrice > 0.02) {
+        console.warn(`[chart] spike filtered: ${price.toFixed(2)} vs ref ${refPrice.toFixed(2)}`);
+        return;
+      }
 
       // Align tick to the 1m bar window it belongs to.
       // activeTf granularity: on 1m chart use 60s, on 5m use 300s, etc.
@@ -1139,7 +1232,11 @@
     setOptionsLevels(data) {
       lastOptionsLevels = data;
       clearOptionsLines();
+      clearMonthlyHPLines();
+      clearQuarterlyHPLines();
       if (vis.optionsLevels && data) _drawOptionsLevels(data);
+      if (vis.hpMonthly    && data) _drawMonthlyHP(data);
+      if (vis.hpQuarterly  && data) _drawQuarterlyHP(data);
     },
 
     // Set DD Band / SPAN levels — called by alerts.js after /api/ddbands fetch.

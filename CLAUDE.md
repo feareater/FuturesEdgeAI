@@ -87,7 +87,8 @@ FuturesEdgeAI/
 │   │   ├── sessionLevels.js   ← Asian + London session H/L
 │   │   ├── relativeStrength.js← MNQ vs MES normalized ratio + Pearson correlation
 │   │   ├── correlation.js     ← 4×4 pairwise rolling correlation matrix
-│   │   └── performanceStats.js← WR/PF/avgR by symbol, setup, TF, hour, direction
+│   │   ├── performanceStats.js← WR/PF/avgR by symbol, setup, TF, hour, direction
+│   │   └── bias.js            ← computeSetupReadiness(symbol, mktCtx, hour, mode) + computeDirectionalBias (dashboard bias panel)
 │   ├── ai/
 │   │   └── commentary.js      ← Claude API prompt builder + caller
 │   ├── trading/
@@ -353,6 +354,7 @@ Update at runtime via `POST /api/settings/span` or the SPAN Margins panel in the
 | Route | Purpose |
 |---|---|
 | `GET /api/ddbands?symbol=MNQ` | Current DD/SPAN levels + currentPrice for topbar widget |
+| `GET /api/bias?symbol=MNQ&mode=auto` | Macro context gates + directional bias score (30s cache, mode: auto/manual) |
 | `POST /api/settings/span` | Update SPAN margin values (body: `{ MNQ: 1400, ... }`) |
 | `POST /api/backtest/analyze` | SSE streaming backtest analysis via Claude API |
 

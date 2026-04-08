@@ -4,6 +4,435 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v14.16] — 2026-04-07 — Market Context panel redesign
+
+### Changed: Panel and widget renames
+- Outer panel header: "MARKET BIAS" → "MARKET CONTEXT"
+- Left section header: "SETUP READINESS" → "MACRO CONTEXT"
+- Left section status badge: "READY" → "FAVORABLE" (CAUTION/BLOCKED unchanged)
+- Top-right prediction widget label: "Bias" → "Setup Score"
+- Right section "DIRECTIONAL BIAS" unchanged
+
+### Changed: Bias panel layout — 3 columns + conviction + data row
+- Panel body now has 3 side-by-side sections: Macro Context | Directional Bias | Setup Score
+- Setup Score section shows direction, confidence bar, top 5 factors (left) and price targets (right): Current, TP, SL, move targets
+- Conviction row centered below all 3 sections (full width)
+- OHLC / price / RS / options / DD band data row moved from topbar into bias panel, below conviction row, centered
+- Setup Score widget removed from right side panel (hidden in DOM, still fetches data for bias panel)
+
+### Changed: Directional Bias signal indicators
+- Signal mini-bars replaced with status icons: green check (✓) for signals contributing to directional bias, red X (✗) for non-contributing signals
+
+### Changed: Dashboard layout
+- Grid button moved from timeframe row to right side panel (full-width button)
+- Paper Trading section removed from right side panel
+- Timeframe selector row: Grid button removed (moved to side panel)
+
+### Added: Conviction Row in bias panel
+- Full-width centered synthesis bar below the three sections
+- Combines setup score (0–100 from prediction widget) and macro score (-18 to +18 from directional bias) into a single trade conviction label
+- 12-state conviction matrix: HIGH CONVICTION, GOOD SETUP, TECHNICALLY DRIVEN, COUNTER-MACRO, MACRO TAILWIND, MODERATE SETUP, MARGINAL, CAUTION, MACRO TAILWIND NO SETUP, STAND ASIDE (×3 variants)
+- Color-coded: bright green / green / amber / red / gray using existing CSS variables
+- Updates whenever either score changes; shows "INITIALIZING" fallback when data not yet available
+- Setup score cached via `window._lastSetupScore`; macro score via `window._lastMacroScore`
+
+### Added: AUTO/MANUAL mode toggle
+- Toggle button in bias panel header (next to collapse button)
+- AUTO mode (default): gates 1 (DEX Neutral) and 2 (DXY Rising Late) can show BLOCKED
+- MANUAL mode: gates 1 and 2 show CAUTION instead of BLOCKED (softer read for manual traders)
+- Amber "MANUAL" badge visible in header when manual mode active
+- Mode persisted in localStorage key `biasMode`
+- Backend: `computeSetupReadiness()` accepts optional `mode` parameter ('auto'|'manual')
+- API: `GET /api/bias?symbol=MNQ&mode=manual` passes mode through; cache key includes mode
+
+### Files changed
+- `public/index.html` — bias panel restructured (3-column + conviction + data row), prediction section hidden, paper trading removed, grid button moved to right panel
+- `public/js/alerts.js` — readiness label renames, mode toggle logic, conviction row renderer, setup score renderer with price targets, signal check/X indicators, macro score caching, mode param in API fetch
+- `public/css/dashboard.css` — conviction row centered, data row centered, setup score inner layout + price styles, signal check/X styles, mode toggle/badge styles, responsive updates
+- `server/analysis/bias.js` — mode parameter on `computeSetupReadiness()`, gates 1+2 severity softened in manual mode
+- `server/index.js` — mode query param on GET /api/bias, cache key includes mode
+
+---
+
+## [v14.15] — 2026-04-07 — Real-time Bias Panel (setup readiness + directional bias)
+
+### Added: `server/analysis/bias.js` — bias computation module
+- `computeSetupReadiness(symbol, marketContext, currentHour)` — evaluates all 6 OR breakout gate conditions (DEX neutral, DXY rising late session, DXY rising penalty, risk-off breadth collapse, VIX crisis, calendar event) and returns per-gate pass/caution/blocked status
+- `computeDirectionalBias(symbol, marketContext, indicators)` — scores 11 directional signals (DEX, DXY, equity breadth, risk appetite, bond regime, VIX regime+direction, resilience, market regime, daily HP, monthly HP) producing a signed net score (-18 to +18) with direction and strength labels
+
+### Added: `GET /api/bias?symbol=MNQ` endpoint in `server/index.js`
+- Returns `{ readiness, bias }` with full gate list and signal breakdown
+- Returns `{ status: 'initializing' }` when marketContext not yet available
+- 30-second per-symbol cache to prevent recomputation on every request
+- Per-symbol marketContext and indicators caching added to scan loop for bias panel consumption
+- Calendar near-event status cached per symbol on each scan cycle
+
+### Added: Bias Panel in dashboard (`public/index.html`)
+- Positioned between topbar and main content area, full width
+- Two sections: Setup Readiness (gate check) and Directional Bias (scored direction)
+- Collapsible with toggle button; state persisted in localStorage
+- Default: expanded on desktop (>768px), collapsed on mobile
+
+### Added: Bias panel rendering in `public/js/alerts.js`
+- `fetchAndRenderBias(symbol)` — fetches /api/bias and renders both sections
+- Setup Readiness: status badge (READY/CAUTION/BLOCKED) + all 6 gates with pass/caution/blocked icons
+- Directional Bias: direction indicator, centered score bar, signal contribution list sorted by magnitude
+- Updates on: page load, symbol switch (dashModeChange + chartViewChange), WS setup/data_refresh messages
+- In-place DOM updates (no full rebuild on each cycle)
+
+### Added: Bias panel styles in `public/css/dashboard.css`
+- Uses existing CSS variables only (--bg-panel, --border, --text, --text-dim, --bull, --bear, --radius)
+- Responsive: stacked layout on mobile (<768px), side-by-side on desktop
+- Score bar: 6px height, centered zero line, green/red fill
+- Signal mini-bars: 4px height, proportional to contribution magnitude
+
+### Files changed
+- `server/analysis/bias.js` — **NEW** (bias computation module)
+- `server/index.js` — bias import, per-symbol marketContext/indicators/calendar caches, GET /api/bias endpoint
+- `public/index.html` — bias panel HTML structure
+- `public/js/alerts.js` — bias panel fetch/render logic + event hooks
+- `public/css/dashboard.css` — bias panel styling
+
+---
+
+## [v14.14] — 2026-04-07 — OPRA live feed enabled + connection fixes
+
+### Fixed: OPRA TCP subscription format in `server/data/opraLive.js`
+- **stype_in**: changed from `underlying` (not supported by Databento TCP API) to `parent`
+- **Symbol format**: changed from `QQQ,SPY` to `QQQ.OPT,SPY.OPT` (Databento parent format requires `ROOT.OPT` suffix)
+- **OCC symbol parser**: `_parseOcc()` now strips whitespace before parsing — Databento OPRA sends padded OCC symbols (`"QQQ   261218P00239780"` instead of `"QQQ261218P00239780"`)
+
+### Added: Record type handling in `_processRecord()` in `server/data/opraLive.js`
+- rtype=21 (error records): logged as warnings with server error message
+- rtype=23 (system messages): logged as info (subscription confirmations)
+- Enhanced close event logging: includes phase and totalRecords for diagnostics
+
+### Enabled: `liveOpra=true` in `config/settings.json`
+- OPRA live feed now starts automatically on server startup
+- Verified: CRAM auth succeeds, subscription confirmed by server, connection stable (0 reconnects)
+- Market closed at time of activation — strikeCount=0 expected, will populate at market open (9:30 ET)
+- CBOE fallback working correctly when OPRA has no data
+
+### Verified
+- `checkOpraSchemas()` confirms `statistics` schema available on OPRA.PILLAR
+- `/api/datastatus` → `opra.connected=true`, `opra.enabled=true`
+- `/api/options?symbol=MNQ` → `dataSource='cboe'` (fallback active, market closed)
+- `weeklyMonthlyHP` and `quarterlyHP` (v14.13 buckets) intact on both OPRA and CBOE paths
+
+### Files changed
+- `server/data/opraLive.js` — 3 bug fixes + error/status record handling
+- `config/settings.json` — `liveOpra: true`
+
+---
+
+## [v14.13] — 2026-04-07 — Weekly/monthly/quarterly HP expiry buckets
+
+### Added: Expiry-bucket HP computation in `server/data/options.js`
+- New `_computeExpiryBucketHP()` splits options chain into 3 DTE buckets:
+  - Bucket 0 (0–14 DTE): daily/weekly — unchanged, existing `hedgePressureZones`
+  - Bucket 1 (15–60 DTE): monthly — `weeklyMonthlyHP` field (top 3 zones)
+  - Bucket 2 (61–120 DTE): quarterly — `quarterlyHP` field (top 3 zones)
+- Each zone has `{ strike, gex, pressure, scaled }` — scaled to futures price space
+- Buckets with <10 strikes with OI return null (insufficient data)
+- Both OPRA live and CBOE fallback paths produce bucket HP
+
+### Added: Monthly HP proximity weighting in `server/analysis/marketContext.js`
+- If both daily + monthly HP nearby (≤0.75× ATR): +0.05 multiplier boost (capped 0.80–1.30)
+- If only monthly HP nearby: standalone 1.15 (at level) / 1.05 (near level) multiplier
+- Degrades gracefully when monthly HP data is null
+- New fields: `marketContext.hp.monthlyNearest`, `marketContext.hp.monthlyMultiplierDelta`
+
+### Added: Monthly/quarterly HP chart lines in `public/js/chart.js`
+- Monthly HP: solid lines, width 2, #00e676 support / #ff5252 resistance, labels "HP M ▲/▼" (top 2)
+- Quarterly HP: solid lines, width 3, #69ff8c support / #ff8a80 resistance, labels "HP Q ▲/▼" (top 1)
+- Lines cleared on symbol switch and stored in separate arrays for independent toggle
+
+### Added: Layer toggles for HP tiers in `public/js/layers.js` + `public/index.html`
+- `hpMonthly` (default: true) — toggle monthly HP lines
+- `hpQuarterly` (default: true) — toggle quarterly HP lines
+- Persisted to localStorage via existing layer toggle system
+
+### Changed: `public/js/alerts.js`
+- Pass `weeklyMonthlyHP` and `quarterlyHP` through to `setOptionsLevels()` in the scaled levels object
+
+### Files changed
+- `server/data/options.js` — `_computeExpiryBucketHP()`, bucket HP on both OPRA + CBOE paths
+- `server/analysis/marketContext.js` — monthly HP proximity in `_buildHpContext()`
+- `public/js/chart.js` — monthly/quarterly HP line rendering + toggles
+- `public/js/layers.js` — `hpMonthly`, `hpQuarterly` defaults
+- `public/js/alerts.js` — pass new fields to chart
+- `public/index.html` — HP Monthly / HP Quarterly toggle checkboxes
+
+---
+
+## [v14.12] — 2026-04-07 — ZR-B zone depth filter (backtest-only)
+
+### Added: ATR-relative zone depth filter in `_zoneRejection()` in `server/analysis/setups.js`
+- Skip zones where the swing-forming candle range < 0.5× ATR14
+- Applied in both bearish (supply) and bullish (demand) branches
+- Built candle-time lookup map for O(1) zone depth measurement
+- zone_rejection remains DISABLED in live production
+
+### Validated: ZR-B backtest (zone depth filter + hours 4-8 ET gate)
+- Job ID: d509596b95ca
+- 209 trades, WR 57.4%, PF 1.108, Net $530, AvgWin $45.21, AvgLoss -$55.00 — **FAIL** (PF < 1.2, AvgWin < AvgLoss)
+- Delta vs ZR-F corrected: -7 trades (-3.2%), PF -0.069, Net -$366
+- Filter too loose at 0.5× ATR14 — only 3.2% of zones filtered, and those were net positive trades
+- Saved: `data/analysis/ZR_B_d509596b95ca_results.json` + `_summary.txt`
+
+### Note
+ZR-B did not improve on ZR-F. ZR-C (max retest count filter) is next in the ZR track — independent of ZR-B.
+
+### Files changed
+- `server/analysis/setups.js` — zone depth filter in `_zoneRejection()` (both directions)
+
+---
+
+## [v14.11] — 2026-04-07 — Phase 2 loss-analysis filters in setups.js
+
+### Added: 5 filter rules in `server/analysis/setups.js` (backend only)
+Based on A5 corrected (7,401 trades) and B8 corrected (876 trades) analysis.
+
+**Hard gates (return null — setup skipped entirely):**
+- **Filter 1:** OR breakout + DXY rising + hour >= 11 ET → skip. Evidence: WR 20.7%, PF 0.965 (n=174). Hour 9 remains (PF 2.113).
+- **Filter 2:** PDH breakout disabled for MNQ, MES, MCL. Evidence: combined PF 0.954, net -$1,451 (8yr). MGC PDH remains enabled.
+- **Filter 3:** OR breakout + DEX bias neutral → skip. Evidence: PF 1.164 (n=286). Null/undefined dexBias not gated.
+- **Filter 4:** MGC PDH restricted to hours 8 and 10 ET only. Evidence: hour 9 PF 0.983 (breakeven), hour 11+ PF 0.700 (net -$982).
+
+**Score penalty:**
+- **Filter 5:** OR breakout + DXY rising + hour <= 10 ET → base score -8. Evidence: orb+dxy=rising PF 1.733 vs baseline 2.064. Stacks with existing -20 in applyMarketContext.
+
+**Deferred:**
+- **Filter 6:** IA3 TODO comment added near confidence clamp. B8 conf 90-100 = PF 1.349 (weakest bucket) vs 70-75 = PF 2.770 (strongest). Investigate in IA3 calibration.
+
+### Added: DST-aware `_etHour()` / `_isDST()` / `_nthSunday()` helpers in setups.js
+Mirrors backtest engine DST logic for accurate ET hour computation in filter gates.
+
+### Added: `marketContext` passthrough via `extras` object
+`_orBreakout`, `_orConf`, `_pdhBreakout` now receive `marketContext` through the existing `extras` parameter (no function signature changes).
+
+### Validated: B9 backtest (Phase 2 filters active)
+- Job ID: 9392cd8f9a9f
+- 729 trades, WR 42.7%, PF 2.265, Net $145,178, MaxDD $5,157, Sharpe 6.106 — **PASS**
+- Delta vs B8 corrected: -147 trades (-16.8%), WR +0.9pp, PF +0.036, Sharpe +0.41
+- Net P&L -$10.8K (-6.9%) due to fewer trades; risk-adjusted returns improved
+- Saved: `data/analysis/B9_9392cd8f9a9f_results.json` + `_summary.txt`
+
+### Files changed
+- `server/analysis/setups.js` — all 5 filter implementations + IA3 TODO comment + ET hour helpers
+
+---
+
+## [v14.10] — 2026-04-07 — Cleared stale backtest results, re-ran A5/B8/ZR-F with corrected values
+
+### Cleared: All stale backtest results
+- Deleted 18 result files from `data/backtest/results/`
+- Deleted 2 B8 analysis files from `data/analysis/` (B8_8be3f8661f10_results.json, B8_8be3f8661f10_summary.txt)
+- Preserved all ZR_* analysis files (zone rejection analysis — valid)
+
+### Re-ran: A5 corrected baseline (full period 2018-09-24 to 2026-04-01)
+- Job ID: 29a28f0cfe49
+- 7,401 trades, WR 34.2%, PF 1.689, Net +$640,904, MaxDD $13,533
+- Uses per-symbol fees from instruments.js (v14.8): MNQ/MES $1.62/RT, MGC $2.12/RT, MCL $1.92/RT
+- Saved: `data/analysis/A5_corrected_29a28f0cfe49_results.json` + `_summary.txt`
+
+### Re-ran: B8 corrected (production config, 24-month)
+- Job ID: 6420090ea27e
+- 876 trades, WR 41.8%, PF 2.229, Net $155,970, MaxDD $4,967 — PASS
+- Nearly identical to original B8 (delta: -$878 net, -0.01 PF)
+- Saved: `data/analysis/B8_corrected_6420090ea27e_results.json` + `_summary.txt`
+
+### Re-ran: ZR-F corrected (zone rejection reference)
+- Job ID: b2846b587e74
+- 216 trades, WR 57.4%, PF 1.177, Net $896 — FAIL (PF < 1.2)
+- Zone rejection finding holds: strong WR but R:R still inverted
+- Saved: `data/analysis/ZR_F_corrected_b2846b587e74_results.json` + `_summary.txt`
+
+### Updated: Documentation
+- ROADMAP.md: A5/B8 dollar figures updated, corrected PF values, added v14.8 note
+- AI_ROADMAP.md: B8 PF corrected (2.239 → 2.229)
+- CONTEXT_SUPPLEMENT.md: A5 corrected results section added
+
+### Note
+All backtest results prior to v14.8 used incorrect fee formula ($4/RT flat) and wrong pointValues for SIL (1000→200) and MHG (250→2500). Results cleared and re-run on 2026-04-07. Analytical conclusions (WR/PF based) remain valid. Dollar figures updated.
+
+---
+
+## [v14.9] — 2026-04-07 — Forward-test page + AI export prompt generator
+
+### Added: Dedicated forward-test page (public/forwardtest.html)
+- 4-tab layout: Summary, Trade Log, Breakdown, AI Export
+- **Summary tab:** 9 stat cards (trades, WR, PF, net P&L, avg win/loss, expectancy, max DD, open positions) + 3 charts (equity curve, daily P&L bars, rolling 20-trade WR)
+- **Trade Log tab:** sortable/filterable table with 16 columns, expandable rows for full context fields (DEX bias, DD band, resilience, MTF confluence), CSV export
+- **Breakdown tab:** 8 breakdown panels (symbol, hour, VIX, DXY, breadth, risk appetite, confidence bucket, setup type) — each showing n/WR%/PF/Net P&L/Avg Win/Avg Loss; minimum n=5
+- **AI Export tab:** structured prompt generator with configurable breakdown tables, sample trade count (0–50), analysis focus (6 options), custom question field. Copy/download/save buttons
+- Global filter bar: symbol, setup, direction, outcome, date range — filters apply across all tabs simultaneously, recomputed client-side
+- Auto-refreshes trade data every 60 seconds
+
+### Added: AI Export prompt generator in backtest2.html
+- New "Export Analysis Prompt" section above the existing AI chat interface in the AI Analysis tab
+- Same prompt structure as forwardtest: configurable breakdowns, sample trades, focus area, custom question
+- Copy/download/save buttons; save writes to `data/analysis/{timestamp}_backtest_{jobId}_prompt.txt`
+
+### Added: New API routes
+- `GET /api/forwardtest/open` — returns current open positions from alert cache
+- `POST /api/forwardtest/export` — saves AI analysis prompt text to `data/analysis/`
+
+### Updated: Navigation
+- "Live Trades" link added to nav bar across all pages (index.html, backtest2.html, performance.html, commentary.html, backtest.html, scanner.html, tradelog.html, propfirms.html, tradingaccount.html, docs.html)
+- Also added missing "Backtest" link to tradelog, propfirms, tradingaccount, and docs nav bars
+
+### Updated: Service worker
+- `forwardtest.html`, `forwardtest.css`, `forwardtest.js` added to SHELL_ASSETS
+- Cache version bumped to v37
+
+### Files added
+- `public/forwardtest.html` — forward-test page (4 tabs)
+- `public/css/forwardtest.css` — forward-test + backtest export styles
+- `public/js/forwardtest.js` — all client-side logic (filtering, stats, charts, breakdowns, export)
+
+### Files changed
+- `server/index.js` — 2 new API routes (GET /api/forwardtest/open, POST /api/forwardtest/export)
+- `public/backtest2.html` — export prompt section in AI Analysis tab
+- `public/js/backtest2.js` — `_initBacktestExport()`, `_generateBacktestExport()`, breakdown-to-markdown helpers
+- `public/sw.js` — SHELL_ASSETS updated, cache v37
+- `public/index.html` — nav link added
+- `public/backtest.html` — nav link added
+- `public/commentary.html` — nav link added
+- `public/performance.html` — nav link added
+- `public/scanner.html` — nav link added
+- `public/tradelog.html` — nav links added (Backtest + Live Trades)
+- `public/propfirms.html` — nav links added (Backtest + Live Trades)
+- `public/tradingaccount.html` — nav links added (Backtest + Live Trades)
+- `public/docs.html` — nav links added (Backtest + Live Trades)
+
+---
+
+## [v14.8] — 2026-04-07 — Correct tick/point values + fee schedule + instrument settings UI
+
+### Fixed: Instrument values corrected across entire codebase
+- **SIL (Micro Silver):** pointValue 1000→200, tickValue 5.00→1.00
+- **MHG (Micro Copper):** pointValue 250→2500, tickValue 0.125→1.25
+- Added `feePerRT` to all 8 CME symbols in instruments.js (MNQ/MES/M2K/MYM: $1.62, MGC: $2.12, MCL/SIL/MHG: $1.92)
+- Replaced 8 hardcoded POINT_VALUE/TICK_SIZE/TICK_VALUE maps across server and client files with imports from instruments.js
+- Backtest engine now uses per-symbol feePerRT (was hardcoded $4/RT for all symbols)
+- Forward-test simulator now uses per-symbol feePerRT from instruments.js
+
+### Added: Instrument settings in config/settings.json
+- New `instruments` block with editable tickSize/tickValue/pointValue/feePerRT for all 8 CME symbols
+- instruments.js loads overrides from settings.json on startup — no code changes needed to adjust values
+
+### Added: Instrument API routes
+- `GET /api/instruments` — returns full instrument metadata (merged defaults + overrides)
+- `POST /api/instruments/:symbol` — update tick/point/fee values per symbol; persists to settings.json; no restart required
+
+### Added: Instrument settings panel in backtest2.html
+- Collapsible "Instrument Settings" table in config panel (below contracts grid)
+- Editable tick size, tick value, point value, fee/RT per symbol
+- Save button POSTs changes to `/api/instruments/:symbol`
+- Reset to Defaults button restores CME standard values
+- Green/red confirmation toast on save
+
+### Files changed
+- `server/data/instruments.js` — corrected SIL/MHG values, added feePerRT, settings.json override loader
+- `server/backtest/engine.js` — per-symbol fee from INSTRUMENTS (config feePerRT is fallback only)
+- `server/trading/simulator.js` — removed DOLLAR_PER_POINT/FWD_FEE_PER_RT, uses POINT_VALUE + per-symbol fee
+- `server/analysis/indicators.js` — DD band pointValue now from instruments.js
+- `server/analysis/volumeProfile.js` — tick size now from instruments.js
+- `server/index.js` — replaced 2 hardcoded POINT_VALUE maps, added /api/instruments routes
+- `public/js/alerts.js` — tick maps now fetched from /api/instruments
+- `public/js/backtest.js` — point values fetched from /api/instruments
+- `public/js/tradelog.js` — point values fetched from /api/instruments
+- `public/js/backtest2.js` — instrument settings panel init + save/reset logic
+- `public/backtest2.html` — instrument settings table HTML
+- `public/css/backtest2.css` — instrument settings panel styles
+- `config/settings.json` — new instruments block
+
+---
+
+## [v14.7] — 2026-04-07 — Paper trading monitor panel + /api/forwardtest routes
+
+### Added: Paper trading panel on dashboard
+- Collapsible "Paper Trading" section in right panel (above Layers)
+- 4 stat cards: Trades, WR%, PF, Net P&L
+- Open positions count indicator
+- Last 5 resolved trades mini-table (symbol, direction, confidence, result, P&L)
+- Auto-refreshes every 60 seconds via `/api/forwardtest/summary`
+
+### Added: Forward-test API routes
+- `GET /api/forwardtest/summary` — aggregate stats (win rate, PF, net P&L, by-symbol, by-hour, recent trades)
+- `GET /api/forwardtest/trades` — full trade log with `?symbol=`, `?outcome=`, `?limit=` query params
+
+### Fixed: Forward-test trade persistence (simulator.js)
+- `checkLiveOutcomes()` now writes complete trade records to `data/logs/forward_trades.json` on every resolution
+- Trade records include: grossPnl, netPnl (after $4 fee), exitReason (tp/sl/timeout), all ML context fields (vixRegime, dxyDirection, equityBreadth, riskAppetite, bondRegime, ddBandLabel, hpNearest, resilienceLabel, dexBias, mtfConfluence)
+- Added 16:45 ET force-close (timeout) for positions still open at session end
+- P&L calculated using `POINT_VALUE` from `instruments.js` (not hardcoded)
+- New `getOpenForwardTestCount()` export for live open-position count
+
+### Files changed
+- `server/trading/simulator.js` — trade persistence, timeout logic, P&L calc, new export
+- `server/storage/log.js` — `loadForwardTrades()`, `appendForwardTrade()` for `forward_trades.json`
+- `server/index.js` — two new API routes, updated imports
+- `public/index.html` — paper trading panel HTML + inline fetch script
+- `public/css/dashboard.css` — paper trading panel styles
+
+---
+
+## [v14.6] — 2026-04-06 — B8 passed, paper trading activated on MNQ/MES/MCL, alert commentary re-enabled
+
+### B8 Backtest Results (24-month window, 2024-01-01 to 2026-04-01)
+- **876 trades, WR 41.8%, PF 2.239, Gross P&L $156,848, Max DD $4,950** — PASS (WR >= 40% AND PF >= 1.5)
+- MNQ: 278 trades, WR 39.9%, P&L $122,288
+- MES: 277 trades, WR 43.0%, P&L $18,612
+- MCL: 321 trades, WR 42.4%, P&L $15,948
+- Config: or_breakout only, 5m, conf >= 70, hours 9–10 ET, contracts MNQ=5/MES=2/MCL=2
+
+### Added: Auto-commentary on fresh alerts (re-enabled)
+- `generateSingle()` now fires automatically after each cached alert that passes all guards
+- Rate limiting guards: confidence >= 75, staleness === 'fresh', 30-min per-symbol cooldown, no high-impact calendar event within 15 minutes
+- In-memory `_lastCommentaryTs` map keyed by symbol — no new files needed
+
+### Enhanced: Commentary prompt context (commentary.js)
+- `_buildPrompt()` now includes market context fields: VIX regime, DXY direction, equity breadth (X/4 indices bullish), bond regime, risk appetite
+- Fields sourced from `setup.scoreBreakdown.context.breadthDetail` populated by `applyMarketContext()`
+
+### Enhanced: Forward-test trade record fields (setups.js)
+- Added `resilienceLabel`, `dexBias`, `vixLevel` to `contextBreakdown` in `applyMarketContext()`
+- All required ML Phase 3 fields now present on every alert: vixRegime, vixLevel, dxyDirection, hpProximity (hpNearest), resilienceLabel, dexBias, ddBandLabel, equityBreadth, bondRegime, riskAppetite, mtfConfluence
+
+### Confirmed: Forward-test harness active
+- `checkLiveOutcomes()` fires on every live 1m bar for all 8 CME symbols including MNQ, MES, MCL
+- MGC excluded from paper trading pending B8b results (stays on live feed for data collection)
+
+---
+
+## [v14.5] — 2026-04-06 — Dashboard bug fixes: MES aggregation, symbol switching, load failures, TF selector centering
+
+### Fixed: MES (and other non-MNQ symbols) unrealistic OHLC values in live feed aggregation
+- **Root cause:** In `snapshot.js writeLiveCandle()`, when a higher-TF window (5m/15m/30m) closed, the `alreadyStored` check detected the existing partial bar had the same timestamp as the completed bar and **skipped writing the completed bar**. This left the partial bar (missing the final 1m bar of the window) as the stored aggregate, excluding the last minute's high/low from each window.
+- **Fix:** When `windowClosed` is true and a partial exists with the same timestamp, the partial is now **replaced** with the completed bar instead of being skipped.
+
+### Fixed: Suspicious bar detection in barValidator.js
+- Added Rule 3a: open-relative range check. Bars with high > open×1.05 or low < open×0.95 (5% intra-bar move) are logged as suspicious. Bars exceeding 10% are clamped.
+- Runs before the existing ATR-based spike filter (Rule 3b).
+
+### Fixed: Dollar values not updating correctly when switching symbols
+- **chart.js:** Added `_clearSetupOverlay()` call at the start of `loadData()` — SL/TP price lines from the previous symbol's setup overlay no longer persist on the new chart.
+- **alerts.js:** Added `_clearSymbolState()` function that fires on every symbol switch (`chartViewChange`, `dashModeChange`). Immediately clears stale alert markers and shows a loading state in the predictions panel while the new fetch completes.
+
+### Fixed: Symbols failing to load — graceful "Waiting for data" overlay
+- **chart.js:** If `getCandles()` returns empty or fewer than 2 candles, a "Waiting for data…" overlay is shown on the chart instead of a blank/broken state. The overlay auto-dismisses when candles arrive on the next load.
+- **server/index.js:** At startup, logs a warning for any symbol in SCAN_SYMBOLS that has neither seed candles nor an active live feed entry.
+
+### Fixed: Timeframe selector not centered
+- **dashboard.css:** Added `justify-content: center` to `.tb-row-tf` at the base level (previously only applied on desktop via media query). TF buttons are now centered on all screen sizes.
+
+### Added: Per-symbol data source logging at startup
+- When Databento live feed is enabled, each SCAN_SYMBOL is logged as "LIVE FEED" or "SEED DATA (no live feed)" to clarify the active data source.
+
+---
+
 ## [v14.4] — 2026-04-06 — ROADMAP.md + documentation updates
 
 ### Added: ROADMAP.md — Master project roadmap

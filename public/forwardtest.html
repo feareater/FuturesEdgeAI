@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FuturesEdge — Forward Test</title>
+  <link rel="stylesheet" href="/css/dashboard.css" />
+  <link rel="stylesheet" href="/css/forwardtest.css" />
+</head>
+<body>
+  <div id="app">
+
+    <header id="topbar">
+      <div class="tb-brand-block">
+        <span id="brand">FuturesEdge AI</span>
+      </div>
+      <nav class="tb-nav-links">
+        <a href="/">Dashboard</a>
+        <a href="/performance.html">Stats</a>
+        <a href="/tradelog.html">Trade Log</a>
+        <a href="/propfirms.html">Prop Firms</a>
+        <a href="/tradingaccount.html">Real Account</a>
+        <a href="/backtest2.html">Backtest</a>
+        <a href="/forwardtest.html" class="active">Live Trades</a>
+        <a href="/docs.html">Guide</a>
+        <a href="/api/export" download>Export</a>
+      </nav>
+    </header>
+
+    <main id="ft-main">
+
+      <!-- Filter bar -->
+      <div id="ft-filter-bar" class="ft-filter-bar">
+        <div class="ft-filter-group">
+          <label>Symbol</label>
+          <select id="ft-filter-symbol" multiple>
+            <option value="" selected>All</option>
+          </select>
+        </div>
+        <div class="ft-filter-group">
+          <label>Setup</label>
+          <select id="ft-filter-setup">
+            <option value="">All</option>
+            <option value="or_breakout">OR Breakout</option>
+            <option value="pdh_breakout">PDH Breakout</option>
+            <option value="zone_rejection">Zone Rejection</option>
+            <option value="trendline_break">Trendline Break</option>
+          </select>
+        </div>
+        <div class="ft-filter-group">
+          <label>Direction</label>
+          <select id="ft-filter-dir">
+            <option value="">All</option>
+            <option value="bullish">Bullish</option>
+            <option value="bearish">Bearish</option>
+          </select>
+        </div>
+        <div class="ft-filter-group">
+          <label>Outcome</label>
+          <select id="ft-filter-outcome">
+            <option value="">All</option>
+            <option value="won">Won</option>
+            <option value="lost">Lost</option>
+            <option value="timeout">Timeout</option>
+          </select>
+        </div>
+        <div class="ft-filter-group">
+          <label>From</label>
+          <input type="date" id="ft-filter-from" />
+        </div>
+        <div class="ft-filter-group">
+          <label>To</label>
+          <input type="date" id="ft-filter-to" />
+        </div>
+        <button id="ft-filter-reset" class="ft-btn-secondary">Reset</button>
+        <span id="ft-trade-count" class="ft-trade-count"></span>
+      </div>
+
+      <!-- Tab bar -->
+      <div class="ft-tabs">
+        <button class="ft-tab active" data-tab="summary">Summary</button>
+        <button class="ft-tab" data-tab="tradelog">Trade Log</button>
+        <button class="ft-tab" data-tab="breakdown">Breakdown</button>
+        <button class="ft-tab" data-tab="export">AI Export</button>
+      </div>
+
+      <!-- ── Summary Tab ──────────────────────────────────────────────── -->
+      <div id="ft-tab-summary" class="ft-tab-panel active">
+        <div id="ft-no-trades" class="ft-placeholder">
+          No forward-test trades yet. Paper trading must be active and trades must resolve before data appears here.
+        </div>
+        <div id="ft-summary-content" style="display:none">
+          <div id="ft-stat-cards" class="ft-stat-cards"></div>
+          <div class="ft-charts-grid">
+            <div class="ft-chart-box">
+              <h3 class="ft-section-label">Equity Curve</h3>
+              <canvas id="ft-equity-chart" height="220"></canvas>
+            </div>
+            <div class="ft-chart-box">
+              <h3 class="ft-section-label">Daily P&amp;L</h3>
+              <canvas id="ft-daily-chart" height="220"></canvas>
+            </div>
+            <div class="ft-chart-box">
+              <h3 class="ft-section-label">Win Rate (Rolling 20)</h3>
+              <canvas id="ft-wr-chart" height="220"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Trade Log Tab ────────────────────────────────────────────── -->
+      <div id="ft-tab-tradelog" class="ft-tab-panel">
+        <div class="ft-trades-toolbar">
+          <button id="ft-export-csv" class="ft-btn-secondary">Export CSV</button>
+        </div>
+        <div id="ft-trades-table-wrap">
+          <table id="ft-trades-table">
+            <thead>
+              <tr>
+                <th data-sort="date">Date</th>
+                <th data-sort="time">Time (ET)</th>
+                <th data-sort="symbol">Symbol</th>
+                <th data-sort="setupType">Setup</th>
+                <th data-sort="timeframe">TF</th>
+                <th data-sort="direction">Dir</th>
+                <th data-sort="confidence">Conf</th>
+                <th data-sort="entry">Entry</th>
+                <th data-sort="exitPrice">Exit</th>
+                <th data-sort="outcome">Result</th>
+                <th data-sort="netPnl">P&amp;L</th>
+                <th data-sort="vixRegime">VIX</th>
+                <th data-sort="dxyDirection">DXY</th>
+                <th data-sort="equityBreadth">Breadth</th>
+                <th data-sort="riskAppetite">Risk App</th>
+                <th data-sort="hpNearest">HP Prox</th>
+              </tr>
+            </thead>
+            <tbody id="ft-trades-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ── Breakdown Tab ────────────────────────────────────────────── -->
+      <div id="ft-tab-breakdown" class="ft-tab-panel">
+        <div id="ft-breakdown-content" class="ft-breakdown-grid"></div>
+      </div>
+
+      <!-- ── AI Export Tab ────────────────────────────────────────────── -->
+      <div id="ft-tab-export" class="ft-tab-panel">
+        <div class="ft-export-options">
+          <h3 class="ft-section-label">AI Analysis Prompt Generator</h3>
+
+          <div class="ft-export-row">
+            <div class="ft-export-group">
+              <label>Include breakdown tables:</label>
+              <div class="ft-export-checks">
+                <label><input type="checkbox" name="bd" value="symbol" checked /> By Symbol</label>
+                <label><input type="checkbox" name="bd" value="hour" checked /> By Hour</label>
+                <label><input type="checkbox" name="bd" value="vix" checked /> By VIX</label>
+                <label><input type="checkbox" name="bd" value="dxy" checked /> By DXY</label>
+                <label><input type="checkbox" name="bd" value="breadth" checked /> By Breadth</label>
+                <label><input type="checkbox" name="bd" value="risk" checked /> By Risk Appetite</label>
+                <label><input type="checkbox" name="bd" value="confidence" checked /> By Confidence</label>
+                <label><input type="checkbox" name="bd" value="setup" checked /> By Setup Type</label>
+              </div>
+            </div>
+          </div>
+
+          <div class="ft-export-row">
+            <div class="ft-export-group">
+              <label>Include sample trades: <span id="ft-sample-count-label">20</span></label>
+              <input type="range" id="ft-sample-count" min="0" max="50" value="20" />
+            </div>
+            <div class="ft-export-group">
+              <label>Analysis focus:</label>
+              <select id="ft-analysis-focus">
+                <option value="general">General performance review</option>
+                <option value="winners">Find what's working (winners only)</option>
+                <option value="losers">Find what's failing (losers only)</option>
+                <option value="symbol">Symbol-specific analysis</option>
+                <option value="tod">Time-of-day optimization</option>
+                <option value="compare">Compare to B8 backtest expectations</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="ft-export-row">
+            <div class="ft-export-group ft-export-full">
+              <label>Custom question (optional):</label>
+              <input type="text" id="ft-custom-question" placeholder="e.g. Why is MCL underperforming?" />
+            </div>
+          </div>
+
+          <button id="ft-generate-prompt" class="ft-btn-primary">Generate Analysis Prompt</button>
+        </div>
+
+        <div id="ft-export-result" style="display:none">
+          <textarea id="ft-prompt-output" readonly rows="24"></textarea>
+          <div class="ft-export-actions">
+            <button id="ft-copy-prompt" class="ft-btn-primary">Copy to clipboard</button>
+            <button id="ft-download-prompt" class="ft-btn-secondary">Download as .txt</button>
+            <button id="ft-save-prompt" class="ft-btn-secondary">Save to data/analysis/</button>
+            <span id="ft-save-status" class="ft-save-status"></span>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <script src="/js/forwardtest.js"></script>
+</body>
+</html>

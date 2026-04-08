@@ -12,7 +12,8 @@
  *   MGC: $10.00 / point / contract (tick=$1.00, size=0.10)
  */
 
-const DOLLAR_PER_POINT = { MNQ: 2.0, MGC: 10.0 };
+const { POINT_VALUE, INSTRUMENTS } = require('../data/instruments');
+const { appendForwardTrade } = require('../storage/log');
 
 // ---------------------------------------------------------------------------
 // In-memory position store (session-scoped; not persisted)
@@ -26,7 +27,7 @@ let   _nextId   = 1;
 // ---------------------------------------------------------------------------
 
 function _pnl(pos, closePrice) {
-  const dpp       = DOLLAR_PER_POINT[pos.symbol] ?? 1;
+  const dpp       = POINT_VALUE[pos.symbol] ?? 1;
   const direction = pos.direction === 'bullish' ? 1 : -1;
   return parseFloat(((closePrice - pos.entryPrice) * direction * pos.qty * dpp).toFixed(2));
 }
@@ -171,8 +172,70 @@ function reset() {
 // ---------------------------------------------------------------------------
 
 /**
+ * Check if a Unix-seconds timestamp falls at or after 16:45 ET.
+ * Used for force-closing open positions at end of RTH session.
+ */
+function _isPastSessionClose(unixSec) {
+  const d = new Date(unixSec * 1000);
+  // Convert to ET (America/New_York)
+  const et = new Date(d.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const etMinutes = et.getHours() * 60 + et.getMinutes();
+  return etMinutes >= 16 * 60 + 45; // 16:45 ET
+}
+
+/**
+ * Build a forward-test trade record from a resolved alert and persist it.
+ */
+function _persistForwardTrade(alert, outcome, exitPrice, exitTime) {
+  const s = alert.setup || {};
+  const ctx = s.scoreBreakdown?.context || {};
+  const dir = s.direction === 'bullish' ? 1 : -1;
+  const pv = POINT_VALUE[alert.symbol] || 1;
+  const feePerRT = INSTRUMENTS[alert.symbol]?.feePerRT ?? 4;
+  const grossPnl = parseFloat(((exitPrice - s.entry) * dir * pv).toFixed(2));
+  const netPnl   = parseFloat((grossPnl - feePerRT).toFixed(2));
+
+  const exitReason = outcome === 'won' ? 'tp' : outcome === 'lost' ? 'sl' : 'timeout';
+
+  const trade = {
+    alertKey:       `${alert.symbol}:${alert.timeframe}:${s.type}:${s.time}`,
+    symbol:         alert.symbol,
+    setupType:      s.type,
+    direction:      s.direction,
+    timeframe:      alert.timeframe,
+    confidence:     s.confidence,
+    entryPrice:     s.entry,
+    sl:             s.sl,
+    tp:             s.tp,
+    exitPrice,
+    exitReason,
+    entryTime:      new Date(s.time * 1000).toISOString(),
+    exitTime:       new Date(exitTime * 1000).toISOString(),
+    grossPnl,
+    netPnl,
+    outcome,
+    // ML context fields
+    vixRegime:      ctx.vixRegime      ?? null,
+    vixLevel:       ctx.vixLevel       ?? null,
+    dxyDirection:   ctx.dxyDirection   ?? null,
+    equityBreadth:  ctx.equityBreadth  ?? null,
+    riskAppetite:   ctx.riskAppetite   ?? null,
+    bondRegime:     ctx.bondRegime     ?? null,
+    ddBandLabel:    s.ddBandLabel      ?? null,
+    hpNearest:      ctx.hpNearest      ?? null,
+    resilienceLabel: ctx.resilienceLabel ?? null,
+    dexBias:        ctx.dexBias        ?? null,
+    mtfConfluence:  s.mtfConfluence    ?? null,
+  };
+
+  appendForwardTrade(trade);
+  return trade;
+}
+
+/**
  * Check all open alerts in the alert cache against a live 1m candle.
  * Resolves any that hit their SL or TP and persists the outcome immediately.
+ * Also force-closes any open alerts at 16:45 ET (session timeout).
  *
  * SL is checked before TP — if both levels are hit on the same bar
  * (gap/spike), the SL wins (conservative, correct for live tracking).
@@ -198,6 +261,8 @@ async function checkLiveOutcomes(symbol, candle1m) {
     (a.setup?.outcome === 'open' || a.setup?.outcome == null) &&
     !a.setup?.userOverride
   );
+
+  const isTimeout = _isPastSessionClose(candle1m.time);
 
   for (const alert of openAlerts) {
     const { entry, sl, tp, direction } = alert.setup || {};
@@ -228,8 +293,15 @@ async function checkLiveOutcomes(symbol, candle1m) {
       }
     }
 
+    // Force-close at 16:45 ET if still open
+    if (!outcome && isTimeout) {
+      outcome   = 'timeout';
+      exitPrice = candle1m.close;
+    }
+
     if (outcome) {
       updateAlertOutcome(key, outcome, exitPrice, candle1m.time);
+      _persistForwardTrade(alert, outcome, exitPrice, candle1m.time);
       resolved.push({ key, outcome, exitPrice, outcomeTime: candle1m.time });
       console.log(
         `[Simulator] ${symbol} alert resolved: ${outcome} at ${exitPrice}` +
@@ -239,6 +311,23 @@ async function checkLiveOutcomes(symbol, candle1m) {
   }
 
   return resolved;
+}
+
+/**
+ * Return the count of currently open (unresolved) forward-test alerts.
+ */
+function getOpenForwardTestCount() {
+  const { loadAlertCache } = require('../storage/log');
+  try {
+    const alerts = loadAlertCache();
+    return alerts.filter(a =>
+      (a.setup?.outcome === 'open' || a.setup?.outcome == null) &&
+      !a.setup?.userOverride &&
+      a.setup?.entry != null && a.setup?.sl != null && a.setup?.tp != null
+    ).length;
+  } catch (_) {
+    return 0;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -251,4 +340,5 @@ module.exports = {
   getAllPositions,
   reset,
   checkLiveOutcomes,
+  getOpenForwardTestCount,
 };

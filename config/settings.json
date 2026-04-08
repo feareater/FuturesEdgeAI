@@ -34,11 +34,62 @@
     "soundAlerts": false,
     "pushNotifications": false,
     "ddBands": true,
-    "liveData": true
+    "liveData": true,
+    "liveOpra": true
   },
   "swingLookback": 10,
   "impulseThreshold": 1.5,
   "aiRateLimitMs": 60000,
+  "instruments": {
+    "MNQ": {
+      "tickSize": 0.25,
+      "tickValue": 0.5,
+      "pointValue": 2,
+      "feePerRT": 1.62
+    },
+    "MES": {
+      "tickSize": 0.25,
+      "tickValue": 1.25,
+      "pointValue": 5,
+      "feePerRT": 1.62
+    },
+    "MGC": {
+      "tickSize": 0.1,
+      "tickValue": 1,
+      "pointValue": 10,
+      "feePerRT": 2.12
+    },
+    "MCL": {
+      "tickSize": 0.01,
+      "tickValue": 1,
+      "pointValue": 100,
+      "feePerRT": 1.92
+    },
+    "M2K": {
+      "tickSize": 0.1,
+      "tickValue": 0.5,
+      "pointValue": 5,
+      "feePerRT": 1.62
+    },
+    "MYM": {
+      "tickSize": 1,
+      "tickValue": 0.5,
+      "pointValue": 0.5,
+      "feePerRT": 1.62
+    },
+    "MHG": {
+      "tickSize": 0.0005,
+      "tickValue": 1.25,
+      "pointValue": 2500,
+      "feePerRT": 1.92
+    },
+    "SIL": {
+      "tickSize": 0.005,
+      "tickValue": 1,
+      "pointValue": 200,
+      "feePerRT": 1.92
+    }
+  },
   "risk": {
     "mnqContracts": 5,
     "mgcContracts": 3,

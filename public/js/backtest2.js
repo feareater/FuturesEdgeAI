@@ -68,6 +68,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   initHoursGrid();
   bindEvents();
   _initAiTab();
+  _initBacktestExport();
+  _initInstrumentPanel();
   loadPreviousJobs();
   await loadAvailableDates();   // sets date defaults first
   loadSavedConfig();            // then restores other prefs (NOT dates)
@@ -2816,4 +2818,307 @@ function _clearAiConversation() {
 function _scrollAiToBottom() {
   const area = document.getElementById('aiChatArea');
   if (area) area.scrollTop = area.scrollHeight;
+}
+
+// ─── Backtest AI Export ───────────────────────────────────────────────────────
+
+function _initBacktestExport() {
+  const slider = document.getElementById('bt2-export-sample');
+  const label  = document.getElementById('bt2-export-sample-label');
+  if (slider && label) slider.addEventListener('input', () => { label.textContent = slider.value; });
+
+  document.getElementById('bt2-export-generate')?.addEventListener('click', _generateBacktestExport);
+  document.getElementById('bt2-export-copy')?.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(document.getElementById('bt2-export-prompt-output').value);
+      _bt2ExportStatus('Copied!');
+    } catch { _bt2ExportStatus('Copy failed', true); }
+  });
+  document.getElementById('bt2-export-download')?.addEventListener('click', () => {
+    const text = document.getElementById('bt2-export-prompt-output').value;
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+    const blob = new Blob([text], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `backtest_analysis_${ts}.txt`;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  });
+  document.getElementById('bt2-export-save')?.addEventListener('click', async () => {
+    const text = document.getElementById('bt2-export-prompt-output').value;
+    const jobId = _currentJobId || 'unknown';
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+    const filename = `${ts}_backtest_${jobId}_prompt.txt`;
+    try {
+      const res = await fetch('/api/forwardtest/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: text, filename })
+      });
+      const data = await res.json();
+      if (data.saved) _bt2ExportStatus('Saved to ' + data.path);
+      else _bt2ExportStatus('Save failed', true);
+    } catch (err) { _bt2ExportStatus('Save failed: ' + err.message, true); }
+  });
+}
+
+function _bt2ExportStatus(msg, isError) {
+  const el = document.getElementById('bt2-export-status');
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'bt2-export-status' + (isError ? ' error' : '');
+  setTimeout(() => { el.textContent = ''; }, 4000);
+}
+
+function _generateBacktestExport() {
+  if (!_currentResults || !_currentResults.trades?.length) {
+    alert('Load a backtest run first.');
+    return;
+  }
+
+  const trades = _currentResults.trades;
+  const config = _currentResults.config || {};
+  const jobId  = _currentJobId || 'unknown';
+  const stats  = _currentResults.stats || {};
+
+  const sampleCount = parseInt(document.getElementById('bt2-export-sample').value, 10) || 0;
+  const focus = document.getElementById('bt2-export-focus').value;
+  const customQ = (document.getElementById('bt2-export-custom').value || '').trim();
+
+  const bdChecks = document.querySelectorAll('input[name="bt2bd"]:checked');
+  const includeBD = [...bdChecks].map(c => c.value);
+
+  // Compute stats
+  const won  = trades.filter(t => t.outcome === 'won');
+  const lost = trades.filter(t => t.outcome === 'lost');
+  const totalWins = won.reduce((s, t) => s + (t.netPnl || 0), 0);
+  const totalLoss = lost.reduce((s, t) => s + Math.abs(t.netPnl || 0), 0);
+  const netPnl    = trades.reduce((s, t) => s + (t.netPnl || 0), 0);
+  const wr = trades.length > 0 ? (won.length / trades.length * 100).toFixed(1) : '0';
+  const pf = totalLoss > 0 ? (totalWins / totalLoss).toFixed(2) : (won.length > 0 ? 'Inf' : '0');
+
+  let prompt = `You are analyzing backtest trades from a systematic futures trading system (FuturesEdge AI).
+
+BACKTEST CONTEXT:
+- Job ID: ${jobId}
+- Config: ${JSON.stringify({ symbols: config.symbols, setupTypes: config.setupTypes, timeframes: config.timeframes, minConfidence: config.minConfidence, excludeHours: config.excludeHours })}
+- Date range: ${config.startDate || '?'} to ${config.endDate || '?'}
+- Backtest baseline (B8, 24-month): WR 41.8%, PF 2.239, Net +$156,848
+
+OVERALL STATS:
+| Metric | Value |
+|--------|-------|
+| Total Trades | ${trades.length} |
+| Win Rate | ${wr}% |
+| Profit Factor | ${pf} |
+| Net P&L | $${netPnl.toFixed(2)} |
+| Avg Win | $${won.length > 0 ? (totalWins / won.length).toFixed(2) : '0'} |
+| Avg Loss | -$${lost.length > 0 ? (totalLoss / lost.length).toFixed(2) : '0'} |
+| Max Drawdown | -$${(stats.maxDrawdown || 0).toFixed(2)} |
+`;
+
+  if (includeBD.length) {
+    prompt += '\nBREAKDOWN TABLES:\n';
+    if (includeBD.includes('symbol'))     prompt += _bt2BdMD('By Symbol', trades, t => t.symbol || '?');
+    if (includeBD.includes('hour'))       prompt += _bt2BdMD('By Hour (ET)', trades, t => t.hour != null ? String(t.hour) : '?');
+    if (includeBD.includes('vix'))        prompt += _bt2BdMD('By VIX Regime', trades, t => t.vixRegime || 'unknown');
+    if (includeBD.includes('dxy'))        prompt += _bt2BdMD('By DXY Direction', trades, t => t.dxyDirection || 'unknown');
+    if (includeBD.includes('breadth'))    prompt += _bt2BdMD('By Equity Breadth', trades, t => t.equityBreadth != null ? t.equityBreadth + '/4' : 'unknown');
+    if (includeBD.includes('risk'))       prompt += _bt2BdMD('By Risk Appetite', trades, t => t.riskAppetite || 'unknown');
+    if (includeBD.includes('confidence')) prompt += _bt2BdMD('By Confidence', trades, t => {
+      const c = t.confidence || 0;
+      if (c >= 90) return '90+';
+      if (c >= 80) return '80-89';
+      if (c >= 70) return '70-79';
+      return '60-69';
+    });
+    if (includeBD.includes('setup'))      prompt += _bt2BdMD('By Setup Type', trades, t => t.setupType || '?');
+  }
+
+  if (sampleCount > 0) {
+    let sample;
+    if (focus === 'winners')      sample = trades.filter(t => t.outcome === 'won').slice(-sampleCount);
+    else if (focus === 'losers')  sample = trades.filter(t => t.outcome === 'lost').slice(-sampleCount);
+    else                          sample = trades.slice(-sampleCount);
+
+    const sampleFields = sample.map(t => ({
+      date: t.date, symbol: t.symbol, setup: t.setupType, tf: t.timeframe,
+      direction: t.direction, confidence: t.confidence,
+      entry: t.entry, exit: t.exitPrice, outcome: t.outcome, netPnl: t.netPnl,
+      vixRegime: t.vixRegime, dxyDirection: t.dxyDirection,
+      equityBreadth: t.equityBreadth, riskAppetite: t.riskAppetite,
+      ddBandLabel: t.ddBandLabel, hour: t.hour
+    }));
+    prompt += `\nSAMPLE TRADES (${sample.length} ${focus === 'winners' ? 'winning' : focus === 'losers' ? 'losing' : ''} trades):\n`;
+    prompt += JSON.stringify(sampleFields, null, 2) + '\n';
+  }
+
+  const focusMap = {
+    general:  'Provide a general performance review. What is working? What needs improvement?',
+    winners:  'Focus on winning trades only. What feature combinations predict winners? Format findings as conditional rules.',
+    losers:   'Focus on losing trades only. What avoidance rules would reduce losses? Format as: AVOID [condition] - [WR]% WR (n=[count]).',
+    symbol:   'Analyze performance by symbol. Which symbols carry edge? Which drag?',
+    tod:      'Analyze performance by time of day. Which ET hours are most profitable?',
+    compare:  'Compare these backtest results to the B8 baseline (WR 41.8%, PF 2.239). Flag significant deviations.',
+  };
+
+  prompt += `\nANALYSIS REQUESTED:\n${focusMap[focus] || focusMap.general}\n`;
+  if (customQ) prompt += `\nADDITIONAL QUESTION:\n${customQ}\n`;
+  prompt += `\nCompare results to the B8 backtest baseline where relevant.\nOnly report patterns where n >= 5.\nFormat findings as specific conditional rules where possible.`;
+
+  document.getElementById('bt2-export-prompt-output').value = prompt;
+  document.getElementById('bt2-export-result').style.display = '';
+  document.getElementById('bt2-export-status').textContent = '';
+}
+
+function _bt2BdMD(title, trades, keyFn) {
+  const buckets = {};
+  for (const t of trades) {
+    const key = keyFn(t);
+    if (!buckets[key]) buckets[key] = { n: 0, won: 0, totalWin: 0, totalLoss: 0 };
+    buckets[key].n++;
+    if (t.outcome === 'won') { buckets[key].won++; buckets[key].totalWin += (t.netPnl || 0); }
+    if (t.outcome === 'lost') { buckets[key].totalLoss += Math.abs(t.netPnl || 0); }
+  }
+  let md = `\n### ${title}\n| ${title.replace('By ', '')} | n | WR% | PF | Net P&L | Avg Win | Avg Loss |\n|---|---|---|---|---|---|---|\n`;
+  for (const [key, b] of Object.entries(buckets).sort((a, b) => b[1].n - a[1].n)) {
+    if (b.n < 5) continue;
+    const wr = (b.won / b.n * 100).toFixed(1);
+    const pf = b.totalLoss > 0 ? (b.totalWin / b.totalLoss).toFixed(2) : (b.won > 0 ? 'Inf' : '0');
+    const net = (b.totalWin - b.totalLoss).toFixed(0);
+    const avgW = b.won > 0 ? (b.totalWin / b.won).toFixed(0) : '0';
+    const lostN = trades.filter(t => keyFn(t) === key && t.outcome === 'lost').length;
+    const avgL = lostN > 0 ? (b.totalLoss / lostN).toFixed(0) : '0';
+    md += `| ${key} | ${b.n} | ${wr}% | ${pf} | $${net} | $${avgW} | -$${avgL} |\n`;
+  }
+  return md;
+}
+
+// ─── Instrument Settings Panel ───────────────────────────────────────────────
+
+const _INSTRUMENT_DEFAULTS = {
+  MNQ: { tickSize: 0.25, tickValue: 0.50, pointValue: 2.00, feePerRT: 1.62 },
+  MES: { tickSize: 0.25, tickValue: 1.25, pointValue: 5.00, feePerRT: 1.62 },
+  MGC: { tickSize: 0.10, tickValue: 1.00, pointValue: 10.00, feePerRT: 2.12 },
+  MCL: { tickSize: 0.01, tickValue: 1.00, pointValue: 100.00, feePerRT: 1.92 },
+  M2K: { tickSize: 0.10, tickValue: 0.50, pointValue: 5.00, feePerRT: 1.62 },
+  MYM: { tickSize: 1.00, tickValue: 0.50, pointValue: 0.50, feePerRT: 1.62 },
+  MHG: { tickSize: 0.0005, tickValue: 1.25, pointValue: 2500.00, feePerRT: 1.92 },
+  SIL: { tickSize: 0.005, tickValue: 1.00, pointValue: 200.00, feePerRT: 1.92 },
+};
+
+const _INSTRUMENT_ORDER = ['MNQ', 'MES', 'MGC', 'MCL', 'M2K', 'MYM', 'MHG', 'SIL'];
+
+let _instrumentData = {};
+
+function _initInstrumentPanel() {
+  _loadInstrumentData();
+  const saveBtn = document.getElementById('bt2-instrument-save');
+  const resetBtn = document.getElementById('bt2-instrument-reset');
+  if (saveBtn) saveBtn.addEventListener('click', _saveInstruments);
+  if (resetBtn) resetBtn.addEventListener('click', _resetInstruments);
+}
+
+async function _loadInstrumentData() {
+  try {
+    const data = await apiFetch('/api/instruments');
+    _instrumentData = data || {};
+    _renderInstrumentTable();
+  } catch {
+    _instrumentData = { ..._INSTRUMENT_DEFAULTS };
+    _renderInstrumentTable();
+  }
+}
+
+function _renderInstrumentTable() {
+  const tbody = document.getElementById('bt2-instrument-tbody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  for (const sym of _INSTRUMENT_ORDER) {
+    const d = _instrumentData[sym] || _INSTRUMENT_DEFAULTS[sym] || {};
+    const tr = document.createElement('tr');
+    tr.dataset.symbol = sym;
+    tr.innerHTML = `
+      <td class="bt2-inst-sym">${sym}</td>
+      <td><input type="number" class="bt2-inst-input" data-field="tickSize" value="${d.tickSize ?? ''}" step="any" min="0" /></td>
+      <td><input type="number" class="bt2-inst-input" data-field="tickValue" value="${d.tickValue ?? ''}" step="any" min="0" /></td>
+      <td><input type="number" class="bt2-inst-input" data-field="pointValue" value="${d.pointValue ?? ''}" step="any" min="0" /></td>
+      <td><input type="number" class="bt2-inst-input" data-field="feePerRT" value="${d.feePerRT ?? ''}" step="any" min="0" /></td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+async function _saveInstruments() {
+  const tbody = document.getElementById('bt2-instrument-tbody');
+  if (!tbody) return;
+  const rows = tbody.querySelectorAll('tr');
+  let savedCount = 0;
+  let errorMsg = null;
+
+  for (const row of rows) {
+    const sym = row.dataset.symbol;
+    const inputs = row.querySelectorAll('.bt2-inst-input');
+    const body = {};
+    let changed = false;
+    for (const inp of inputs) {
+      const field = inp.dataset.field;
+      const val = parseFloat(inp.value);
+      if (isNaN(val) || val <= 0) continue;
+      const cur = _instrumentData[sym]?.[field];
+      if (cur !== val) { body[field] = val; changed = true; }
+    }
+    if (!changed) continue;
+    try {
+      const resp = await fetch(`/api/instruments/${sym}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!resp.ok) {
+        const err = await resp.json();
+        errorMsg = err.error || `Failed for ${sym}`;
+      } else {
+        savedCount++;
+        const result = await resp.json();
+        // Update local cache
+        if (!_instrumentData[sym]) _instrumentData[sym] = {};
+        Object.assign(_instrumentData[sym], body);
+      }
+    } catch (e) {
+      errorMsg = e.message;
+    }
+  }
+
+  _showInstrumentToast(errorMsg ? errorMsg : savedCount > 0 ? 'Saved' : 'No changes', !errorMsg);
+}
+
+async function _resetInstruments() {
+  let errorMsg = null;
+  for (const sym of _INSTRUMENT_ORDER) {
+    const defaults = _INSTRUMENT_DEFAULTS[sym];
+    try {
+      const resp = await fetch(`/api/instruments/${sym}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(defaults),
+      });
+      if (!resp.ok) {
+        const err = await resp.json();
+        errorMsg = err.error || `Failed for ${sym}`;
+      }
+    } catch (e) { errorMsg = e.message; }
+  }
+  await _loadInstrumentData();
+  _showInstrumentToast(errorMsg ? errorMsg : 'Reset to defaults', !errorMsg);
+}
+
+function _showInstrumentToast(msg, success) {
+  const toast = document.getElementById('bt2-instrument-toast');
+  if (!toast) return;
+  toast.textContent = msg;
+  toast.className = 'bt2-instrument-toast ' + (success ? 'bt2-toast-ok' : 'bt2-toast-err');
+  toast.style.display = 'inline';
+  setTimeout(() => { toast.style.display = 'none'; }, 2000);
 }

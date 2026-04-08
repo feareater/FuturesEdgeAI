@@ -1,6 +1,6 @@
 # FuturesEdge AI — AI/ML Enhancement Roadmap
 
-> **Status: B8 pending. Paper trading activates if B8 passes WR >= 40% + PF >= 1.5 on MNQ+MES+MCL (24-month window). Phase 1 Claude batch analysis begins once paper trading is active and 500+ forward-test trades are available.**
+> **Status: B9 PASSED (WR 42.7%, PF 2.265). Phase 2 loss-analysis filters complete (v14.11). Paper trading ACTIVE on MNQ/MES/MCL as of 2026-04-06. Alert commentary re-enabled with rate limiting. Collecting forward-test trades — Phase 1 Claude batch analysis begins after 500+ completed trades.**
 > This document is the single source of truth for all planned AI/ML work.
 > Read CLAUDE.md, CONTEXT_SUPPLEMENT.md, and DATABENTO_PROJECT.md before starting any session on this track.
 
@@ -49,10 +49,10 @@ Before any ML work is useful:
 - [x] `dxyDirection`, `dxyClose` on trade records ✅ (v12.7)
 - [x] `hpProximity`, `resilienceLabel`, `dexBias`, `ddBandLabel` on trade records ✅
 - [x] `equityBreadth`, `bondRegime`, `copperRegime`, `dollarRegime`, `riskAppetite`, `riskAppetiteScore` on trade records ✅ (v12.9 A5 breadth run complete)
-- [ ] `mtfConfluence` on trade records — currently applied upstream, not recorded per trade
+- [x] `mtfConfluence` on trade records — present on `setup.mtfConfluence` ✅ (v14.6)
 - [x] B5 forward-test harness collecting live trade outcomes ✅ (v13.0)
-- [ ] B8 backtest passes pass criteria (WR ≥ 40% + PF ≥ 1.5 on MNQ+MES+MCL, 24-month window)
-- [ ] Minimum 500 completed forward-test trades (n ≥ 30 per setup type per symbol)
+- [x] B8 backtest passes pass criteria (WR ≥ 40% + PF ≥ 1.5 on MNQ+MES+MCL, 24-month window) ✅ (v14.6 — WR 41.8%, PF 2.229)
+- [ ] Minimum 500 completed forward-test trades (n ≥ 30 per setup type per symbol) — collecting
 
 ---
 
@@ -102,9 +102,21 @@ These rules directly inform:
 
 ## Phase 2 — Loss Analysis (do this before Phase 3)
 
-**When:** After Phase 1, before building any model.
+**Status: COMPLETE (v14.11).** 5 filter rules implemented in `setups.js`. B9 validated: 729 trades, WR 42.7%, PF 2.265 (up from B8: 876 trades, WR 41.8%, PF 2.229). Filters removed 147 negative-EV trades, improving WR +0.9pp and PF +0.036.
 
-**What to do:**
+**Filters implemented (v14.11):**
+| Filter | Type | Condition | Evidence |
+|--------|------|-----------|----------|
+| 1 | Hard gate | OR breakout + DXY rising + hour >= 11 ET | WR 20.7%, PF 0.965 (n=174) |
+| 2 | Hard gate | PDH breakout on MNQ/MES/MCL | PF 0.954, net -$1,451 (8yr) |
+| 3 | Hard gate | OR breakout + DEX bias neutral | PF 1.164 (n=286) |
+| 4 | Hard gate | MGC PDH at hours 9 and 11+ ET | Hour 9 PF 0.983, hour 11+ PF 0.700 |
+| 5 | Score -8 | OR breakout + DXY rising + hour <= 10 ET | PF 1.733 vs baseline 2.064 |
+| 6 | Comment | IA3 TODO: conf 90-100 underperforming | B8 PF 1.349 vs 70-75 PF 2.770 |
+
+**B9 result:** Job 9392cd8f9a9f, `data/analysis/B9_9392cd8f9a9f_results.json`
+
+**Original Phase 2 prompt (retained for reference):**
 
 Export the 500 worst losing trades by `netPnl` from the A5 full-period job. Feed to Claude and ask:
 Here are the 500 worst losing trades from a systematic futures trading backtest.
@@ -245,21 +257,36 @@ This gives Claude enough context to write genuinely useful commentary rather tha
 
 ## Zone Rejection Rescue Track (ZR-series)
 
-**Goal:** Determine if `zone_rejection` can be made profitable with structural changes. Currently disabled (R:R structurally inverted — AvgWin $16 vs AvgLoss $24 at all confidence levels).
+**Goal:** Determine if `zone_rejection` can be made profitable with structural changes. Currently disabled (R:R structurally inverted — AvgWin $60 vs AvgLoss $75 at 1:1 R:R, PF 0.72).
 
-| Run | Description |
-|-----|-------------|
-| **ZR-A** | Claude API analysis of all zone_rejection **winners** from A5 — what do they have in common? Which feature combinations (regime, breadth, HP proximity, DD band, time of day) appear disproportionately in winning zone rejections? |
-| **ZR-B** | Test ATR-relative zone depth filter: minimum zone depth >= 0.5x ATR at detection time. Hypothesis: shallow zones get broken more easily; deeper zones have stronger institutional interest. |
-| **ZR-C** | Test maximum retest count filter: zone invalidated after 2 retests. Hypothesis: zones that have already been tested multiple times lose their edge — the third rejection is less reliable than the first. |
-| **ZR-D** | Test tighter SL: zone midpoint rather than far edge. Hypothesis: current SL at far edge of zone creates outsized losses; midpoint SL reduces average loss while maintaining win rate. |
-| **ZR-E** | Test alternative TP structure: 1:1 with partial exit, vs current 2:1 full. Hypothesis: zone rejections produce smaller moves than breakouts — a 1:1 target with 50% partial improves WR enough to turn PF positive. |
+**ZR-A baseline (2026-04-06):** 838 trades, MNQ 15m+30m, 2024-01-01 → 2026-04-01, conf ≥ 50. WR 45.6%, PF 0.72, Net -$8,478. AvgWin $59.90, AvgLoss -$75.45. WR is near-viable but PF far below target.
+
+**ZR-A Claude analysis key findings:** (1) Hours 4–8 ET have the strongest edge — institutional flow before RTH creates cleaner rejections. (2) Equity breadth 2–3 is the sweet spot — balanced markets support mean-reversion. (3) Confidence floor has no edge — the scoring system wasn't designed for zone rejection features.
+
+| Run | Description | Status | Code change? |
+|-----|-------------|--------|--------------|
+| **ZR-A** | Baseline extraction + Claude API analysis of all zone_rejection trades — winner characteristics, confidence buckets, time-of-day, hold time, structural diagnosis. | **✅ Complete** — `data/analysis/ZR_A_all.json`, `ZR_A_winners.json`, `ZR_A_prompt.txt` | No |
+| **ZR-F** | Hours 4–8 ET gate only. Tests strongest ZR-A finding: pre-RTH/early overlap window. | **✅ PASS** — 216 trades, **WR 57.4%, PF 1.253**, Net +$382. `data/analysis/ZR_F_14f8e4f26337_*` | No |
+| **ZR-F2** | Hours 4–8 ET + breadth 2–3 composite. Post-filter on ZR-F results. | **✅ PASS** — 53 trades, **WR 66.0%, PF 1.387**, Net +$215. `data/analysis/ZR_F2_14f8e4f26337_*` | No |
+| **ZR-D1** | Midpoint SL + hours 4–8 ET (both dirs). Tests if halving risk distance fixes R:R. | **✅ FAIL** — 217 trades, WR 52.1%, PF 1.079, Net -$656. Tighter TP missed more winners than tighter SL saved losers. | Yes — `opts.slMidpoint` flag in `setups.js` + `engine.js` |
+| **ZR-D2** | Midpoint SL + bullish only (post-filter on D1). | **✅ FAIL** — 114 trades, WR 50.9%, PF 0.871, Net -$653. | Post-filter |
+| **ZR-D3** | Midpoint SL + VIX low/normal (post-filter on D1). | **✅ FAIL** — 197 trades, WR 52.3%, PF 1.151, Net -$442. Best D variant but still below 1.2. | Post-filter |
+| **ZR-B** | ATR-relative zone depth filter: skip if zone-forming candle range < 0.5× ATR14. | **✅ FAIL** — 209 trades, WR 57.4%, PF 1.108, Net +$530. Filter too loose (3.2% removed, PF worse). `data/analysis/ZR_B_d509596b95ca_*` | Yes — candle lookup map + 2 lines per direction in `_zoneRejection()` |
+| **ZR-C** | Max retest count filter: invalidate zone after 2 retests. | Next | Yes — ~10 lines per direction + helper function |
+| **ZR-E** | Clean baseline at conf ≥ 65. Deprioritized — Finding 3 shows no confidence edge. | Deprioritized | No — config only |
+
+**ZR-D finding:** Midpoint SL is counterproductive. The wide SL is a feature, not a bug — it gives price room to breathe during the rejection. The R:R inversion is compensated by high WR when properly time-gated. **ZR-F (original SL + hours 4–8 ET) remains the best configuration.**
+
+**Pass criteria:** WR ≥ 45% AND PF ≥ 1.2 AND AvgWin ≥ AvgLoss. Both required for re-enable consideration.
 
 **Configuration for all ZR runs:**
-- 24-month window (2024-01-01 to present)
-- `or_breakout` disabled, `zone_rejection` only
-- Each run isolates a single variable change vs the baseline
-- Output: ZR analysis documents in `data/analysis/`
+- 24-month window: 2024-01-01 to 2026-04-01
+- `zone_rejection` only, MNQ, 15m + 30m
+- Each run isolates a single variable change vs the ZR-A baseline
+- Output: `data/analysis/ZR_*.json` and `data/analysis/ZR_track_plan.txt`
+- Test configs: `data/analysis/ZR_test_configs.json`
+
+**Execution order (revised 2026-04-07, post ZR-B):** ZR-F ✅ → ZR-F2 ✅ → ZR-D ✅ (FAIL) → ZR-B ✅ (FAIL — zone depth filter too loose, PF worse) → ZR-C (retest count, next). ZR-E skipped. **Recommendation:** ZR-F remains the best configuration. ZR-B zone depth filter at 0.5× ATR14 was ineffective (only 3.2% filtered, net negative). ZR-C is still queued — independent of ZR-B.
 
 ---
 
@@ -304,8 +331,8 @@ These were discussed and intentionally deferred:
 ---
 
 *Created: 2026-04-04*
-*Status: B8 pending. Paper trading activates if B8 passes WR ≥ 40% + PF ≥ 1.5 on MNQ+MES+MCL (24-month window).*
-*B7 finding: No configuration meets WR ≥ 40% for the 4-symbol portfolio. MGC or_breakout is a structural drag at ~33% WR.*
-*B8 config: or_breakout with MGC excluded (MNQ+MES+MCL only, conf70, 9–10 ET, 24-month window).*
-*MGC: investigate separately — may require higher threshold (85%+) or different setup type.*
-*AI_ROADMAP Phase 1 batch analysis: deferred until paper trading begins and forward-test data accumulates.*
+*Status: B9 PASSED (WR 42.7%, PF 2.265, 729 trades). Phase 2 loss-analysis filters active (v14.11). Paper trading ACTIVE on MNQ/MES/MCL since 2026-04-06.*
+*Alert commentary re-enabled with rate limiting (conf >= 75, fresh, 30-min cooldown, no near calendar).*
+*All ML Phase 3 trade record fields confirmed: vixRegime, vixLevel, dxyDirection, resilienceLabel, dexBias, ddBandLabel, equityBreadth, bondRegime, riskAppetite, mtfConfluence.*
+*MGC: investigate separately via B8b — may require higher threshold (85%+) or different setup type.*
+*AI_ROADMAP Phase 1 batch analysis: begins after 500+ completed forward-test trades accumulate.*

@@ -20,14 +20,27 @@ const DATA_SOURCE  = process.env.DATA_SOURCE ?? 'seed';
 const SEED_DIR     = path.join(__dirname, '..', '..', 'data', 'seed');
 const SETTINGS_FILE = path.join(__dirname, '..', '..', 'config', 'settings.json');
 
-const VALID_SYMBOLS    = ['MNQ', 'MGC', 'MES', 'MCL', 'BTC', 'ETH', 'XRP', 'XLM', 'SIL', 'DXY', 'VIX', 'QQQ', 'SPY'];
+const VALID_SYMBOLS    = [
+  // Tradeable futures
+  'MNQ', 'MGC', 'MES', 'MCL', 'SIL', 'M2K', 'MYM', 'MHG',
+  // Crypto perpetuals (Coinbase INTX)
+  'BTC', 'ETH', 'XRP', 'XLM',
+  // Reference — charts + breadth, no setup scanning
+  'M6E', 'M6B', 'MBT', 'ZT', 'ZF', 'ZN', 'ZB', 'UB',
+  // Macro context
+  'DXY', 'VIX', 'QQQ', 'SPY',
+];
 const VALID_TIMEFRAMES = ['1m', '2m', '3m', '5m', '15m', '30m', '1h', '2h', '4h'];
 const CRYPTO_SYMBOLS   = new Set(['BTC', 'ETH', 'XRP', 'XLM']);
 // Macro/reference symbols — context-only data sources. Must never trigger setup detection,
 // volume profile, opening range, or session level computation.
-const MACRO_SYMBOLS    = new Set(['DXY', 'VIX', 'QQQ', 'SPY', 'GLD', 'USO', 'SLV']);
+const MACRO_SYMBOLS    = new Set([
+  'DXY', 'VIX', 'QQQ', 'SPY', 'GLD', 'USO', 'SLV',
+  // Reference instruments — breadth/chart only
+  'M6E', 'M6B', 'MBT', 'ZT', 'ZF', 'ZN', 'ZB', 'UB',
+]);
 // Futures symbols supported by the Databento live feed
-const LIVE_FUTURES     = new Set(['MNQ', 'MES', 'MGC', 'MCL']);
+const LIVE_FUTURES     = new Set(['MNQ', 'MES', 'MGC', 'MCL', 'M2K', 'MYM', 'SIL', 'MHG']);
 
 // ---------------------------------------------------------------------------
 // Live in-memory candle store (populated by writeLiveCandle from databento.js)
@@ -81,13 +94,15 @@ function getCandles(symbol, timeframe) {
       return seed;
     }
 
-    if (seed.length === 0) return live;
+    // DEFENSIVE COPY: return cloned candle objects so callers (scans, chart)
+    // never hold mutable references into the live store.
+    if (seed.length === 0) return live.map(c => ({ ...c }));
 
     // Merge: seed bars up to (but not including) the first live bar timestamp,
     // then all live bars. This avoids duplicates where seed and live overlap.
     const firstLiveTime = live[0].time;
     const seedPrefix    = seed.filter(c => c.time < firstLiveTime);
-    const merged        = [...seedPrefix, ...live];
+    const merged        = [...seedPrefix, ...live.map(c => ({ ...c }))];
 
     // Trim to MAX_LIVE_BARS so we don't return an unbounded array
     return merged.length > MAX_LIVE_BARS ? merged.slice(merged.length - MAX_LIVE_BARS) : merged;
@@ -245,21 +260,26 @@ function writeLiveCandle(symbol, candle) {
     if (windowClosed && windowBars.length > 0) {
       const agg = _mergeWindow(windowBars, seconds);
 
-      // Only push if we don't already have this timestamp (avoid duplicates on re-delivery)
-      const alreadyStored = prevBars.length > 0 && prevBars[prevBars.length - 1].time === agg.time;
-      if (!alreadyStored) {
-        prevBars.push(agg);
+      // If a partial bar exists for this window, REPLACE it with the completed bar.
+      // Previously the alreadyStored check skipped the completed bar entirely,
+      // causing the last 1m bar of every window to be excluded from the aggregate.
+      if (prevBars.length > 0 && prevBars[prevBars.length - 1].time === agg.time) {
+        prevBars[prevBars.length - 1] = { ...agg };
+      } else {
+        prevBars.push({ ...agg });
         if (prevBars.length > MAX_LIVE_BARS) prevBars.splice(0, prevBars.length - MAX_LIVE_BARS);
-        liveCandles.set(keyTf, prevBars);
-        completed.push({ tf, candle: agg });
       }
+      liveCandles.set(keyTf, prevBars);
+      // Return a CLONE so broadcast recipients don't hold mutable references
+      completed.push({ tf, candle: { ...agg } });
     } else if (!windowClosed && windowBars.length > 0) {
       // Update the in-progress bar (replace last if same window, otherwise push)
       const partial = _mergeWindow(windowBars, seconds);
       if (prevBars.length > 0 && prevBars[prevBars.length - 1].time === partial.time) {
-        prevBars[prevBars.length - 1] = partial;
+        // Replace with a NEW object — never mutate an object that may be referenced externally
+        prevBars[prevBars.length - 1] = { ...partial };
       } else {
-        prevBars.push(partial);
+        prevBars.push({ ...partial });
         if (prevBars.length > MAX_LIVE_BARS) prevBars.splice(0, prevBars.length - MAX_LIVE_BARS);
       }
       liveCandles.set(keyTf, prevBars);

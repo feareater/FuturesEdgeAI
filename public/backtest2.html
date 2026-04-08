@@ -21,6 +21,7 @@
         <a href="/propfirms.html">Prop Firms</a>
         <a href="/tradingaccount.html">Real Account</a>
         <a href="/backtest2.html" class="active">Backtest</a>
+        <a href="/forwardtest.html">Live Trades</a>
         <a href="/docs.html">Guide</a>
         <a href="/api/export" download>Export</a>
       </nav>
@@ -107,6 +108,26 @@
                 <span>MCL <input type="number" class="bt2-contracts" data-sym="MCL" value="1" min="1" max="10" /></span>
               </div>
             </div>
+            <details class="bt2-field-group bt2-instrument-settings">
+              <summary>Instrument Settings</summary>
+              <table id="bt2-instrument-table" class="bt2-instrument-table">
+                <thead>
+                  <tr>
+                    <th>Symbol</th>
+                    <th>Tick Size</th>
+                    <th>Tick Value</th>
+                    <th>Point Value</th>
+                    <th>Fee/RT</th>
+                  </tr>
+                </thead>
+                <tbody id="bt2-instrument-tbody"></tbody>
+              </table>
+              <div class="bt2-instrument-actions">
+                <button type="button" id="bt2-instrument-save" class="bt2-secondary-btn">Save</button>
+                <button type="button" id="bt2-instrument-reset" class="bt2-secondary-btn">Reset to Defaults</button>
+                <span id="bt2-instrument-toast" class="bt2-instrument-toast"></span>
+              </div>
+            </details>
             <div class="bt2-field-group">
               <label class="bt2-hours-label">
                 Trading Hours (ET)
@@ -335,6 +356,64 @@
 
           <!-- AI Analysis Tab -->
           <div id="bt2-tab-ai" class="bt2-tab-panel">
+
+            <!-- Export Prompt Section -->
+            <div class="bt2-export-section" id="bt2-export-section">
+              <h3>Export Analysis Prompt</h3>
+
+              <div class="bt2-export-row">
+                <div class="bt2-export-group">
+                  <label>Include breakdown tables:</label>
+                  <div class="bt2-export-checks">
+                    <label><input type="checkbox" name="bt2bd" value="symbol" checked /> By Symbol</label>
+                    <label><input type="checkbox" name="bt2bd" value="hour" checked /> By Hour</label>
+                    <label><input type="checkbox" name="bt2bd" value="vix" checked /> By VIX</label>
+                    <label><input type="checkbox" name="bt2bd" value="dxy" checked /> By DXY</label>
+                    <label><input type="checkbox" name="bt2bd" value="breadth" checked /> By Breadth</label>
+                    <label><input type="checkbox" name="bt2bd" value="risk" checked /> By Risk App</label>
+                    <label><input type="checkbox" name="bt2bd" value="confidence" checked /> By Confidence</label>
+                    <label><input type="checkbox" name="bt2bd" value="setup" checked /> By Setup</label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="bt2-export-row">
+                <div class="bt2-export-group">
+                  <label>Sample trades: <span id="bt2-export-sample-label">20</span></label>
+                  <input type="range" id="bt2-export-sample" min="0" max="50" value="20" />
+                </div>
+                <div class="bt2-export-group">
+                  <label>Analysis focus:</label>
+                  <select id="bt2-export-focus">
+                    <option value="general">General performance review</option>
+                    <option value="winners">Find what's working (winners only)</option>
+                    <option value="losers">Find what's failing (losers only)</option>
+                    <option value="symbol">Symbol-specific analysis</option>
+                    <option value="tod">Time-of-day optimization</option>
+                    <option value="compare">Compare to B8 baseline</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="bt2-export-row">
+                <div class="bt2-export-group bt2-export-full">
+                  <label>Custom question (optional):</label>
+                  <input type="text" id="bt2-export-custom" placeholder="e.g. Why are MGC trades losing?" />
+                </div>
+              </div>
+
+              <button id="bt2-export-generate" class="bt2-export-btn primary">Generate Backtest Analysis Prompt</button>
+
+              <div id="bt2-export-result" style="display:none;margin-top:12px">
+                <textarea id="bt2-export-prompt-output" readonly rows="18"></textarea>
+                <div class="bt2-export-actions">
+                  <button id="bt2-export-copy" class="bt2-export-btn primary">Copy to clipboard</button>
+                  <button id="bt2-export-download" class="bt2-export-btn">Download as .txt</button>
+                  <button id="bt2-export-save" class="bt2-export-btn">Save to data/analysis/</button>
+                  <span id="bt2-export-status" class="bt2-export-status"></span>
+                </div>
+              </div>
+            </div>
 
             <!-- Status bar -->
             <div class="ai-header">

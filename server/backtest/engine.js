@@ -19,7 +19,7 @@ const { computeIndicators, computeDDBands }  = require('../analysis/indicators')
 const { classifyRegime }     = require('../analysis/regime');
 const { detectSetups }       = require('../analysis/setups');
 const { buildMarketContext } = require('../analysis/marketContext');
-const { POINT_VALUE, HP_PROXY, ALL_SYMBOLS } = require('../data/instruments');
+const { POINT_VALUE, HP_PROXY, ALL_SYMBOLS, INSTRUMENTS } = require('../data/instruments');
 const { computeMarketBreadthHistorical } = require('../analysis/marketBreadth');
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -79,24 +79,29 @@ function computeDxyDirection(dxyData, date) {
 
 /**
  * Load the last-close price for every available date for a single symbol.
- * Reads the last bar of each daily 1m file — one file read per date.
+ * Reads the last bar of each daily 1m file using chunked parallel async I/O.
  * Returns { 'YYYY-MM-DD': close, ... }
  */
-function _loadDailyClosesForSymbol(sym) {
+async function _loadDailyClosesForSymbolAsync(sym) {
   const dir = path.join(DATA_DIR, 'futures', sym, '1m');
   if (!fs.existsSync(dir)) return {};
+  const files = fs.readdirSync(dir).filter(f => f.endsWith('.json')).sort();
   const closes = {};
-  const files = fs.readdirSync(dir)
-    .filter(f => f.endsWith('.json'))
-    .sort();
-  for (const f of files) {
-    const date = f.replace('.json', '');
-    const bars = readJSON(path.join(dir, f)) || [];
-    if (bars.length > 0) {
-      const last = bars[bars.length - 1];
-      const close = last.close ?? last.c ?? 0;
-      if (close > 0) closes[date] = close;
-    }
+  const CHUNK = 75;
+  for (let i = 0; i < files.length; i += CHUNK) {
+    const chunk = files.slice(i, i + CHUNK);
+    await Promise.all(chunk.map(async (f) => {
+      const date = f.replace('.json', '');
+      try {
+        const raw = await fs.promises.readFile(path.join(dir, f), 'utf8');
+        const bars = JSON.parse(raw);
+        if (bars.length > 0) {
+          const last = bars[bars.length - 1];
+          const close = last.close ?? last.c ?? 0;
+          if (close > 0) closes[date] = close;
+        }
+      } catch {}
+    }));
   }
   return closes;
 }
@@ -105,24 +110,21 @@ const BREADTH_CACHE_PATH = path.resolve(DATA_DIR, 'breadth_cache.json');
 
 /**
  * Pre-compute market breadth for every trading date in the backtest range.
- * Checks breadth_cache.json first — only computes dates not already cached.
+ * Checks breadth_cache.json first — skips ALL file I/O if every date is cached.
+ * For missing dates only: loads daily closes via chunked parallel async reads.
  * Saves newly computed dates back to the cache file.
  *
  * Returns { 'YYYY-MM-DD': breadthObject } covering startDate→endDate.
  * Dates with insufficient warmup data have a null value in the map.
  */
-function _precomputeBreadth(startDate, endDate) {
+async function _precomputeBreadthAsync(startDate, endDate) {
   const t0 = Date.now();
 
-  console.log('[backtest] Breadth cache path:', BREADTH_CACHE_PATH, 'exists:', fs.existsSync(BREADTH_CACHE_PATH));
-
-  // Load existing cache (may be partial or empty)
+  // Load existing cache — may be fully populated (common case after first run)
   const cache = readJSON(BREADTH_CACHE_PATH) || {};
 
-  // Determine which dates in range are missing from cache
-  // We need sorted ALL dates (for 21-day lookback), but only target the requested range
+  // Collect all available dates across symbols (for 21-day lookback context)
   const allSymDates = new Set();
-  // Peek at available dates without loading closes yet
   for (const sym of ALL_SYMBOLS) {
     const dir = path.join(DATA_DIR, 'futures', sym, '1m');
     if (!fs.existsSync(dir)) continue;
@@ -134,20 +136,24 @@ function _precomputeBreadth(startDate, endDate) {
   const targetDates = sortedAllDates.filter(d => d >= startDate && d <= endDate);
   const missingDates = targetDates.filter(d => !(d in cache));
 
+  // Fast path: all dates cached — zero file I/O
   if (missingDates.length === 0) {
-    console.log(`[backtest] Breadth cache hit — ${targetDates.length} dates loaded instantly`);
+    const elapsed = Date.now() - t0;
+    console.log(`[backtest] Breadth: ${targetDates.length} cache hits, 0 computed (${elapsed}ms)`);
     const result = {};
     for (const d of targetDates) result[d] = cache[d];
     return result;
   }
 
-  console.log(`[BT-MTF] Breadth: ${missingDates.length} uncached dates — loading daily closes…`);
+  console.log(`[BT-MTF] Breadth: ${targetDates.length - missingDates.length} cache hits, ${missingDates.length} to compute — loading daily closes…`);
 
-  // Load daily closes for all 16 symbols (needed for computation)
-  const dailyClosesBySym = {};
-  for (const sym of ALL_SYMBOLS) {
-    dailyClosesBySym[sym] = _loadDailyClosesForSymbol(sym);
-  }
+  // Load daily closes for all 16 symbols in parallel using async chunked reads
+  const t1 = Date.now();
+  const symEntries = await Promise.all(
+    ALL_SYMBOLS.map(async sym => [sym, await _loadDailyClosesForSymbolAsync(sym)])
+  );
+  const dailyClosesBySym = Object.fromEntries(symEntries);
+  console.log(`[BT-MTF] Daily closes loaded in ${Date.now() - t1}ms`);
 
   // Compute breadth only for missing dates
   let computed = 0;
@@ -164,7 +170,7 @@ function _precomputeBreadth(startDate, endDate) {
   }
 
   const nonNull = targetDates.filter(d => cache[d]).length;
-  console.log(`[BT-MTF] Breadth: ${nonNull}/${targetDates.length} dates populated (${computed} computed, ${Date.now() - t0}ms)`);
+  console.log(`[BT-MTF] Breadth: ${nonNull}/${targetDates.length} populated (${targetDates.length - missingDates.length} hits, ${computed} computed, ${Date.now() - t0}ms total)`);
 
   const result = {};
   for (const d of targetDates) result[d] = cache[d];
@@ -207,6 +213,24 @@ function loadHPSnapshot(symbol, date) {
   if (!proxy) return null;
   const f = path.join(DATA_DIR, 'options', proxy, 'computed', `${date}.json`);
   return readJSON(f);
+}
+
+/**
+ * Pre-load all bar files for a symbol into memory before the simulation loop.
+ * Eliminates repeated synchronous disk reads from the inner hot path.
+ * Loads all requested timeframes plus '1m' (needed for outcome resolution).
+ * Returns { [tf]: { [date]: bars[] } }
+ */
+function _preloadSymbolBars(symbol, days, timeframes) {
+  const tfsToLoad = [...new Set([...timeframes, '1m'])];
+  const loaded = {};
+  for (const tf of tfsToLoad) {
+    loaded[tf] = {};
+    for (const date of days) {
+      loaded[tf][date] = loadDailyBars(symbol, date, tf);
+    }
+  }
+  return loaded;
 }
 
 /** Get all trading dates available for a symbol between start/end inclusive */
@@ -610,7 +634,8 @@ async function runBacktest(config) {
 
           const resolution = resolveOutcome(setup, futBars, maxHoldBars, pointVal, numContracts);
           const grossPnl = resolution.pnl ?? 0;
-          const netPnl   = grossPnl - feePerRT;
+          const symFee   = (INSTRUMENTS[symbol]?.feePerRT ?? feePerRT) * numContracts;
+          const netPnl   = grossPnl - symFee;
 
           // Hour in ET for time-of-day breakdown
           const barTs = bars1m[i].ts;
@@ -642,7 +667,7 @@ async function runBacktest(config) {
             exitPrice:      resolution.exitPrice,
             barsToOutcome:  resolution.barsToOutcome,
             grossPnl:       +grossPnl.toFixed(2),
-            fee:            feePerRT,
+            fee:            +symFee.toFixed(2),
             netPnl:         +netPnl.toFixed(2),
             hour:           etHour,
             hpProximity,
@@ -687,6 +712,231 @@ async function runBacktest(config) {
   };
 }
 
+// ─── Single-symbol runner (used by symbolWorker.js for parallel execution) ────
+
+/**
+ * Run backtest for a single symbol. Used by symbolWorker.js in parallel mode.
+ * Loads its own breadth/VIX/DXY data independently so it can run in any thread.
+ * Returns { trades, equityMap, totalBarsProcessed }
+ */
+async function runBacktestSymbolMTF(symbol, config) {
+  const {
+    timeframes    = ['5m', '15m'],
+    startDate,
+    endDate,
+    minConfidence = 65,
+    setupTypes    = ['pdh_breakout', 'trendline_break', 'or_breakout'],
+    contracts     = {},
+    useHP         = true,
+    maxHoldBars   = DEFAULT_MAX_BARS,
+    feePerRT      = 4,
+    excludeHours  = [],
+    spanMargin    = {},
+  } = config;
+
+  const vixData = loadJsonIfExists('data/historical/vix.json') || {};
+  const dxyData = loadJsonIfExists('data/historical/dxy.json') || {};
+  // Breadth cache is warm in all normal cases — this is an instant read from JSON
+  const breadthByDate = await _precomputeBreadthAsync(startDate, endDate);
+
+  const trades = [];
+  const equityMap = {};
+  let totalBarsProcessed = 0;
+
+  const pointVal     = POINT_VALUE[symbol] ?? 2;
+  const numContracts = contracts[symbol] ?? 1;
+  const days = getTradingDays(symbol, startDate, endDate);
+
+  console.log(`[BT-SYM] ${symbol}: ${days.length} days × ${timeframes.join('/')} TFs`);
+
+  // Pre-load all bar files into memory before the simulation loop
+  const preT = Date.now();
+  const preloaded = _preloadSymbolBars(symbol, days, timeframes);
+  console.log(`[BT-SYM] ${symbol}: bars pre-loaded in ${Date.now() - preT}ms`);
+
+  // 1-trade-at-a-time: track last exit timestamp for this symbol
+  let lastExitTs = 0;
+
+  // 60-min zone_rejection cooldown (cross-TF, keyed by date+direction)
+  const lastZoneRejTs = {};
+
+  for (const tf of timeframes) {
+    const tfDir = path.join(DATA_DIR, 'futures', symbol, tf);
+    if (!fs.existsSync(tfDir)) {
+      console.log(`  [SKIP] No ${tf} data for ${symbol}`);
+      continue;
+    }
+
+    const logEvery = Math.max(1, Math.floor(days.length / 4));
+    console.log(`[BT-SYM] ${symbol}/${tf}: starting simulation (${days.length} days)`);
+
+    for (let di = 0; di < days.length; di++) {
+      if (di > 0 && di % logEvery === 0) {
+        console.log(`[BT-SYM] ${symbol}/${tf}: ${di}/${days.length} days (${Math.round(di/days.length*100)}%) — ${trades.length} trades so far`);
+      }
+      const date = days[di];
+      const todayBars = preloaded[tf][date];
+      if (!todayBars || todayBars.length < 20) continue;
+
+      const hp = useHP ? loadHPSnapshot(symbol, date) : null;
+
+      const contextBars = [];
+      for (let ci = Math.max(0, di - 2); ci < di; ci++) {
+        const cb = preloaded[tf][days[ci]];
+        if (cb) contextBars.push(...cb);
+      }
+
+      const fut1mBars = [];
+      for (let fdi = di; fdi < Math.min(di + 3, days.length); fdi++) {
+        const b = preloaded['1m'][days[fdi]];
+        if (b) fut1mBars.push(...b);
+      }
+
+      const today1mBars = preloaded['1m'][date] || [];
+      const forceCloseTs = _forceCloseTs(date, today1mBars);
+      const seenSetupKeys = new Set();
+      const barDur = TF_SECONDS[tf] ?? 60;
+
+      for (let i = 20; i < todayBars.length; i++) {
+        const detectTs   = todayBars[i].ts;
+        const barCloseTs = detectTs + barDur;
+
+        if (_inCloseWindow(barCloseTs)) continue;
+
+        const visibleBars = [...contextBars, ...todayBars.slice(0, i + 1)];
+        totalBarsProcessed++;
+
+        let indicators;
+        try {
+          indicators = computeIndicators(visibleBars, { symbol, swingLookback: 10, impulseThreshold: 1.5 });
+        } catch { continue; }
+
+        let regime;
+        try { regime = classifyRegime(indicators); } catch { continue; }
+
+        const currentPrice = visibleBars[visibleBars.length - 1]?.close ?? 0;
+        const mktCtxBase = useHP && hp ? buildMarketContextFromHP(hp, { ...indicators, close: currentPrice }) : null;
+
+        const breadth = breadthByDate[date] ?? null;
+        const mktCtxBuilt = (mktCtxBase || breadth)
+          ? { ...(mktCtxBase || _minimalContext()), breadth }
+          : null;
+        // Inject 5-day DXY direction so applyMarketContext loss gates use the
+        // same signal as the dxyDirection field on trade records.
+        const mktCtx = mktCtxBuilt
+          ? { ...mktCtxBuilt, dxy: { ...(mktCtxBuilt.dxy || {}), direction: computeDxyDirection(dxyData, date) } }
+          : null;
+
+        const ddBandsHist = computeDDBands(visibleBars, symbol, spanMargin);
+
+        let setups;
+        try {
+          setups = detectSetups(visibleBars, indicators, regime, {
+            symbol, marketContext: mktCtx, ddBands: ddBandsHist,
+          });
+        } catch { continue; }
+        if (!setups?.length) continue;
+
+        for (const setup of setups) {
+          if (setup.confidence < minConfidence) continue;
+          if (!setupTypes.includes(setup.type)) continue;
+          if (setup.time !== detectTs) continue;
+
+          const atr = indicators?.atr ?? 1;
+          const setupKey = setup.type === 'or_breakout'
+            ? `${symbol}-${date}-or_breakout-${setup.direction}`
+            : setup.type === 'zone_rejection'
+              ? `${symbol}-${tf}-zone_rejection-${setup.direction}-${Math.round((setup.zoneLevel ?? 0) / atr * 4)}`
+              : `${symbol}-${tf}-${setup.time}-${setup.type}-${setup.direction}`;
+          if (seenSetupKeys.has(setupKey)) continue;
+          seenSetupKeys.add(setupKey);
+
+          if (setup.type === 'zone_rejection') {
+            const ckKey = `${date}-${setup.direction}`;
+            const lastTs = lastZoneRejTs[ckKey] ?? 0;
+            if (barCloseTs < lastTs + 3600) continue;
+          }
+
+          const { hour: etHourCheck } = _etHourMin(barCloseTs);
+          if (excludeHours.length > 0 && excludeHours.includes(etHourCheck)) continue;
+          if (setup.type === 'or_breakout' && tf !== '5m') continue;
+          if (barCloseTs <= lastExitTs) continue;
+
+          const futBarsFrom = fut1mBars.filter(b => b.ts >= barCloseTs);
+          const resolution = resolveOutcome(setup, futBarsFrom, maxHoldBars, pointVal, numContracts, forceCloseTs);
+
+          if (resolution.exitTs) lastExitTs = resolution.exitTs;
+
+          const grossPnl = resolution.pnl ?? 0;
+          const symFee   = (INSTRUMENTS[symbol]?.feePerRT ?? feePerRT) * numContracts;
+          const netPnl   = grossPnl - symFee;
+
+          let hpProximity = 'none';
+          if (mktCtx?.hp?.nearestDistAtr != null) {
+            const d = mktCtx.hp.nearestDistAtr;
+            if (d < 0.3) hpProximity = 'at_level';
+            else if (d < 1.0) hpProximity = 'near_level';
+          }
+
+          const vixLevel = vixData[date] ?? null;
+          const vixRegime = !vixLevel        ? 'normal'
+            : vixLevel < 15                  ? 'low'
+            : vixLevel < 25                  ? 'normal'
+            : vixLevel < 35                  ? 'elevated'
+            :                                  'crisis';
+          const dxyClose     = dxyData[date] ?? null;
+          const dxyDirection = computeDxyDirection(dxyData, date);
+
+          const trade = {
+            id:              `${symbol}-${date}-${tf}-${i}-${setup.type}`,
+            symbol, date,
+            timeframe:       tf,
+            setupType:       setup.type,
+            direction:       setup.direction,
+            entryTs:         barCloseTs,
+            entry:           setup.entry,
+            sl:              setup.sl,
+            tp:              setup.tp,
+            confidence:      setup.confidence,
+            scoreBreakdown:  setup.scoreBreakdown,
+            outcome:         resolution.outcome,
+            exitTs:          resolution.exitTs,
+            exitPrice:       resolution.exitPrice,
+            barsToOutcome:   resolution.barsToOutcome,
+            grossPnl:        +grossPnl.toFixed(2),
+            fee:             +symFee.toFixed(2),
+            netPnl:          +netPnl.toFixed(2),
+            hour:            etHourCheck,
+            hpProximity,
+            resilienceLabel: mktCtxBase?.hp?.resilienceLabel ?? null,
+            dexBias:         mktCtxBase?.hp?.dexBias ?? null,
+            ddBandLabel:     setup.ddBandLabel || 'no_data',
+            ddBandScore:     setup.scoreBreakdown?.ddBand || 0,
+            vixRegime, vixLevel, dxyDirection, dxyClose,
+            equityBreadth:       breadth?.equityBreadth        ?? null,
+            bondRegime:          breadth?.bondRegime            ?? null,
+            copperRegime:        breadth?.copperRegime          ?? null,
+            dollarRegime:        breadth?.dollarRegime          ?? null,
+            riskAppetite:        breadth?.riskAppetite          ?? null,
+            riskAppetiteScore:   breadth?.riskAppetiteScore     ?? null,
+          };
+
+          trades.push(trade);
+
+          if (setup.type === 'zone_rejection') {
+            lastZoneRejTs[`${date}-${trade.direction}`] = barCloseTs;
+          }
+          if (!equityMap[date]) equityMap[date] = 0;
+          equityMap[date] += netPnl;
+        }
+      }
+    }
+  }
+
+  console.log(`[BT-SYM] ${symbol}: done — ${trades.length} trades`);
+  return { trades, equityMap, totalBarsProcessed };
+}
+
 // ─── Multi-timeframe backtest wrapper ─────────────────────────────────────────
 
 /**
@@ -711,6 +961,7 @@ async function runBacktestMTF(config, onProgress = null) {
     feePerRT      = 4,
     excludeHours  = [],   // ET hours (0-23) to skip — empty = trade all hours
     spanMargin    = {},   // CME SPAN margins — { MNQ:1320, MES:660, ... }
+    slMidpoint    = false, // ZR-D: use midpoint SL for zone_rejection (research only)
   } = config;
 
   const alerts = [];
@@ -731,9 +982,9 @@ async function runBacktestMTF(config, onProgress = null) {
   if (Object.keys(vixData).length > 0) console.log(`[BT-MTF] Loaded vix.json: ${Object.keys(vixData).length} dates`);
   if (Object.keys(dxyData).length > 0) console.log(`[BT-MTF] Loaded dxy.json: ${Object.keys(dxyData).length} dates`);
 
-  // Pre-compute market breadth for all dates — uses 16-symbol daily closes (no lookahead)
+  // Pre-compute market breadth for all dates — async with cache hit fast path
   if (onProgress) onProgress({ phase: 'breadth', pct: 5, message: 'Pre-computing market breadth...' });
-  const breadthByDate = _precomputeBreadth(startDate, endDate);
+  const breadthByDate = await _precomputeBreadthAsync(startDate, endDate);
   if (onProgress) onProgress({ phase: 'processing', pct: 15, message: 'Processing bars...' });
 
   // Total symbol-TF units for progress reporting
@@ -751,6 +1002,11 @@ async function runBacktestMTF(config, onProgress = null) {
 
     console.log(`[BT-MTF] ${symbol}: ${days.length} days × ${timeframes.join('/')} TFs`);
 
+    // Pre-load all bar files for this symbol into memory — eliminates per-bar disk I/O
+    const preT = Date.now();
+    const preloaded = _preloadSymbolBars(symbol, days, timeframes);
+    console.log(`[BT-MTF] ${symbol}: bars pre-loaded in ${Date.now() - preT}ms`);
+
     // 60-min cooldown tracker for zone_rejection — shared across all TFs for this symbol.
     // Keyed by 'date-direction' so it resets per session and is cross-TF aware.
     const lastZoneRejTs = {}; // { 'YYYY-MM-DD-bullish': ts, ... }
@@ -764,27 +1020,27 @@ async function runBacktestMTF(config, onProgress = null) {
 
       for (let di = 0; di < days.length; di++) {
         const date = days[di];
-        const todayBars = loadDailyBars(symbol, date, tf);
+        const todayBars = preloaded[tf][date];
         if (!todayBars || todayBars.length < 20) continue;
 
         const hp = useHP ? loadHPSnapshot(symbol, date) : null;
 
-        // Build context: last 2 prior days (needed for PDH/PDL, EMA warmup, VWAP)
+        // Build context: last 2 prior days (already in memory)
         const contextBars = [];
         for (let ci = Math.max(0, di - 2); ci < di; ci++) {
-          const cb = loadDailyBars(symbol, days[ci], tf);
-          contextBars.push(...cb);
+          const cb = preloaded[tf][days[ci]];
+          if (cb) contextBars.push(...cb);
         }
 
-        // Load 1m bars for forward outcome resolution
+        // Future 1m bars for outcome resolution (already in memory)
         const fut1mBars = [];
         for (let fdi = di; fdi < Math.min(di + 3, days.length); fdi++) {
-          const b = loadDailyBars(symbol, days[fdi], '1m');
+          const b = preloaded['1m'][days[fdi]];
           if (b) fut1mBars.push(...b);
         }
 
         // Force-close timestamp: last 1m bar at or before 16:45 ET on this date
-        const today1mBars = loadDailyBars(symbol, date, '1m');
+        const today1mBars = preloaded['1m'][date] || [];
         const forceCloseTs = _forceCloseTs(date, today1mBars);
 
         const seenSetupKeys = new Set();
@@ -818,8 +1074,13 @@ async function runBacktestMTF(config, onProgress = null) {
 
           // Inject market breadth into context (breadthByDate is pre-computed, no lookahead)
           const breadth = breadthByDate[date] ?? null;
-          const mktCtx = (mktCtxBase || breadth)
+          const mktCtxBuilt = (mktCtxBase || breadth)
             ? { ...(mktCtxBase || _minimalContext()), breadth }
+            : null;
+          // Inject 5-day DXY direction so applyMarketContext loss gates use the
+          // same signal as the dxyDirection field on trade records.
+          const mktCtx = mktCtxBuilt
+            ? { ...mktCtxBuilt, dxy: { ...(mktCtxBuilt.dxy || {}), direction: computeDxyDirection(dxyData, date) } }
             : null;
 
           // Compute DD Bands from visible bars (no lookahead — same slice seen by indicators)
@@ -828,7 +1089,7 @@ async function runBacktestMTF(config, onProgress = null) {
           let setups;
           try {
             setups = detectSetups(visibleBars, indicators, regime, {
-              symbol, marketContext: mktCtx, ddBands: ddBandsHist,
+              symbol, marketContext: mktCtx, ddBands: ddBandsHist, slMidpoint,
             });
           } catch { continue; }
           if (!setups?.length) continue;
@@ -885,7 +1146,8 @@ async function runBacktestMTF(config, onProgress = null) {
             if (resolution.exitTs) lastExitTs[symbol] = resolution.exitTs;
 
             const grossPnl = resolution.pnl ?? 0;
-            const netPnl   = grossPnl - feePerRT;
+            const symFee   = (INSTRUMENTS[symbol]?.feePerRT ?? feePerRT) * numContracts;
+            const netPnl   = grossPnl - symFee;
             const etHour   = etHourCheck;
 
             let hpProximity = 'none';
@@ -922,7 +1184,7 @@ async function runBacktestMTF(config, onProgress = null) {
               exitPrice:      resolution.exitPrice,
               barsToOutcome:  resolution.barsToOutcome,
               grossPnl:       +grossPnl.toFixed(2),
-              fee:            feePerRT,
+              fee:            +symFee.toFixed(2),
               netPnl:         +netPnl.toFixed(2),
               hour:           etHour,
               hpProximity,
@@ -1136,6 +1398,8 @@ function getAvailableDateRange() {
 module.exports = {
   runBacktest,
   runBacktestMTF,
+  runBacktestSymbolMTF,
+  computeStats,
   launchBacktest,
   getJob,
   getJobResults,

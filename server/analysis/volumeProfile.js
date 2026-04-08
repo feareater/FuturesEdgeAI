@@ -3,8 +3,11 @@
 // RTH session: 09:30–16:00 ET = 13:30–20:00 UTC.
 // Bucket granularity = 5 × instrument tick size.
 
-// Tick sizes for each instrument
-const TICK_SIZE = { MNQ: 0.25, MES: 0.25, MGC: 0.10, MCL: 0.01 };
+// Tick sizes — sourced from instruments.js (single source of truth)
+const { INSTRUMENTS } = require('../data/instruments');
+const TICK_SIZE = Object.fromEntries(
+  Object.entries(INSTRUMENTS).map(([s, m]) => [s, m.tickSize])
+);
 const BUCKET_TICKS = 5; // buckets are 5 ticks wide
 
 // RTH session UTC hours

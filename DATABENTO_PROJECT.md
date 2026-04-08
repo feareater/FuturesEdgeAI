@@ -32,6 +32,7 @@ These tracks are fully parallel — they touch different files and have zero cod
 | A4 | Historical | HP recompute over full date range | ✅ **Done** | Phase 1f complete: ~1736 HP snapshots per ETF (2018-09-24 → 2026-04-01), written to options/{etf}/computed/. USO: 1733, all others: 1736. |
 | A5 | Historical | Full backtest run, validate edge across 12m | ✅ **Done** | Final run (or_breakout+pdh, VIX+DXY active): **Net +$233,540, PF 1.69, 9,679 trades**. or_breakout: Net +$248K (5m only); pdh: Net -$14.6K. VIX: edge holds across all regimes (strongest in normal: +$110K). DXY: no meaningful filter (rising=+$103K, falling=+$97K). zone_rejection disabled (R:R inverted). OR breakout 5m-only enforced by engine guard. |
 | A6 | Historical | Market breadth scoring from all 16 symbols — Phase V | ✅ **Done** | marketBreadth.js, breadth in applyMarketContext (±15 pts), trade record fields, Optimize Market Breadth + Inter-market sub-tabs. A5 re-run with breadth active: **Net +$238,040, WR 33.9%, PF 1.584** — +$4,500 vs baseline, MaxDD 9% lower. riskAppetite=neutral best WR (37.2%). dollarRegime inversion already correct in v12.8. |
+| B6 | Live | OPRA live TCP feed — real-time OI for HP/GEX/DEX | ✅ **Done** | opraLive.js (OPRA.PILLAR, statistics schema, QQQ+SPY); feature flag `liveOpra`; CBOE fallback; Phase A schema check at startup. **Activated 2026-04-07:** fixed stype_in (underlying→parent), symbol format (QQQ→QQQ.OPT), OCC parser whitespace. Confirmed connected + stable. |
 | C  | Validation | Compare live WR vs backtest WR per setup | ⬜ To do | Depends on A5 + B5 + 30 days live |
 
 **Status key:** ⬜ To do · 🔵 In progress · ✅ Done · 🔴 Blocked · ⏸ Paused
@@ -105,6 +106,25 @@ DATABENTO_API_KEY=your_key_here
 **Settings cache:** `_isLiveMode()` re-reads `settings.json` at most every 5s so hot-toggle via `POST /api/features` takes effect within one poll cycle without a restart.
 
 **`/api/datastatus`:** Returns `{source, wsConnected, lagSeconds, lastBarTime, lastBarTimes, symbols}`. In seed mode returns `source:'seed'`. In live mode delegates to `getLiveFeedStatus()` from `databento.js`.
+
+### B6 — Live bar persistence (v13.9)
+
+`server/data/liveArchive.js` — new module; `writeLiveCandleToDisk(symbol, candle)` is called
+from `_onLiveCandle()` in `server/index.js` on every completed 1m bar.
+
+- **Path:** `data/historical/futures/{SYMBOL}/1m/{YYYY-MM-DD}.json`
+- **Format:** flat JSON array of `{ ts, open, high, low, close, volume }` — identical to
+  historical pipeline output; `ts` mapped from live candle's `time` field.
+- **Append-only:** reads file → checks last entry timestamp → appends if new → writes back.
+  Directory created with `fs.mkdir({ recursive: true })` on first write per symbol/date.
+- **Non-blocking:** all I/O via `fs.promises`; errors caught/logged and never bubble up.
+- **Only 1m bars persisted.** Higher-TF files (5m/15m/30m) are not written at runtime —
+  run `node scripts/precomputeTimeframes.js` to aggregate 1m→5m/15m/30m when needed for backtest.
+
+**Maintenance:** `scripts/pruneOldLiveBars.js` removes files older than 90 days (configurable
+via `--days N`). Use `--dry-run` to preview. Run monthly to prevent unbounded growth.
+
+**API:** `GET /api/livestats` → `{ liveBarCount: { MNQ: N, … }, oldestBar, newestBar, diskMB }`
 
 ### B3 — Implementation
 
@@ -532,5 +552,27 @@ Merge each feature branch to main only after its acceptance criteria are met and
 
 ---
 
-*Last updated: 2026-04-04*
-*A1–A6 complete. B1–B5 complete. Full pipeline (1b→1g) operational. Final A5 (breadth active): Net +$238K, WR 33.9%, PF 1.584, 9,286 trades. or_breakout+pdh_breakout only, zone_rejection disabled. Phase V (marketBreadth.js, 16 instruments) complete. B5: checkLiveOutcomes, alertDedup, pushManager all wired. Next: collect 30 days of live forward-test data, then proceed to C (validation).*
+---
+
+## Implementation notes (B6 — OPRA live feed)
+
+### B6 — Key findings
+
+**Separate TCP connection:** OPRA.PILLAR uses the same CRAM auth protocol as GLBX.MDP3 but requires a separate TCP connection to its own gateway (`opra-pillar.lsg.databento.com:13000`).  The dataset field in the auth message changes to `OPRA.PILLAR`.
+
+**Schema:** `statistics` via `stype_in=parent` with symbols `QQQ.OPT,SPY.OPT`.  This delivers per-contract open interest (StatMsg, rtype=24, stat_type=7) and optionally settlement prices.  Greeks (delta/gamma) may or may not be present depending on subscription tier — the handler accepts them if present, ignores if absent.
+
+**Symbol map (rtype=22):** `stype_out_symbol` on the mapping record is the OCC option ticker in padded format (e.g., `"QQQ   261218P00239780"` — 6-char padded underlying).  `_parseOcc()` strips whitespace before parsing to extract underlying, expiry, type, and strike.
+
+**Subscription format (corrected 2026-04-07):** The Databento TCP Live API does NOT support `stype_in=underlying`.  Use `stype_in=parent` with `ROOT.OPT` notation (e.g., `QQQ.OPT`).  Original code used `stype_in=underlying` with bare symbols, which the server rejected with `"couldn't convert underlying to dbn::enums::SType"`.
+
+**Phase A schema check:** `checkOpraSchemas()` calls `GET /v0/metadata.list_schemas?dataset=OPRA.PILLAR` via REST at startup and logs the result.  This tells us which schemas are available under the current subscription before attempting the TCP connection.
+
+**Feature flag:** `features.liveOpra=true` (activated 2026-04-07).  Toggle with `POST /api/features { "liveOpra": true|false }` (requires restart to start/stop TCP connection).
+
+**CBOE fallback:** If OPRA TCP fails, loses connection, or has no data yet, `getOptionsData()` silently falls through to the CBOE delayed path.  Zero risk to existing behavior.
+
+---
+
+*Last updated: 2026-04-06*
+*A1–A6 complete. B1–B6 complete. Full pipeline (1b→1g) operational. Final A5 (breadth active): Net +$238K, WR 33.9%, PF 1.584, 9,286 trades. or_breakout+pdh_breakout only, zone_rejection disabled. B6: OPRA live TCP feed (opraLive.js), dual-source options.js, liveOpra feature flag. Next: enable liveOpra, verify strikeCount>0, collect 30 days live data, proceed to C (validation).*

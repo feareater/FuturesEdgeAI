@@ -189,10 +189,45 @@ function updateAlertOutcome(alertKey, outcome, exitPrice, outcomeTime) {
   }
 }
 
+// ── Forward-test trade log ───────────────────────────────────────────────────
+
+const FWD_TRADES_FILE = path.join(LOG_DIR, 'forward_trades.json');
+
+/**
+ * Load forward-test trades from disk.
+ * Returns [] if the file does not exist or cannot be parsed.
+ */
+function loadForwardTrades() {
+  try {
+    if (!fs.existsSync(FWD_TRADES_FILE)) return [];
+    return JSON.parse(fs.readFileSync(FWD_TRADES_FILE, 'utf8'));
+  } catch (err) {
+    console.error('[log] loadForwardTrades failed:', err.message);
+    return [];
+  }
+}
+
+/**
+ * Append a resolved forward-test trade to disk.
+ * Dedup by alertKey to prevent double-writes on restart.
+ */
+function appendForwardTrade(trade) {
+  try {
+    _ensureDir();
+    const trades = loadForwardTrades();
+    if (trades.some(t => t.alertKey === trade.alertKey)) return;
+    trades.push(trade);
+    fs.writeFileSync(FWD_TRADES_FILE, JSON.stringify(trades, null, 2));
+  } catch (err) {
+    console.error('[log] appendForwardTrade failed:', err.message);
+  }
+}
+
 module.exports = {
   saveAlertCache, loadAlertCache,
   saveCommentaryCache, loadCommentaryCache,
   saveTradeLog, loadTradeLog,
   loadArchive, appendToArchive, updateArchiveOutcome,
   updateAlertOutcome,
+  loadForwardTrades, appendForwardTrade,
 };

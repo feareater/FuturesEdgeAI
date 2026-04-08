@@ -22,6 +22,8 @@
     correlationHeatmap: true,
     cvd:                true,
     optionsLevels:      true,
+    hpMonthly:          true,
+    hpQuarterly:        true,
     ddBands:            true,
   };
 

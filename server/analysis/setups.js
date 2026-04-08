@@ -28,7 +28,8 @@ const BOS_QUAL_BONUS = 15;          // confidence pts added to the qualifying zo
 //   MGC → 1:1 (tighter ATR range; ★ $2,856 PF 4.02 on 30d backtest)
 //   MES → 2:1 (equity index micro, same breakout behavior as MNQ — pending backtest)
 //   MCL → 1.5:1 (crude oil, wider ATR than gold — pending backtest)
-const PDH_RR = { MNQ: 2.0, MGC: 1.0, MES: 2.0, MCL: 1.5, BTC: 2.0, ETH: 2.0, XRP: 2.0, XLM: 2.0, SIL: 1.5 };
+const PDH_RR = { MNQ: 2.0, MGC: 1.0, MES: 2.0, MCL: 1.5, BTC: 2.0, ETH: 2.0, XRP: 2.0, XLM: 2.0, SIL: 1.5,
+                 M2K: 2.0, MYM: 2.0, MHG: 1.5 };
 
 /**
  * Detect trade setups in the candle history.
@@ -64,7 +65,8 @@ function detectSetups(candles, indicators, regime, opts = {}) {
   const isCrypto   = CRYPTO_SYMBOLS.has(symbol);
   const volume20MA = _volumeMA(scanCandles, 20);
   const corrContext = opts.correlationMatrix ? _buildCorrContext(symbol, opts.correlationMatrix) : null;
-  const extras     = { vwapValue, pocValue, isCrypto, symbol, volume20MA, corrContext };
+  const slMidpoint = opts.slMidpoint || false;
+  const extras     = { vwapValue, pocValue, isCrypto, symbol, volume20MA, corrContext, slMidpoint, marketContext: opts.marketContext };
 
   const pdhSetups  = _pdhBreakout(scanCandles, candles, pdh, pdl, atrCurrent, regime, fvgs, orderBlocks, symbol, extras);
 
@@ -312,6 +314,9 @@ function _zoneRejection(scanCandles, allCandles, allSwingHighs, allSwingLows, at
   const seen   = new Set();
   const BUFFER = atrCurrent * 0.2;
 
+  // ZR-B: Build candle lookup for zone depth measurement (swing-forming candle range)
+  const _candleByTime = new Map(allCandles.map(c => [c.time, c]));
+
   for (const c of scanCandles) {
     const totalRange = c.high - c.low;
     if (totalRange < atrCurrent * 0.3) continue;
@@ -328,11 +333,17 @@ function _zoneRejection(scanCandles, allCandles, allSwingHighs, allSwingLows, at
       const wickRatio = upperWick / totalRange;
       if (wickRatio < 0.45) continue;
 
+      // ZR-B: Skip shallow zones — depth < 0.5×ATR14 means insufficient price structure
+      // for a clean rejection. Thin zones get sliced through rather than rejected.
+      const _shCandle = _candleByTime.get(sh.time);
+      if (_shCandle && (_shCandle.high - _shCandle.low) < 0.5 * atrCurrent) continue;
+
       const zoneKey = `supply_${sh.value.toFixed(2)}`;
       if (!seen.has(zoneKey)) {
         seen.add(zoneKey);
         const entry    = c.close;
-        const sl       = sh.value + atrCurrent * 0.30;
+        const slFar    = sh.value + atrCurrent * 0.30;
+        const sl       = extras.slMidpoint ? (c.close + slFar) / 2 : slFar;
         const { tp }   = _tp(entry, sl, 'bearish', rrRatio);
         const iofBonus = iofConfluenceScore(entry, 'bearish', fvgs, orderBlocks, atrCurrent);
         const { score: conf, breakdown: scoreBreakdown } = _zoneConf({
@@ -363,11 +374,17 @@ function _zoneRejection(scanCandles, allCandles, allSwingHighs, allSwingLows, at
       const wickRatio = lowerWick / totalRange;
       if (wickRatio < 0.45) continue;
 
+      // ZR-B: Skip shallow zones — depth < 0.5×ATR14 means insufficient price structure
+      // for a clean rejection. Thin zones get sliced through rather than rejected.
+      const _slCandle = _candleByTime.get(sl_node.time);
+      if (_slCandle && (_slCandle.high - _slCandle.low) < 0.5 * atrCurrent) continue;
+
       const zoneKey = `demand_${sl_node.value.toFixed(2)}`;
       if (!seen.has(zoneKey)) {
         seen.add(zoneKey);
         const entry    = c.close;
-        const sl       = sl_node.value - atrCurrent * 0.30;
+        const slFar    = sl_node.value - atrCurrent * 0.30;
+        const sl       = extras.slMidpoint ? (c.close + slFar) / 2 : slFar;
         const { tp }   = _tp(entry, sl, 'bullish', rrRatio);
         const iofBonus = iofConfluenceScore(entry, 'bullish', fvgs, orderBlocks, atrCurrent);
         const { score: conf, breakdown: scoreBreakdown } = _zoneConf({
@@ -615,6 +632,12 @@ function _structureConf({ breakSize, isCHoCH, regime, direction, iofBonus }) {
 function _pdhBreakout(scanCandles, allCandles, pdh, pdl, atrCurrent, regime, fvgs, orderBlocks, symbol, extras = {}) {
   if (!pdh || !pdl) return [];
 
+  // Phase 2 Filter 2: PDH breakout disabled for MNQ, MES, MCL
+  // Evidence: PDH on MNQ/MES/MCL combined PF 0.954, net -$1,451 over 8 years.
+  // MNQ PF 0.980, MES PF 0.858, MCL PF 0.886 — all below 1.0.
+  // MGC PDH remains enabled (WR 54.7%, PF 1.225).
+  if (symbol === 'MNQ' || symbol === 'MES' || symbol === 'MCL') return [];
+
   const found = [];
   const seen  = new Set();
   const rrPDH = PDH_RR[symbol] ?? 1.0;
@@ -627,6 +650,14 @@ function _pdhBreakout(scanCandles, allCandles, pdh, pdl, atrCurrent, regime, fvg
     // Crypto trades 24/7 — skip the RTH gate entirely for BTC/ETH/XRP.
     const utcHour = Math.floor((c.time % 86400) / 3600);
     if (!CRYPTO_SYMBOLS.has(symbol) && (utcHour < 13 || utcHour >= 22)) continue;
+
+    // Phase 2 Filter 4: MGC PDH restricted to hours 8 and 10 ET only
+    // Evidence: MGC PDH hour 9 = PF 0.983 (n=189, breakeven drag).
+    // Hour 11+ = PF 0.700, net -$982 (n=43). Keep hours 8 and 10 (PF 1.422 / 1.808).
+    if (symbol === 'MGC') {
+      const etH = _etHour(c.time);
+      if (etH === 9 || etH >= 11) continue;
+    }
 
     // ── Bullish breakout: closes above PDH, prior close was at or below PDH ──
     if (c.close > pdh && prev.close <= pdh) {
@@ -912,12 +943,33 @@ function _orBreakout(scanCandles, allCandles, openingRange, atrCurrent, regime, 
   const { high: orHigh, low: orLow } = openingRange;
   if (!orHigh || !orLow || orHigh <= orLow) return [];
 
+  // Phase 2 Filter 3: OR breakout + DEX bias neutral → skip entirely
+  // Evidence: orb + dexBias=neutral → PF 1.164 (n=286). Directional options flow
+  // is required to confirm OR breakout momentum; neutral DEX = no confirmation.
+  // null/undefined dexBias is NOT gated — only the explicit 'neutral' string.
+  const mktCtx = extras.marketContext;
+  const dexBias = mktCtx?.options?.dexBias;
+  if (dexBias === 'neutral') return [];
+
+  // Pre-compute DXY direction for Filter 1 (used inside loop)
+  const dxyDir = mktCtx?.dxy?.direction
+    ?? mktCtx?.breadth?.dollarRegime
+    ?? 'flat';
+
   const found = [];
   const seen  = new Set();
 
   for (const c of scanCandles) {
     const h = _utcHour(c.time);
     if (h < OR_POST_START_UTC || h >= OR_RTH_END_UTC) continue;
+
+    // Phase 2 Filter 1: OR breakout + DXY rising + hour >= 11 ET → skip
+    // Evidence: orb + dxy=rising + hour 11+ → WR 20.7%, PF 0.965 (n=174).
+    // Hour 9 with dxy=rising is still PF 2.113 — gate applies from hour 11 only.
+    if (dxyDir === 'rising') {
+      const etH = _etHour(c.time);
+      if (etH >= 11) continue;
+    }
 
     // Bullish breakout: first close above OR high
     if (c.close > orHigh && !seen.has(`bull_or_${c.time}`)) {
@@ -972,7 +1024,7 @@ function _orBreakout(scanCandles, allCandles, openingRange, atrCurrent, regime, 
 }
 
 function _orConf({ breakMag, regime, direction, iofBonus,
-                   candleTime, isCrypto, corrContext, symbol }) {
+                   candleTime, isCrypto, corrContext, symbol, marketContext }) {
   let score = 35;
   const bd  = { base: 35, break: 0, regime: 0, align: 0, iof: iofBonus || 0 };
 
@@ -1000,12 +1052,48 @@ function _orConf({ breakMag, regime, direction, iofBonus,
     if (corrDelta !== 0) { score += corrDelta; bd.corr = corrDelta; }
   }
 
+  // Phase 2 Filter 5: DXY rising base penalty for hours 9-10 ET
+  // Evidence: orb + dxy=rising PF 1.733 vs baseline PF 2.064 (gap of 0.33 PF).
+  // Hour 9 still profitable (PF 2.113) so hard gate would remove good trades.
+  // Stacks with -20 in applyMarketContext; this is a base-score adjustment.
+  // Hours 11+ are hard-gated by Filter 1 — this covers the early-session residual.
+  if (candleTime && marketContext) {
+    const dxyD = marketContext.dxy?.direction ?? marketContext.breadth?.dollarRegime ?? 'flat';
+    if (dxyD === 'rising') {
+      const etH = _etHour(candleTime);
+      if (etH <= 10) { score -= 8; bd.dxyRising = -8; }
+    }
+  }
+
   return { score: Math.round(Math.max(0, Math.min(100, score))), breakdown: bd };
 }
 
 function _utcHour(unixSec) {
   const d = new Date(unixSec * 1000);
   return d.getUTCHours() + d.getUTCMinutes() / 60;
+}
+
+// DST-aware Eastern Time hour from Unix seconds (mirrors engine.js logic)
+function _nthSunday(year, month, n) {
+  const d = new Date(Date.UTC(year, month, 1));
+  const dayOfWeek = d.getUTCDay();
+  const firstSunday = dayOfWeek === 0 ? 1 : 8 - dayOfWeek;
+  const day = firstSunday + (n - 1) * 7;
+  return Date.UTC(year, month, day) / 1000;
+}
+
+function _isDST(tsSeconds) {
+  const d = new Date(tsSeconds * 1000);
+  const y = d.getUTCFullYear();
+  const dstStart = _nthSunday(y, 2, 2) + 7 * 3600;  // 2nd Sunday March, 7am UTC
+  const dstEnd   = _nthSunday(y, 10, 1) + 6 * 3600;  // 1st Sunday November, 6am UTC
+  return tsSeconds >= dstStart && tsSeconds < dstEnd;
+}
+
+function _etHour(tsSeconds) {
+  const offset = _isDST(tsSeconds) ? 4 : 5;
+  const etMs = tsSeconds * 1000 - offset * 3600000;
+  return new Date(etMs).getUTCHours();
 }
 
 // ---------------------------------------------------------------------------
@@ -1217,11 +1305,40 @@ function applyMarketContext(baseScore, setup, marketContext) {
     };
   }
 
+  // ── Phase 2 loss-analysis gates (additive penalties, empirically derived) ──
+  // Source: A5 full-period backtest, worst-500-loser analysis (2026-04-06)
+  // These are straight confidence point deductions, additive with all other scoring.
+  let lossGatePts = 0;
+
+  // Gate 1 — Rising DXY + OR breakout: accounts for ~49% of worst 500 losses.
+  // A strengthening dollar reduces breakout momentum across all 4 symbols/directions.
+  // In backtest mode: engine.js now injects computeDxyDirection() (5-day rolling avg,
+  // same as the dxyDirection field on trade records) into mktCtx.dxy.direction.
+  // In live mode: comes from _buildDxyContext(). Fall back to breadth.dollarRegime
+  // (M6E EUR/USD proxy, same direction semantics) if dxy.direction is unavailable.
+  const dxyDir = marketContext.dxy?.direction
+    ?? marketContext.breadth?.dollarRegime
+    ?? 'flat';
+  if (setup.type === 'or_breakout' && dxyDir === 'rising') {
+    lossGatePts -= 20;
+  }
+
+  // Gate 2 — Risk-off + equity breadth collapse: broad risk-off headwind.
+  // When riskAppetite=off AND equityBreadth ≤ 1 (≤ 1 of 4 equity indices bullish),
+  // breakout setups face a structural headwind regardless of local price action.
+  const brd = marketContext.breadth;
+  if (brd?.riskAppetite === 'off' && typeof brd.equityBreadth === 'number' && brd.equityBreadth <= 1) {
+    lossGatePts -= 15;
+  }
+
   // ── Final score ────────────────────────────────────────────────────────────
   const afterMultipliers = baseScore * combinedMult;
+  // IA3 TODO: conf 90-100 is underperforming (B8: PF 1.349 vs 70-75: PF 2.770)
+  // Possible over-weighting of certain features at high scores
+  // Investigate in IA3 calibration run before changing multipliers
   const finalScore = Math.round(
     Math.max(0, Math.min(100,
-      afterMultipliers + dexBonus + dxyBonus + freshnessDecay + breadthPts
+      afterMultipliers + dexBonus + dxyBonus + freshnessDecay + breadthPts + lossGatePts
     ))
   );
 
@@ -1235,12 +1352,16 @@ function applyMarketContext(baseScore, setup, marketContext) {
     dxyBonus,
     freshnessDecay,
     breadth:       breadthPts,
+    lossGatePts,
     breadthDetail,
     stressFlag:    marketContext.vix?.stressFlag ?? false,
     hpNearest:     marketContext.hp?.nearestLevel ?? null,
     inCorridor:    marketContext.hp?.inCorridor   ?? false,
     vixRegime:     marketContext.vix?.regime       ?? null,
+    vixLevel:      marketContext.vix?.level        ?? null,
     dxyDirection:  marketContext.dxy?.direction    ?? null,
+    resilienceLabel: rl,
+    dexBias:       marketContext.options?.dexBias  ?? 'neutral',
   };
 
   return { finalScore, contextBreakdown };

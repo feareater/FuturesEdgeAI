@@ -4,14 +4,14 @@
 > Read alongside CLAUDE.md and AI_ROADMAP.md.
 > Updated after every completed phase or significant decision.
 
-**Current version:** v14.4
-**Last updated:** 2026-04-06
+**Current version:** v14.10
+**Last updated:** 2026-04-07
 
 ---
 
 ## Project Status Summary
 
-FuturesEdge AI is a browser-based futures trading analysis dashboard that detects high-probability trade setups (or_breakout, pdh_breakout) in real time across 12 instruments (8 CME futures + 4 crypto perpetuals). The system consumes live 1-second and 1-minute market data from Databento via TCP, computes indicators and confidence scores deterministically, and presents alerts with full score breakdowns. A comprehensive backtest engine with 8 years of historical data (2018–2026) validates all configuration changes before they reach production. The system is currently in the B-series backtesting phase — paper trading has not yet started. AI analysis uses Claude API (claude-sonnet-4-6) for batch trade analysis; alert commentary is built but dormant.
+FuturesEdge AI is a browser-based futures trading analysis dashboard that detects high-probability trade setups (or_breakout, pdh_breakout) in real time across 12 instruments (8 CME futures + 4 crypto perpetuals). The system consumes live 1-second and 1-minute market data from Databento via TCP, computes indicators and confidence scores deterministically, and presents alerts with full score breakdowns. A comprehensive backtest engine with 8 years of historical data (2018–2026) validates all configuration changes before they reach production. B8 backtest passed (WR 41.8%, PF 2.229) on 2026-04-06 — paper trading is now ACTIVE on MNQ, MES, MCL. AI analysis uses Claude API (claude-sonnet-4-6) for batch trade analysis; alert commentary is active with rate limiting.
 
 ---
 
@@ -24,6 +24,7 @@ FuturesEdge AI is a browser-based futures trading analysis dashboard that detect
 - Databento historical pipeline: 16 CME symbols, 13-year scale (2018–2026), streaming zip extraction, per-symbol directory layout
 - Databento TCP live feed: CRAM auth, ohlcv-1s ticks + ohlcv-1m bars, spike filtering (>2% rejection), bar validation (5-rule sanity check), defensive copies in getCandles()
 - All 8 CME symbols on live feed: MNQ, MES, MGC, MCL, SIL, M2K, MYM, MHG
+- Correct tick/point values and per-symbol fee schedule for all 8 CME symbols; instruments.js as single source of truth; /api/instruments GET+POST; settings UI in backtest2.html (v14.8)
 - OPRA pipeline: ETF daily closes (XNYS.PILLAR), strike/OI parsing, HP computation (~1736 dates/ETF)
 - Databento OPRA live TCP feed for real-time HP/GEX/DEX/resilience (dual-source with CBOE fallback)
 - DX futures pipeline (dxy.json, 2251 dates) + realized volatility proxy (vix.json, 1767 dates)
@@ -39,6 +40,8 @@ FuturesEdge AI is a browser-based futures trading analysis dashboard that detect
 - DD Band / CME SPAN margin system: 5 confidence levels (-20 to +8 pts), chart layer, topbar widget
 - Correlation heatmap (11 instruments), relative strength (MNQ/MES ratio + Pearson)
 - Multi-TF confluence scoring (MNQ-only, capped at +15 pts)
+- CVD (Cumulative Volume Delta): estimated from OHLCV candles client-side, resets at RTH open (futures) or midnight UTC (crypto), displayed as histogram + cumulative line in sub-chart panel below main chart
+- HVN/LVN classification: volume node tagging on VP histogram — HVN (≥1.5× mean vol) as magnetic levels, LVN (≤0.4× mean, within value area) as thin zones; rendered as dotted lines under VP layer toggle
 
 ### Setup Detection & Confidence Scoring
 - Active setups: `or_breakout` (5m only), `pdh_breakout` (RTH-gated)
@@ -60,9 +63,12 @@ FuturesEdge AI is a browser-based futures trading analysis dashboard that detect
 ### A5 Baseline Results (full-period 2018–2026)
 - v12.7: 9,679 trades, WR 37.3%, PF 1.69, Net +$233,540, MaxDD $3,208
 - v12.9 (breadth active): 9,286 trades, WR 33.9%, PF 1.584, Net +$238,040, MaxDD $2,908
-- or_breakout: Net +$243K, PF ~1.86 — primary edge carrier
-- pdh_breakout: Net -$5K — marginal, not harmful
-- MNQ leads (44% of or_breakout net), followed by MGC, MES, MCL
+- **v14.10 corrected** (correct fees + pointValues): 7,401 trades, WR 34.2%, PF 1.689, Net +$640,904, MaxDD $13,533
+- or_breakout: Net +$638K, PF ~1.69 — primary edge carrier
+- pdh_breakout: Net +$3K — marginal, not harmful
+- MNQ leads ($363K), followed by MGC ($164K), MES ($68K), MCL ($46K)
+
+> All backtest results prior to v14.8 used incorrect fee formula and wrong pointValues for SIL/MHG. Results cleared and re-run on 2026-04-07. Analytical conclusions (WR/PF based) remain valid. Dollar figures updated.
 
 ### Forward-Test Infrastructure
 - B5 harness: checkLiveOutcomes in simulator.js, alertDedup.js, pushManager.js (VAPID web-push)
@@ -75,6 +81,9 @@ FuturesEdge AI is a browser-based futures trading analysis dashboard that detect
 - Stats page: 4-tab redesign (Overview / Trade Log / Prop Firms / Real Account)
 - Pine Script v6 export with baked-in QQQ options levels + DD Band lines
 - Layer toggle panel (14 individual overlays)
+- Dedicated forward-test page (forwardtest.html): 4 tabs (Summary/Trade Log/Breakdown/AI Export), global filter bar, auto-refresh (v14.9)
+- AI export prompt generator for both forward-test and backtest analysis (v14.9)
+- Runtime feature toggles: `config/settings.json` features block + `POST /api/features` hot-reload — volumeProfile, openingRange, sessionLevels, correlationHeatmap, relativeStrength, performanceStats, economicCalendar, alertReplay toggleable without server restart
 
 ### AI Integration
 - `server/ai/commentary.js`: Claude API prompt builder + caller (dormant, ready to re-enable)
@@ -87,16 +96,19 @@ FuturesEdge AI is a browser-based futures trading analysis dashboard that detect
 
 ### Track 1 — Backtesting (B-series)
 
-**Status:** B7 complete, B8 pending.
+**Status:** B8 complete — PASS. Paper trading activated 2026-04-06.
 
 **B7 finding:** No configuration meets WR >= 40% for the 4-symbol portfolio (MNQ+MES+MGC+MCL). MGC or_breakout is a structural drag at ~33% WR regardless of confidence floor.
 
-**B8 config:**
-- Symbols: MNQ, MES, MCL only (MGC excluded)
-- Setup: or_breakout, conf >= 70
-- Hours: 9–10 ET
-- Window: 24 months (2024-01-01 to present)
-- Pass criteria: WR >= 40% AND PF >= 1.5
+**B8 results (corrected 2026-04-07):** PASS — WR 41.8% (>= 40%), PF 2.229 (>= 1.5)
+- Job ID: 6420090ea27e (corrected from 8be3f8661f10)
+- 876 trades, Gross P&L $155,970, Max DD $4,967, Sharpe 5.69
+- MNQ: 278 trades, WR 39.9%, P&L $121,148
+- MES: 277 trades, WR 43.0%, P&L $18,823
+- MCL: 321 trades, WR 42.4%, P&L $16,000
+- Hour 9: WR 52.2%, Hour 10: WR 34.6%
+- Config: or_breakout, 5m, conf >= 70, hours 9–10 ET, MNQ=5/MES=2/MCL=2 contracts
+- Full results: `data/analysis/B8_corrected_6420090ea27e_results.json`
 
 **B8b — MGC isolation:**
 - Symbol: MGC only
@@ -126,16 +138,20 @@ FuturesEdge AI is a browser-based futures trading analysis dashboard that detect
 - Output: ZR analysis documents in `data/analysis/`
 - Pass criteria per variant: WR >= 45% AND PF >= 1.2
 
+Decision (2026-04-06): ZR-F is the approved production candidate. 
+No additional filters to be stacked until ZR-F is validated by 
+60+ forward-test trades. ZR-D reviewed for R:R improvement only — 
+ZR-D2/D3 composites explicitly deferred.
 ### Track 3 — Dashboard Bug Fixes
 
 **Priority:** Fix before paper trading goes live. These bugs affect live dashboard usability.
 
-| Bug | Description | Severity |
-|-----|-------------|----------|
-| MES aggregation | Aggregated candle values show unrealistic prices for MES | High — incorrect chart data |
-| Dollar values stale | Dollar/currency values remain stale after symbol switch on dashboard | Medium — confusing display |
-| Symbol load failures | Some symbols fail to load chart data intermittently | Medium — user-facing error |
-| TF selector centering | Timeframe selector buttons not properly centered in UI | Low — cosmetic |
+| Bug | Description | Severity | Status |
+|-----|-------------|----------|--------|
+| MES aggregation | Aggregated candle values show unrealistic prices for MES | High — incorrect chart data | **Fixed v14.5** — partial bar was not replaced by completed bar on window close |
+| Dollar values stale | Dollar/currency values remain stale after symbol switch on dashboard | Medium — confusing display | **Fixed v14.5** — setup overlay + predictions cleared on symbol switch |
+| Symbol load failures | Some symbols fail to load chart data intermittently | Medium — user-facing error | **Fixed v14.5** — graceful "Waiting for data" overlay + startup warnings |
+| TF selector centering | Timeframe selector buttons not properly centered in UI | Low — cosmetic | **Fixed v14.5** — justify-content:center on all screen sizes |
 
 ### Track 4 — Indicator Weight Calibration (IA-series)
 
@@ -152,22 +168,27 @@ FuturesEdge AI is a browser-based futures trading analysis dashboard that detect
 
 ---
 
-## Gated On B8 Passing (WR >= 40% + PF >= 1.5)
+## B8 Passed — Paper Trading ACTIVE (2026-04-06)
 
-### Paper Trading Activation
+### Paper Trading Status
 
-Steps to activate paper trading after B8 passes:
+Paper trading activated on **MNQ, MES, MCL** as of v14.6 (2026-04-06). MGC excluded pending B8b results.
 
-1. **Activate B5 forward-test harness** — `checkLiveOutcomes()` in `simulator.js` already built; verify it fires on every alert
-2. **Re-enable alert commentary** — uncomment `generateCommentary()` call in `server/index.js`
-3. **Add `mtfConfluence` to trade records** — currently applied upstream but not persisted per trade (prerequisite gap)
-4. **Verify all forward-test trade fields** — ensure VIX regime, DXY direction, breadth fields, DD band label all populate correctly on live alerts
+1. ~~**Activate B5 forward-test harness**~~ — `checkLiveOutcomes()` fires on every live 1m bar for all 8 CME symbols ✅
+2. ~~**Re-enable alert commentary**~~ — `generateSingle()` auto-fires after each cached alert with rate limiting ✅
+3. ~~**Add `mtfConfluence` to trade records**~~ — already present on `setup.mtfConfluence` (set in scan engine MTF confluence block) ✅
+4. ~~**Verify all forward-test trade fields**~~ — all ML Phase 3 fields confirmed present ✅:
+5. ~~**Forward-test visibility**~~ — paper trading monitor panel on dashboard + `/api/forwardtest/summary` + `/api/forwardtest/trades` routes ✅ (v14.7)
+   - ~~**Dedicated forward-test page**~~ — `forwardtest.html` with 4 tabs (Summary/Trade Log/Breakdown/AI Export), global filter bar, auto-refresh ✅ (v14.9)
+   - ~~**AI export prompt generator**~~ — structured prompt builder for both forward-test and backtest, copy/download/save to `data/analysis/` ✅ (v14.9)
+   - `vixRegime`, `vixLevel`, `dxyDirection`, `hpNearest` (proximity), `resilienceLabel`, `dexBias`, `ddBandLabel`, `equityBreadth`, `bondRegime`, `riskAppetite` — via `setup.scoreBreakdown.context`
+   - `mtfConfluence` — via `setup.mtfConfluence`
 5. **Symbols:** MNQ, MES, MCL only (MGC excluded pending B8b results)
-6. **Collect 500+ completed trades** before advancing to ML phases (n >= 30 per setup type per symbol)
+6. **Collect 500+ completed trades** before advancing to ML phases (n >= 30 per setup type per symbol) — **in progress**
 
-### Alert Commentary (Claude API)
+### Alert Commentary (Claude API) — ACTIVE
 
-Re-enable `server/ai/commentary.js` with enhanced prompt including new context fields:
+`server/ai/commentary.js` re-enabled with enhanced prompt including:
 
 - VIX regime + level
 - DXY direction
@@ -175,13 +196,11 @@ Re-enable `server/ai/commentary.js` with enhanced prompt including new context f
 - Bond regime
 - Risk appetite
 
-**Rate limits (to control API costs):**
+**Rate limits (active):**
 - Confidence >= 75% only
 - `setup.staleness === 'fresh'`
 - Not within 15 minutes of a high-impact calendar event
-- Maximum 1 commentary call per symbol per 30 minutes
-
-All commentary outputs are also written to `data/analysis/` for future reference.
+- Maximum 1 commentary call per symbol per 30 minutes (in-memory `_lastCommentaryTs` map)
 
 ---
 

@@ -5,7 +5,7 @@
 //   • Activate → delete old caches, claim clients
 //   • Fetch    → cache-first for shell assets; network-only for /api/ and /ws
 
-const CACHE_NAME = 'futuresedge-v36';
+const CACHE_NAME = 'futuresedge-v37';
 
 // All assets required to render the UI — these are cached at install time.
 // API calls are intentionally excluded: trading data must always be fresh.
@@ -20,6 +20,7 @@ const SHELL_ASSETS = [
   '/scanner.html',
   '/propfirms.html',
   '/tradingaccount.html',
+  '/forwardtest.html',
   '/css/dashboard.css',
   '/css/performance.css',
   '/css/backtest.css',
@@ -27,6 +28,7 @@ const SHELL_ASSETS = [
   '/css/scanner.css',
   '/css/propfirms.css',
   '/css/tradingaccount.css',
+  '/css/forwardtest.css',
   '/js/chart.js',
   '/js/layers.js',
   '/js/alerts.js',
@@ -36,6 +38,7 @@ const SHELL_ASSETS = [
   '/js/scanner.js',
   '/js/propfirms.js',
   '/js/tradingaccount.js',
+  '/js/forwardtest.js',
   '/manifest.json',
   '/icons/icon-192.png',
   '/icons/icon-512.png',

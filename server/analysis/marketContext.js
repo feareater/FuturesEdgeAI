@@ -127,6 +127,47 @@ function _buildHpContext(options, currentPrice, atr) {
   else if (distance_atr <= 0.75) multiplier = 1.10;  // near level
   else                           multiplier = 1.0;   // no nearby level
 
+  const dailyHPNearby = distance_atr <= 0.75;
+
+  // ── Monthly HP proximity ──────────────────────────────────────────────────
+  // If weeklyMonthlyHP zones exist, find the nearest monthly HP level and
+  // apply an additional multiplier boost when it converges with daily HP.
+  let monthlyNearest        = null;
+  let monthlyMultiplierDelta = 0;
+
+  const monthlyZones = options.weeklyMonthlyHP?.zones;
+  if (Array.isArray(monthlyZones) && monthlyZones.length > 0 && atr > 0) {
+    // Use scaled prices if available, else raw strikes
+    let mNearest = null, mMinDist = Infinity;
+    for (const z of monthlyZones) {
+      const price = z.scaled ?? z.strike;
+      if (price == null) continue;
+      const d = Math.abs(price - currentPrice);
+      if (d < mMinDist) { mMinDist = d; mNearest = z; }
+    }
+
+    if (mNearest) {
+      const mPrice    = mNearest.scaled ?? mNearest.strike;
+      const mDistATR  = mMinDist / atr;
+      monthlyNearest  = { type: mNearest.pressure, price: mPrice, pressure: mNearest.pressure };
+
+      if (mDistATR <= 0.75) {
+        if (dailyHPNearby) {
+          // Both daily and monthly HP converge — boost +0.05
+          monthlyMultiplierDelta = 0.05;
+        } else {
+          // Only monthly HP nearby — apply standalone monthly multiplier
+          // (lower than daily because monthly OI is more distant in time)
+          if (mDistATR <= 0.3)       multiplier = 1.15;  // at monthly level
+          else                       multiplier = 1.05;  // near monthly level
+        }
+      }
+    }
+  }
+
+  // Apply monthly delta (capped by 0.80–1.30 final clamp)
+  multiplier = Math.max(0.80, Math.min(1.30, multiplier + monthlyMultiplierDelta));
+
   return {
     nearestLevel,
     pressureDirection,
@@ -136,6 +177,8 @@ function _buildHpContext(options, currentPrice, atr) {
     corridorMultiplierBreakout: 0.88,
     freshnessDecayPts: _freshnessDecay(options.lastFetchedAt),
     multiplier,
+    monthlyNearest,
+    monthlyMultiplierDelta,
   };
 }
 

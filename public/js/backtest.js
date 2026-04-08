@@ -4,9 +4,13 @@
 
 (function () {
 
-  // ── Instrument tick values (for P&L calculation) ───────────────────────────
-  // MNQ: $2/point   MES: $5/point   MGC: $10/point   MCL: $100/point
-  const POINT_VALUE = { MNQ: 2, MES: 5, MGC: 10, MCL: 100 };
+  // ── Instrument point values — loaded from server (instruments.js is source of truth) ──
+  let POINT_VALUE = { MNQ: 2, MES: 5, MGC: 10, MCL: 100, SIL: 200, M2K: 5, MYM: 0.5, MHG: 2500 };
+  fetch('/api/instruments').then(r => r.json()).then(data => {
+    for (const [sym, meta] of Object.entries(data)) {
+      if (meta.pointValue != null) POINT_VALUE[sym] = meta.pointValue;
+    }
+  }).catch(() => {});
 
   const TYPE_LABELS = {
     zone_rejection:  'Zone Rej',

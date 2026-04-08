@@ -7,18 +7,25 @@
 
 (function () {
 
-  // ── Contract specs — tick-based (per exchange spec) ──────────────────────
-  // MNQ: tick = 0.25 pts, tick value = $0.50/contract  →  $2.00 / point
-  // MGC: tick = 0.10 pts, tick value = $1.00/contract  →  $10.00 / point
-  // MES: tick = 0.25 pts, tick value = $1.25/contract  →  $5.00 / point
-  // MCL: tick = 0.01 pts, tick value = $1.00/contract  →  $100 / point
+  // ── Contract specs — loaded from server (instruments.js is the single source of truth) ──
   // Crypto perps (Coinbase INTX): modeled as 1:1 per point per contract
-  // BTC: $1 move = $1/contract  |  ETH: $0.01 move = $0.01/contract  |  XRP: $0.0001 = $0.0001
-  const TICK_SIZE  = { MNQ: 0.25, MGC: 0.10, MES: 0.25, MCL: 0.01, BTC: 1.0, ETH: 0.01, XRP: 0.0001 };
-  const TICK_VALUE = { MNQ: 0.50, MGC: 1.00, MES: 1.25, MCL: 1.00, BTC: 1.0, ETH: 0.01, XRP: 0.0001 };
+  let TICK_SIZE  = { MNQ: 0.25, MGC: 0.10, MES: 0.25, MCL: 0.01,
+                     M2K: 0.10, MYM: 1.0,  MHG: 0.0005, SIL: 0.005,
+                     BTC: 1.0, ETH: 0.01, XRP: 0.0001 };
+  let TICK_VALUE = { MNQ: 0.50, MGC: 1.00, MES: 1.25, MCL: 1.00,
+                     M2K: 0.50, MYM: 0.50, MHG: 1.25, SIL: 1.00,
+                     BTC: 1.0, ETH: 0.01, XRP: 0.0001 };
+  // Load live values from server
+  fetch('/api/instruments').then(r => r.json()).then(data => {
+    for (const [sym, meta] of Object.entries(data)) {
+      if (meta.tickSize != null)  TICK_SIZE[sym]  = meta.tickSize;
+      if (meta.tickValue != null) TICK_VALUE[sym] = meta.tickValue;
+    }
+  }).catch(() => {});
 
   // ── Settings (loaded from server defaults, overridden by localStorage) ─────
   let cfg = { mnqContracts: 5, mgcContracts: 3, mesContracts: 2, mclContracts: 2,
+              m2kContracts: 2, mymContracts: 2, mhgContracts: 2, silContracts: 2,
               btcContracts: 1, ethContracts: 1, xrpContracts: 1,
               maxRiskDollars: 200, rrRatio: 2.0, features: {} };
   let minConf = 65;
@@ -56,6 +63,17 @@
   const takenTrades = new Map();
   // Bridge for chart.js (which loads first) to check taken state
   window._isTaken = (key) => takenTrades.has(key);
+
+  // ── Symbol switch cleanup — clears stale data before new fetch completes ──
+  function _clearSymbolState() {
+    // Clear current alerts so stale cards don't linger during fetch
+    currentAlerts = [];
+    // Immediately re-sync chart markers (clears stale markers for old symbol)
+    _syncChartMarkers();
+    // Show loading state in predictions panel
+    const predFeed = document.getElementById('predictions-feed');
+    if (predFeed) predFeed.innerHTML = '<p class="placeholder">Loading…</p>';
+  }
 
   // ── Price formatter — XRP uses 4 decimal places ───────────────────────────
   function _fmtP(symbol, n) {
@@ -100,6 +118,8 @@
   const minConfInput   = document.getElementById('min-conf');
   const mnqInput       = document.getElementById('mnq-contracts');
   const mgcInput       = document.getElementById('mgc-contracts');
+  const m2kInput       = document.getElementById('m2k-contracts');
+  const mymInput       = document.getElementById('mym-contracts');
   const btcInput       = document.getElementById('btc-contracts');
   const ethInput       = document.getElementById('eth-contracts');
   const xrpInput       = document.getElementById('xrp-contracts');
@@ -525,6 +545,7 @@
                 pcRatio:                options.pcRatio,
                 atmIV:                  options.atmIV,
                 source:                 options.source,
+                dataSource:             options.dataSource,
                 dexScore:               options.dexScore,
                 dexBias:                options.dexBias,
                 resilience:             options.resilience,
@@ -533,6 +554,8 @@
                 scaledLiquidityZones:   options.scaledLiquidityZones    ?? null,
                 scaledHedgePressureZones: options.scaledHedgePressureZones ?? null,
                 scaledPivotCandidates:  options.scaledPivotCandidates   ?? null,
+                weeklyMonthlyHP:        options.weeklyMonthlyHP         ?? null,
+                quarterlyHP:            options.quarterlyHP             ?? null,
               }
             : options;
           window.ChartAPI?.setOptionsLevels?.(scaledLevels);
@@ -611,7 +634,10 @@
     if (!data) { widget.style.display = 'none'; return; }
     widget.style.display = '';
     if (sourceEl) {
-      sourceEl.textContent = data.source ? `${data.source} ` : '';
+      const srcLabel = data.dataSource === 'opra-live'
+        ? `${data.source} (OPRA Live) `
+        : data.source ? `${data.source} ` : '';
+      sourceEl.textContent = srcLabel;
     }
     if (pcEl) {
       const v = data.pcRatio;
@@ -660,6 +686,14 @@
       const conf  = d.confidence ?? 0;
       const score = d.score ?? 0;
       const scoreStr = (score >= 0 ? '+' : '') + score;
+
+      // Cache for conviction row + setup score section (cross-IIFE via window)
+      window._lastSetupScore = conf;
+      window._lastSetupData = {
+        direction: d.direction, confidence: conf, score, factors: d.factors || [],
+        price: d.price, predictedTP: d.predictedTP, predictedSL: d.predictedSL,
+        targetUp: d.targetUp, targetDown: d.targetDown, movePoints: d.movePoints,
+      };
 
       const fmt = v => v != null ? v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) : '—';
       const diff = (v, base) => {
@@ -978,6 +1012,8 @@
     if (saved) {
       cfg.mnqContracts   = saved.mnqContracts   ?? cfg.mnqContracts;
       cfg.mgcContracts   = saved.mgcContracts   ?? cfg.mgcContracts;
+      cfg.m2kContracts   = saved.m2kContracts   ?? cfg.m2kContracts;
+      cfg.mymContracts   = saved.mymContracts   ?? cfg.mymContracts;
       cfg.btcContracts   = saved.btcContracts   ?? cfg.btcContracts;
       cfg.ethContracts   = saved.ethContracts   ?? cfg.ethContracts;
       cfg.xrpContracts   = saved.xrpContracts   ?? cfg.xrpContracts;
@@ -989,6 +1025,8 @@
     minConfInput.value  = minConf;
     mnqInput.value      = cfg.mnqContracts;
     mgcInput.value      = cfg.mgcContracts;
+    if (m2kInput) m2kInput.value = cfg.m2kContracts;
+    if (mymInput) mymInput.value = cfg.mymContracts;
     if (btcInput) btcInput.value = cfg.btcContracts;
     if (ethInput) ethInput.value = cfg.ethContracts;
     if (xrpInput) xrpInput.value = cfg.xrpContracts;
@@ -1069,7 +1107,7 @@
     // Listen for dashboard mode changes (Futures ↔ Crypto)
     document.addEventListener('dashModeChange', (e) => {
       activeSymbol = e.detail.symbol;
-      _syncChartMarkers();
+      _clearSymbolState();
       fetchAndRender();
       const rsWidget = document.getElementById('rs-widget');
       if (rsWidget) rsWidget.style.display = (activeSymbol === 'MNQ' || activeSymbol === 'MES') ? '' : 'none';
@@ -1082,10 +1120,9 @@
     document.addEventListener('chartViewChange', (e) => {
       activeSymbol = e.detail.symbol;
       activeTf     = e.detail.tf;
-      // Immediately sync markers — this clears stale markers (old symbol/TF alerts
-      // won't match the new filter and produce an empty alertMarkers array).
-      // fetchAndRender will re-populate with the correct alerts for the new view.
-      _syncChartMarkers();
+      // Immediately clear stale symbol state and show loading indicators
+      // before the async fetch replaces them with fresh data.
+      _clearSymbolState();
       fetchAndRender();
       // RS widget only relevant for equity index symbols
       const rsWidget = document.getElementById('rs-widget');
@@ -1842,6 +1879,10 @@
                     : alert.symbol === 'MGC' ? cfg.mgcContracts
                     : alert.symbol === 'MES' ? cfg.mesContracts
                     : alert.symbol === 'MCL' ? cfg.mclContracts
+                    : alert.symbol === 'M2K' ? cfg.m2kContracts
+                    : alert.symbol === 'MYM' ? cfg.mymContracts
+                    : alert.symbol === 'MHG' ? cfg.mhgContracts
+                    : alert.symbol === 'SIL' ? cfg.silContracts
                     : alert.symbol === 'BTC' ? cfg.btcContracts
                     : alert.symbol === 'ETH' ? cfg.ethContracts
                     : alert.symbol === 'XRP' ? cfg.xrpContracts
@@ -2416,11 +2457,13 @@
     });
 
     // Contract counts + max risk — client-side recalc only, no refetch
-    const riskInputs = [mnqInput, mgcInput, btcInput, ethInput, xrpInput, maxRiskInput].filter(Boolean);
+    const riskInputs = [mnqInput, mgcInput, m2kInput, mymInput, btcInput, ethInput, xrpInput, maxRiskInput].filter(Boolean);
     riskInputs.forEach(el => {
       el.addEventListener('input', () => {
         cfg.mnqContracts   = parseInt(mnqInput.value)   || 1;
         cfg.mgcContracts   = parseInt(mgcInput.value)   || 1;
+        cfg.m2kContracts   = parseInt(m2kInput?.value)  || 1;
+        cfg.mymContracts   = parseInt(mymInput?.value)  || 1;
         cfg.btcContracts   = parseInt(btcInput?.value)  || 1;
         cfg.ethContracts   = parseInt(ethInput?.value)  || 1;
         cfg.xrpContracts   = parseInt(xrpInput?.value)  || 1;
@@ -2610,6 +2653,7 @@
         const msg = JSON.parse(event.data);
         if (msg.type === 'setup') {
           fetchAndRender(); // re-fetch to keep trade filter accurate
+          document.dispatchEvent(new CustomEvent('biasRefresh'));
         }
         if (msg.type === 'order') {
           // A virtual order was placed — flash the last-order display
@@ -2679,6 +2723,8 @@
     localStorage.setItem(LS_KEY, JSON.stringify({
       mnqContracts:  cfg.mnqContracts,
       mgcContracts:  cfg.mgcContracts,
+      m2kContracts:  cfg.m2kContracts,
+      mymContracts:  cfg.mymContracts,
       btcContracts:  cfg.btcContracts,
       ethContracts:  cfg.ethContracts,
       xrpContracts:  cfg.xrpContracts,
@@ -2825,5 +2871,433 @@
 
   // Init after a short delay to let the page settle
   setTimeout(_init, 1200);
+
+})();
+
+// ============================================================================
+// Bias Panel — Macro Context + Directional Bias + Conviction Row
+// ============================================================================
+(function () {
+  'use strict';
+
+  // ── State ──────────────────────────────────────────────────────────────────
+  let _biasBuilt = false; // true once DOM skeleton has been injected
+
+  // ── Mode toggle (AUTO / MANUAL) ────────────────────────────────────────────
+  let _biasMode = 'auto';
+  try { _biasMode = localStorage.getItem('biasMode') || 'auto'; } catch (_) {}
+
+  const modeBtn   = document.getElementById('bias-mode-btn');
+  const modeBadge = document.getElementById('bias-mode-badge');
+
+  function _applyMode(mode) {
+    _biasMode = mode;
+    try { localStorage.setItem('biasMode', mode); } catch (_) {}
+    if (modeBtn) {
+      modeBtn.textContent = mode.toUpperCase();
+      modeBtn.classList.toggle('mode-manual', mode === 'manual');
+    }
+    if (modeBadge) {
+      modeBadge.style.display = mode === 'manual' ? '' : 'none';
+    }
+  }
+  _applyMode(_biasMode);
+
+  if (modeBtn) {
+    modeBtn.addEventListener('click', () => {
+      _applyMode(_biasMode === 'auto' ? 'manual' : 'auto');
+      fetchAndRenderBias(_getCurrentSymbol());
+    });
+  }
+
+  // ── Collapse / expand ──────────────────────────────────────────────────────
+  const toggleBtn  = document.getElementById('bias-toggle-btn');
+  const panelBody  = document.getElementById('bias-panel-body');
+
+  function _isDesktop() { return window.innerWidth > 768; }
+
+  function _setPanelOpen(open) {
+    if (!panelBody || !toggleBtn) return;
+    panelBody.style.display = open ? '' : 'none';
+    toggleBtn.innerHTML = open ? '&#9650;' : '&#9660;';
+    try { localStorage.setItem('biasPanelOpen', open ? '1' : '0'); } catch (_) {}
+  }
+
+  // Restore persisted state, default: expanded desktop / collapsed mobile
+  (function _restoreToggle() {
+    const stored = localStorage.getItem('biasPanelOpen');
+    if (stored !== null) {
+      _setPanelOpen(stored === '1');
+    } else {
+      _setPanelOpen(_isDesktop());
+    }
+  })();
+
+  if (toggleBtn) {
+    toggleBtn.addEventListener('click', () => {
+      const isOpen = panelBody && panelBody.style.display !== 'none';
+      _setPanelOpen(!isOpen);
+    });
+  }
+
+  // ── Fetch + render ─────────────────────────────────────────────────────────
+  function _getCurrentSymbol() {
+    // Read from the same source alerts.js uses
+    const symBtns = document.querySelectorAll('.sym-btn.active');
+    if (symBtns.length) return symBtns[0].dataset.symbol || 'MNQ';
+    return 'MNQ';
+  }
+
+  async function fetchAndRenderBias(symbol) {
+    if (!symbol) symbol = _getCurrentSymbol();
+    // Update symbol label
+    const symLabel = document.getElementById('bias-symbol-label');
+    if (symLabel) symLabel.textContent = symbol;
+    try {
+      const modeParam = _biasMode === 'manual' ? '&mode=manual' : '';
+      const res = await fetch(`/api/bias?symbol=${encodeURIComponent(symbol)}${modeParam}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.status === 'initializing') {
+        _showInitializing();
+        return;
+      }
+      if (data.readiness) _renderReadiness(data.readiness);
+      if (data.bias) {
+        _renderDirectionalBias(data.bias);
+        window._lastMacroScore = data.bias.score;
+      }
+      _renderSetupScore();
+      _renderConviction();
+    } catch (_) {
+      // Fail silently — do not break existing alert rendering
+    }
+  }
+
+  function _showInitializing() {
+    const rs = document.getElementById('bias-readiness-section');
+    const ds = document.getElementById('bias-direction-section');
+    if (rs) rs.innerHTML = '<div class="bias-init-placeholder">Initializing\u2026</div>';
+    if (ds) ds.innerHTML = '<div class="bias-init-placeholder">Initializing\u2026</div>';
+  }
+
+  // ── Readiness renderer ─────────────────────────────────────────────────────
+  function _renderReadiness(r) {
+    const el = document.getElementById('bias-readiness-section');
+    if (!el) return;
+
+    if (!_biasBuilt || !el.querySelector('.bias-readiness-header')) {
+      // Build skeleton once
+      el.innerHTML =
+        '<div class="bias-readiness-header">' +
+          '<span class="bias-section-label">MACRO CONTEXT</span>' +
+          '<span class="bias-status-badge" id="bias-status-badge"></span>' +
+        '</div>' +
+        '<div class="bias-gate-list" id="bias-gate-list"></div>';
+    }
+
+    // Status badge
+    const badge = document.getElementById('bias-status-badge');
+    if (badge) {
+      const cls = r.overallStatus === 'ready'   ? 'bias-badge-ready'
+                : r.overallStatus === 'caution' ? 'bias-badge-caution'
+                : 'bias-badge-blocked';
+      const txt = r.overallStatus === 'ready'   ? '\u2713 FAVORABLE'
+                : r.overallStatus === 'caution' ? '\u26A0 CAUTION'
+                : '\u2717 BLOCKED';
+      badge.className = 'bias-status-badge ' + cls;
+      badge.textContent = txt;
+    }
+
+    // Gate list
+    const gateEl = document.getElementById('bias-gate-list');
+    if (gateEl) {
+      // Build gate rows if count changed, otherwise update in-place
+      if (gateEl.children.length !== r.gates.length) {
+        gateEl.innerHTML = r.gates.map(g =>
+          `<div class="bias-gate-row" data-gate="${g.id}" title="${g.detail}">` +
+            `<span class="bias-gate-icon"></span>` +
+            `<span class="bias-gate-label"></span>` +
+          `</div>`
+        ).join('');
+      }
+      r.gates.forEach((g, i) => {
+        const row = gateEl.children[i];
+        if (!row) return;
+        row.title = g.detail;
+        const icon  = row.querySelector('.bias-gate-icon');
+        const label = row.querySelector('.bias-gate-label');
+        if (icon) {
+          icon.textContent = g.status === 'pass' ? '\u2713' : g.status === 'caution' ? '\u26A0' : '\u2717';
+          icon.className = 'bias-gate-icon ' +
+            (g.status === 'pass' ? 'gate-pass' : g.status === 'caution' ? 'gate-caution' : 'gate-blocked');
+        }
+        if (label) label.textContent = g.label;
+      });
+    }
+    _biasBuilt = true;
+  }
+
+  // ── Directional Bias renderer ──────────────────────────────────────────────
+  function _renderDirectionalBias(b) {
+    const el = document.getElementById('bias-direction-section');
+    if (!el) return;
+
+    if (!el.querySelector('.bias-dir-header')) {
+      el.innerHTML =
+        '<div class="bias-dir-header">' +
+          '<span class="bias-section-label">DIRECTIONAL BIAS</span>' +
+          '<span class="bias-dir-indicator" id="bias-dir-indicator"></span>' +
+        '</div>' +
+        '<div class="bias-score-bar-wrap" id="bias-score-bar-wrap">' +
+          '<div class="bias-score-bar">' +
+            '<div class="bias-score-fill" id="bias-score-fill"></div>' +
+            '<div class="bias-score-zero"></div>' +
+          '</div>' +
+          '<span class="bias-score-label" id="bias-score-label"></span>' +
+        '</div>' +
+        '<div class="bias-signal-list" id="bias-signal-list"></div>';
+    }
+
+    // Direction indicator
+    const dirEl = document.getElementById('bias-dir-indicator');
+    if (dirEl) {
+      let txt, cls;
+      if (b.direction === 'bullish' && b.strength === 'strong') {
+        txt = '\u25B2\u25B2 BULLISH'; cls = 'dir-bull-strong';
+      } else if (b.direction === 'bullish') {
+        txt = '\u25B2 BULLISH'; cls = 'dir-bull';
+      } else if (b.direction === 'bearish' && b.strength === 'strong') {
+        txt = '\u25BC\u25BC BEARISH'; cls = 'dir-bear-strong';
+      } else if (b.direction === 'bearish') {
+        txt = '\u25BC BEARISH'; cls = 'dir-bear';
+      } else {
+        txt = '\u2014 NEUTRAL'; cls = 'dir-neutral';
+      }
+      dirEl.textContent = txt;
+      dirEl.className = 'bias-dir-indicator ' + cls;
+    }
+
+    // Score bar
+    const fillEl  = document.getElementById('bias-score-fill');
+    const lblEl   = document.getElementById('bias-score-label');
+    if (fillEl) {
+      const pct = Math.min(50, Math.abs(b.score) / b.scoreMax * 50);
+      if (b.score >= 0) {
+        fillEl.style.left  = '50%';
+        fillEl.style.right = '';
+        fillEl.style.width = pct + '%';
+        fillEl.className = 'bias-score-fill bias-fill-bull';
+      } else {
+        fillEl.style.left  = '';
+        fillEl.style.right = '50%';
+        fillEl.style.width = pct + '%';
+        fillEl.className = 'bias-score-fill bias-fill-bear';
+      }
+    }
+    if (lblEl) {
+      lblEl.textContent = (b.score >= 0 ? '+' : '') + b.score + ' / ' + b.scoreMax;
+    }
+
+    // Signal list
+    const listEl = document.getElementById('bias-signal-list');
+    if (listEl) {
+      if (listEl.children.length !== b.signals.length) {
+        listEl.innerHTML = b.signals.map(() =>
+          '<div class="bias-signal-row">' +
+            '<span class="bias-sig-label"></span>' +
+            '<span class="bias-sig-value"></span>' +
+            '<span class="bias-sig-status"></span>' +
+          '</div>'
+        ).join('');
+      }
+      b.signals.forEach((s, i) => {
+        const row = listEl.children[i];
+        if (!row) return;
+        const label  = row.querySelector('.bias-sig-label');
+        const value  = row.querySelector('.bias-sig-value');
+        const status = row.querySelector('.bias-sig-status');
+        if (label) label.textContent = s.label;
+        if (value) value.textContent = s.value;
+        if (status) {
+          if (s.contribution !== 0) {
+            status.textContent = '\u2713';
+            status.className = 'bias-sig-status sig-check';
+          } else {
+            status.textContent = '\u2717';
+            status.className = 'bias-sig-status sig-x';
+          }
+        }
+      });
+    }
+  }
+
+  // ── Setup Score renderer (third section) ────────────────────────────────────
+  function _renderSetupScore() {
+    const el = document.getElementById('bias-setup-score-section');
+    if (!el) return;
+
+    const d = window._lastSetupData;
+    if (!d) {
+      el.innerHTML = '<div class="bias-init-placeholder">Waiting for setup data\u2026</div>';
+      return;
+    }
+
+    if (!el.querySelector('.bias-setup-header')) {
+      el.innerHTML =
+        '<div class="bias-setup-inner">' +
+          '<div class="bias-setup-left">' +
+            '<div class="bias-setup-header">' +
+              '<span class="bias-section-label">SETUP SCORE</span>' +
+              '<span class="bias-setup-dir" id="bias-setup-dir"></span>' +
+            '</div>' +
+            '<div class="bias-setup-conf-row" id="bias-setup-conf-row"></div>' +
+            '<div class="bias-setup-factors" id="bias-setup-factors"></div>' +
+          '</div>' +
+          '<div class="bias-divider"></div>' +
+          '<div class="bias-setup-right">' +
+            '<div class="bias-setup-prices" id="bias-setup-prices"></div>' +
+          '</div>' +
+        '</div>';
+    }
+
+    const cls = d.direction === 'bullish' ? 'bull' : d.direction === 'bearish' ? 'bear' : 'neut';
+
+    // Direction
+    const dirEl = document.getElementById('bias-setup-dir');
+    if (dirEl) {
+      const arrow = d.direction === 'bullish' ? '\u25B2' : d.direction === 'bearish' ? '\u25BC' : '\u2014';
+      const label = d.direction === 'bullish' ? 'LONG' : d.direction === 'bearish' ? 'SHORT' : 'NEUTRAL';
+      dirEl.innerHTML = `<span class="pred-arrow ${cls}">${arrow}</span> <span class="pred-label ${cls}">${label}</span>` +
+        `<span class="bias-setup-score-num">${(d.score >= 0 ? '+' : '') + d.score}</span>`;
+    }
+
+    // Confidence bar
+    const confEl = document.getElementById('bias-setup-conf-row');
+    if (confEl) {
+      confEl.innerHTML =
+        `<span style="font-size:10px;color:var(--text-dim)">Confidence</span>` +
+        `<div class="pred-conf-bar" style="flex:1"><div class="pred-conf-fill ${cls}" style="width:${d.confidence}%"></div></div>` +
+        `<span class="pred-conf-pct">${d.confidence}%</span>`;
+    }
+
+    // Top factors (up to 5)
+    const factEl = document.getElementById('bias-setup-factors');
+    if (factEl && d.factors.length) {
+      const top = d.factors.slice(0, 5);
+      factEl.innerHTML = top.map(f => {
+        const ptsCls = f.pts >= 0 ? 'pos' : 'neg';
+        const ptsStr = (f.pts >= 0 ? '+' : '') + f.pts;
+        return `<div class="bias-factor-row"><span class="bias-factor-label">${f.label}</span><span class="pf-pts ${ptsCls}">${ptsStr}</span></div>`;
+      }).join('');
+    }
+
+    // Price targets
+    const pricesEl = document.getElementById('bias-setup-prices');
+    if (pricesEl) {
+      const fmt = v => v != null ? v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) : '\u2014';
+      const diff = (v, base) => {
+        if (v == null || base == null) return '';
+        const delta = v - base;
+        return `${delta >= 0 ? '+' : ''}${delta.toFixed(2)}`;
+      };
+      const slCls = d.direction === 'bullish' ? 'bear' : 'bull';
+      pricesEl.innerHTML =
+        `<div class="bias-price-row"><span class="bias-price-label">Current</span><span class="bias-price-val">${fmt(d.price)}</span></div>` +
+        `<div class="bias-price-row"><span class="bias-price-label">Target TP</span><span class="bias-price-val">${fmt(d.predictedTP)}</span><span class="bias-price-diff ${cls}">${diff(d.predictedTP, d.price)}</span></div>` +
+        `<div class="bias-price-row"><span class="bias-price-label">Stop SL</span><span class="bias-price-val">${fmt(d.predictedSL)}</span><span class="bias-price-diff ${slCls}">${diff(d.predictedSL, d.price)}</span></div>` +
+        (d.targetUp != null ? `<div class="bias-price-row"><span class="bias-price-label">\u2191 ${fmt(d.targetUp)}</span><span class="bias-price-val" style="color:var(--bull)">+${d.movePoints}</span></div>` : '') +
+        (d.targetDown != null ? `<div class="bias-price-row"><span class="bias-price-label">\u2193 ${fmt(d.targetDown)}</span><span class="bias-price-val" style="color:var(--bear)">\u2212${d.movePoints}</span></div>` : '');
+    }
+  }
+
+  // ── Conviction Row ─────────────────────────────────────────────────────────
+  function _renderConviction() {
+    const labelEl  = document.getElementById('conviction-label');
+    const detailEl = document.getElementById('conviction-detail');
+    if (!labelEl || !detailEl) return;
+
+    const setupScore = window._lastSetupScore;
+    const macroScore = window._lastMacroScore;
+
+    // Default fallback
+    if (setupScore == null || macroScore == null) {
+      labelEl.textContent = 'INITIALIZING';
+      labelEl.className = 'conviction-label conviction-gray';
+      detailEl.textContent = 'Waiting for scan data...';
+      return;
+    }
+
+    const setupStrong = setupScore >= 70;
+    const setupMild   = setupScore >= 55 && setupScore < 70;
+    // setupWeak = setupScore < 55
+
+    const macroStrong  = macroScore >= 6;
+    const macroMild    = macroScore >= 3 && macroScore < 6;
+    const macroNeutral = macroScore > -3 && macroScore < 3;
+    // macroBear = macroScore <= -3
+
+    let label, detail, colorCls;
+
+    if (setupStrong && macroStrong) {
+      label = 'HIGH CONVICTION'; detail = 'Strong setup with broad macro confirmation'; colorCls = 'conviction-high';
+    } else if (setupStrong && macroMild) {
+      label = 'GOOD SETUP'; detail = 'Strong setup, macro context supportive'; colorCls = 'conviction-green';
+    } else if (setupStrong && macroNeutral) {
+      label = 'TECHNICALLY DRIVEN'; detail = 'Strong price action \u2014 macro context mixed, trade with care'; colorCls = 'conviction-amber';
+    } else if (setupStrong) {
+      // macroBear
+      label = 'COUNTER-MACRO'; detail = 'Strong setup but macro headwinds present \u2014 reduce size'; colorCls = 'conviction-amber';
+    } else if (setupMild && macroStrong) {
+      label = 'MACRO TAILWIND'; detail = 'Macro strongly favors direction \u2014 wait for cleaner entry'; colorCls = 'conviction-green';
+    } else if (setupMild && macroMild) {
+      label = 'MODERATE SETUP'; detail = 'Decent conditions \u2014 standard position sizing'; colorCls = 'conviction-amber';
+    } else if (setupMild && macroNeutral) {
+      label = 'MARGINAL'; detail = 'Mixed signals \u2014 consider waiting for better conditions'; colorCls = 'conviction-gray';
+    } else if (setupMild) {
+      // macroBear
+      label = 'CAUTION'; detail = 'Setup forming but macro context unfavorable'; colorCls = 'conviction-red';
+    } else if (macroStrong) {
+      // setupWeak + macroStrong
+      label = 'MACRO TAILWIND, NO SETUP'; detail = 'Macro confirms direction but no quality entry yet \u2014 watch'; colorCls = 'conviction-amber';
+    } else if (macroMild) {
+      // setupWeak + macroMild
+      label = 'STAND ASIDE'; detail = 'Insufficient setup quality and macro support'; colorCls = 'conviction-gray';
+    } else if (macroNeutral) {
+      // setupWeak + macroNeutral
+      label = 'STAND ASIDE'; detail = 'No edge present \u2014 wait for conditions to develop'; colorCls = 'conviction-gray';
+    } else {
+      // setupWeak + macroBear
+      label = 'STAND ASIDE'; detail = 'Weak setup with macro headwinds \u2014 no trade'; colorCls = 'conviction-gray';
+    }
+
+    labelEl.textContent = label;
+    labelEl.className = 'conviction-label ' + colorCls;
+    detailEl.textContent = detail;
+  }
+
+  // ── Hook into symbol switches and WS messages ─────────────────────────────
+  document.addEventListener('dashModeChange', (e) => {
+    fetchAndRenderBias(e.detail.symbol);
+  });
+
+  document.addEventListener('chartViewChange', (e) => {
+    fetchAndRenderBias(e.detail.symbol);
+  });
+
+  // On any WS message (throttled by 30s server cache)
+  // The main WS is created in the alerts IIFE above — listen for custom events
+  // dispatched by those handlers, or hook into data_refresh
+  document.addEventListener('dataRefresh', () => {
+    fetchAndRenderBias(_getCurrentSymbol());
+  });
+
+  // Also listen for the biasRefresh event we'll dispatch from the WS handler
+  document.addEventListener('biasRefresh', () => {
+    fetchAndRenderBias(_getCurrentSymbol());
+  });
+
+  // Initial fetch after page load
+  setTimeout(() => fetchAndRenderBias(_getCurrentSymbol()), 800);
 
 })();

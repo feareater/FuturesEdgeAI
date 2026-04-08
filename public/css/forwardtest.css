@@ -1,0 +1,506 @@
+/* forwardtest.css — FuturesEdge AI Forward Test Page */
+
+/* ── Layout ───────────────────────────────────────────────────────────── */
+
+#ft-main {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 48px);
+  overflow: hidden;
+}
+
+/* ── Filter Bar ───────────────────────────────────────────────────────── */
+
+.ft-filter-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 8px 14px;
+  background: var(--bg-panel, #1e222d);
+  border-bottom: 1px solid var(--border, #2a2e39);
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+.ft-filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ft-filter-group label {
+  font-size: 10px;
+  color: var(--text-dim, #787b86);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  font-weight: 600;
+}
+
+.ft-filter-group select,
+.ft-filter-group input[type="date"] {
+  background: var(--bg, #131722);
+  color: var(--text, #d1d4dc);
+  border: 1px solid var(--border, #2a2e39);
+  border-radius: var(--radius, 3px);
+  padding: 4px 6px;
+  font-size: 12px;
+  min-width: 90px;
+}
+
+.ft-filter-group select[multiple] {
+  min-height: 28px;
+  max-height: 28px;
+}
+
+.ft-trade-count {
+  font-size: 11px;
+  color: var(--text-dim, #787b86);
+  margin-left: auto;
+}
+
+/* ── Tabs ─────────────────────────────────────────────────────────────── */
+
+.ft-tabs {
+  display: flex;
+  gap: 0;
+  background: var(--bg-panel, #1e222d);
+  border-bottom: 1px solid var(--border, #2a2e39);
+  flex-shrink: 0;
+  padding: 0 14px;
+}
+
+.ft-tab {
+  background: transparent;
+  color: var(--text-dim, #787b86);
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .15s;
+}
+
+.ft-tab:hover { color: var(--text, #d1d4dc); }
+.ft-tab.active {
+  color: var(--accent, #2196f3);
+  border-bottom-color: var(--accent, #2196f3);
+}
+
+/* ── Tab Panels ───────────────────────────────────────────────────────── */
+
+.ft-tab-panel {
+  display: none;
+  overflow-y: auto;
+  padding: 14px;
+  flex: 1;
+}
+.ft-tab-panel.active { display: block; }
+
+.ft-placeholder {
+  text-align: center;
+  color: var(--text-dim, #787b86);
+  padding: 60px 20px;
+  font-size: 14px;
+}
+
+.ft-section-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--text-dim, #787b86);
+  margin: 0 0 8px;
+}
+
+/* ── Buttons ──────────────────────────────────────────────────────────── */
+
+.ft-btn-primary {
+  background: var(--accent, #2196f3);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius, 3px);
+  padding: 7px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ft-btn-primary:hover { filter: brightness(1.15); }
+
+.ft-btn-secondary {
+  background: transparent;
+  color: var(--text-dim, #787b86);
+  border: 1px solid var(--border, #2a2e39);
+  border-radius: var(--radius, 3px);
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ft-btn-secondary:hover { color: var(--text, #d1d4dc); border-color: #4a5a7a; }
+
+/* ── Stat Cards ───────────────────────────────────────────────────────── */
+
+.ft-stat-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.ft-stat-card {
+  background: var(--bg-panel, #1e222d);
+  border: 1px solid var(--border, #2a2e39);
+  border-radius: var(--radius, 3px);
+  padding: 10px 12px;
+  text-align: center;
+}
+
+.ft-stat-card .label {
+  font-size: 10px;
+  color: var(--text-dim, #787b86);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  margin-bottom: 4px;
+}
+
+.ft-stat-card .value {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text, #d1d4dc);
+}
+.ft-stat-card .value.positive { color: var(--bull, #26a69a); }
+.ft-stat-card .value.negative { color: var(--bear, #ef5350); }
+
+/* ── Charts Grid ──────────────────────────────────────────────────────── */
+
+.ft-charts-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 12px;
+}
+.ft-charts-grid .ft-chart-box:first-child {
+  grid-column: 1 / -1;
+}
+.ft-chart-box {
+  background: var(--bg-panel, #1e222d);
+  border: 1px solid var(--border, #2a2e39);
+  border-radius: var(--radius, 3px);
+  padding: 12px;
+}
+.ft-chart-box canvas {
+  width: 100% !important;
+  max-height: 220px;
+}
+
+/* ── Trades Table ─────────────────────────────────────────────────────── */
+
+.ft-trades-toolbar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+#ft-trades-table-wrap {
+  overflow-x: auto;
+  max-height: calc(100vh - 200px);
+  overflow-y: auto;
+}
+
+#ft-trades-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+#ft-trades-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-panel, #1e222d);
+  color: var(--text-dim, #787b86);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  padding: 6px 5px;
+  border-bottom: 1px solid var(--border, #2a2e39);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+#ft-trades-table th:hover { color: var(--text, #d1d4dc); }
+
+#ft-trades-table td {
+  padding: 5px;
+  border-bottom: 1px solid rgba(42, 46, 57, 0.5);
+  white-space: nowrap;
+}
+
+#ft-trades-table tr.won { background: rgba(38, 166, 154, 0.08); }
+#ft-trades-table tr.lost { background: rgba(239, 83, 80, 0.08); }
+#ft-trades-table tr.timeout { background: rgba(120, 123, 134, 0.06); }
+
+#ft-trades-table tr.expandable { cursor: pointer; }
+#ft-trades-table tr.ft-expanded-row td {
+  padding: 8px 10px;
+  font-size: 11px;
+  color: var(--text-dim, #787b86);
+  border-bottom: 1px solid var(--border, #2a2e39);
+  background: rgba(30, 34, 45, 0.6);
+  white-space: normal;
+}
+
+/* ── Breakdown Grid ───────────────────────────────────────────────────── */
+
+.ft-breakdown-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+  gap: 14px;
+}
+
+.ft-breakdown-panel {
+  background: var(--bg-panel, #1e222d);
+  border: 1px solid var(--border, #2a2e39);
+  border-radius: var(--radius, 3px);
+  padding: 12px;
+}
+
+.ft-breakdown-panel h4 {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--accent, #2196f3);
+  margin-bottom: 8px;
+  letter-spacing: .05em;
+}
+
+.ft-breakdown-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.ft-breakdown-table th {
+  font-size: 10px;
+  text-transform: uppercase;
+  color: var(--text-dim, #787b86);
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border, #2a2e39);
+  text-align: right;
+  letter-spacing: .03em;
+}
+.ft-breakdown-table th:first-child { text-align: left; }
+
+.ft-breakdown-table td {
+  padding: 4px 6px;
+  border-bottom: 1px solid rgba(42, 46, 57, 0.3);
+  text-align: right;
+}
+.ft-breakdown-table td:first-child {
+  text-align: left;
+  font-weight: 600;
+  color: var(--text, #d1d4dc);
+}
+
+.ft-breakdown-table tr.insufficient td {
+  color: var(--text-dim, #787b86);
+  font-style: italic;
+}
+
+/* ── AI Export Tab ─────────────────────────────────────────────────────── */
+
+.ft-export-options {
+  background: var(--bg-panel, #1e222d);
+  border: 1px solid var(--border, #2a2e39);
+  border-radius: var(--radius, 3px);
+  padding: 16px;
+  margin-bottom: 14px;
+}
+
+.ft-export-row {
+  display: flex;
+  gap: 20px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.ft-export-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 200px;
+}
+.ft-export-group.ft-export-full { flex: 1; min-width: 100%; }
+
+.ft-export-group label {
+  font-size: 11px;
+  color: var(--text-dim, #787b86);
+  font-weight: 600;
+}
+
+.ft-export-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+.ft-export-checks label {
+  font-size: 12px;
+  color: var(--text, #d1d4dc);
+  font-weight: 400;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ft-export-group select,
+.ft-export-group input[type="text"] {
+  background: var(--bg, #131722);
+  color: var(--text, #d1d4dc);
+  border: 1px solid var(--border, #2a2e39);
+  border-radius: var(--radius, 3px);
+  padding: 5px 8px;
+  font-size: 12px;
+}
+
+.ft-export-group input[type="range"] {
+  width: 200px;
+}
+
+#ft-prompt-output {
+  width: 100%;
+  min-height: 300px;
+  background: var(--bg, #131722);
+  color: var(--text, #d1d4dc);
+  border: 1px solid var(--border, #2a2e39);
+  border-radius: var(--radius, 3px);
+  padding: 12px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  resize: vertical;
+  margin-bottom: 10px;
+}
+
+.ft-export-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.ft-save-status {
+  font-size: 11px;
+  color: var(--bull, #26a69a);
+  margin-left: 8px;
+}
+.ft-save-status.error { color: var(--bear, #ef5350); }
+
+/* ── Backtest AI Export Section (added to backtest2.html) ─────────────── */
+
+.bt2-export-section {
+  background: #16213e;
+  border: 1px solid #2a2a4a;
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+
+.bt2-export-section h3 {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #a0b8cc;
+  margin-bottom: 10px;
+  letter-spacing: .05em;
+}
+
+.bt2-export-row {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.bt2-export-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 180px;
+}
+.bt2-export-group.bt2-export-full { flex: 1; min-width: 100%; }
+
+.bt2-export-group label {
+  font-size: 11px;
+  color: #778899;
+  font-weight: 600;
+}
+
+.bt2-export-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.bt2-export-checks label {
+  font-size: 12px;
+  color: #c0c0d0;
+  font-weight: 400;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.bt2-export-group select,
+.bt2-export-group input[type="text"] {
+  background: #0f3460;
+  color: #e0e0e0;
+  border: 1px solid #2a2a4a;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.bt2-export-group input[type="range"] {
+  width: 180px;
+}
+
+#bt2-export-prompt-output {
+  width: 100%;
+  min-height: 250px;
+  background: #0a1428;
+  color: #c4d4e4;
+  border: 1px solid #2a2a4a;
+  border-radius: 4px;
+  padding: 10px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  resize: vertical;
+  margin-bottom: 8px;
+}
+
+.bt2-export-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.bt2-export-btn {
+  background: #0f3460;
+  color: #a0b8cc;
+  border: 1px solid #2a3a5a;
+  border-radius: 4px;
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.bt2-export-btn:hover { background: #1a4a80; color: #e0e0e0; }
+.bt2-export-btn.primary {
+  background: var(--accent, #2196f3);
+  color: #fff;
+  border-color: var(--accent, #2196f3);
+}
+
+.bt2-export-status {
+  font-size: 11px;
+  color: #00c851;
+  margin-left: 8px;
+}
+.bt2-export-status.error { color: #ff4444; }

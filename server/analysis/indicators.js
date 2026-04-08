@@ -91,7 +91,10 @@ function computeIndicators(candles, opts = {}) {
 // For crypto:  riskInterval = priorClose × (annualizedVol / sqrt(252))
 // ---------------------------------------------------------------------------
 
-const _DD_POINT_VALUE = { MNQ: 2, MES: 5, MGC: 10, MCL: 100 };
+const { INSTRUMENTS } = require('../data/instruments');
+const _DD_POINT_VALUE = Object.fromEntries(
+  Object.entries(INSTRUMENTS).map(([s, m]) => [s, m.pointValue])
+);
 const _DD_CRYPTO      = new Set(['BTC', 'ETH', 'XRP', 'XLM']);
 
 function computeDDBands(candles, symbol, spanMargin) {

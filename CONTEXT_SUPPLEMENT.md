@@ -84,6 +84,7 @@ server/
     indicators.js       ← computeIndicators(candles, opts) — opts has {symbol, features}
     setups.js           ← detectSetups(candles, ind, regime, opts) — opts has {calendarEvents}
     alertDedup.js       ← isDuplicate (15-min cooldown + ±0.25×ATR proximity), applyStaleness, pruneExpired
+    bias.js             ← computeSetupReadiness(symbol, mktCtx, hour, mode='auto'), computeDirectionalBias(symbol, mktCtx, ind)
   push/
     pushManager.js      ← VAPID push manager; subscriptions in data/push/subscriptions.json
 public/
@@ -222,8 +223,46 @@ All three are then scaled by the live ratio to futures price space.
   scaledOiWalls, scaledMaxPain, scaledGexFlip, scaledCallWall, scaledPutWall,
   scaledLiquidityZones, scaledHedgePressureZones, scaledPivotCandidates,
   scaledDaily: { prevDayOpen, prevDayClose, curDayOpen },
+
+  // Expiry-bucket HP (v14.13) — null if bucket has <10 strikes with OI
+  weeklyMonthlyHP: {                                                   // DTE 15–60
+    zones: [{ strike, gex, pressure, scaled }, ...],                   // top 3
+    totalOI: number,
+    bucketDTE: { min, max },
+  },
+  quarterlyHP: {                                                       // DTE 61–120
+    zones: [{ strike, gex, pressure, scaled }, ...],                   // top 3
+    totalOI: number,
+    bucketDTE: { min, max },
+  },
 }
 ```
+
+### Market Context HP Sub-Object (v14.13)
+
+`buildMarketContext()` in `server/analysis/marketContext.js` returns `marketContext.hp` with:
+
+```javascript
+{
+  nearestLevel: { type, price, distance_atr },   // nearest daily HP/GEX/MaxPain/Wall level
+  pressureDirection: 'support' | 'resistance' | 'neutral',
+  inCorridor: boolean,                             // bracketed by 2 levels ≤2.0 ATR apart
+  corridorBounds: { low, high, width_atr } | null,
+  corridorMultiplierReversal: 1.08,
+  corridorMultiplierBreakout: 0.88,
+  freshnessDecayPts: number,                       // 0 to −15 based on options data age
+  multiplier: number,                              // 0.80–1.30 (includes monthly boost)
+  monthlyNearest: { type, price, pressure } | null, // nearest monthly HP zone (v14.13)
+  monthlyMultiplierDelta: number,                   // +0.05 when daily+monthly converge (v14.13)
+}
+```
+
+HP multiplier tiers:
+- Daily HP at level (≤0.3 ATR): 1.05 base
+- Daily HP near (0.3–0.75 ATR): 1.10 base
+- Monthly HP only at level: 1.15 / near: 1.05
+- Daily + monthly converge: base + 0.05 bonus
+- Final clamp: 0.80–1.30
 
 ---
 
@@ -282,6 +321,18 @@ Widget element IDs: `opt-source`, `opt-pc`, `opt-iv`, `opt-maxpain`, `opt-dex`, 
 
 **Pine Script button** in nav: `<button id="pine-copy-btn" onclick="window._copyPineScript()">Pine Script</button>`
 Fetches `/api/pine-script`, copies generated Pine Script v6 to clipboard.
+
+---
+
+## Dashboard Bias Panel (v14.15)
+
+Full-width collapsible panel between topbar and chart, showing:
+1. **Setup Readiness** — 6 OR breakout gate checks (DEX neutral, DXY rising late, DXY rising penalty, risk-off breadth, VIX crisis, calendar event). Status: READY / CAUTION / BLOCKED.
+2. **Directional Bias** — 11 scored signals producing net direction (bullish/neutral/bearish) with strength (strong/mild/flat). Score range: -18 to +18.
+
+API: `GET /api/bias?symbol=MNQ` — 30s cache. Returns `{ readiness, bias }`.
+Updates on: page load, symbol switch, WS setup/data_refresh messages.
+Collapse state persisted in localStorage (`biasPanelOpen`).
 
 ---
 
@@ -504,7 +555,14 @@ riskAppetite = score >= 5 ? 'on' : score <= -5 ? 'off' : 'neutral'
 - dollarRegime inversion confirmed correct in v12.8 (no bug found)
 - Breadth precomputation note: reads all 1m daily files for 16 symbols (~46,470 files, ~4-5GB). Full A5 run takes ~1 hour due to synchronous I/O in _precomputeBreadth.
 
-**By symbol (or_breakout net):**
+**A5 corrected v14.10 (correct fees + pointValues from v14.8):**
+- 7,401 trades, WR 34.2%, PF 1.689, Net +$640,904, MaxDD $13,533
+- or_breakout: 4,756 trades, WR 31.7%, Net +$638,046
+- pdh_breakout: 2,645 trades, WR 38.6%, Net +$2,858
+- MNQ: $362,932 | MGC: $163,533 | MES: $68,243 | MCL: $46,197
+- Dollar figures differ significantly from pre-v14.8 runs due to corrected per-symbol fees ($1.62–$2.12/RT vs flat $4) and corrected SIL/MHG pointValues. WR/PF conclusions unchanged.
+
+**By symbol (or_breakout net, pre-v14.8 reference):**
 - MNQ: +$115K (44% of total)
 - MGC: +$65K
 - MES: +$57K
@@ -512,6 +570,38 @@ riskAppetite = score >= 5 ? 'on' : score <= -5 ? 'off' : 'neutral'
 
 **Key structural finding:**
 zone_rejection R:R is inverted because Supply/Demand zones in the backtest attract price repeatedly — the zone gets tested, rejected, retested, and eventually broken. Each rejection fires a signal but the average loss on failed rejections exceeds the average win on successful ones. The setup needs fundamental redesign (tighter SL, zone quality filter, or different TP structure) before it can be re-enabled.
+
+---
+
+## Phase 2 Loss-Analysis Filters (v14.11)
+
+Implemented in `server/analysis/setups.js`. Derived from A5 corrected (7,401 trades) and B8 corrected (876 trades) analysis.
+
+### Hard gates (setup skipped entirely)
+| Filter | Location | Condition | Evidence |
+|--------|----------|-----------|----------|
+| 1 | `_orBreakout` loop | DXY rising + ET hour >= 11 | WR 20.7%, PF 0.965 (n=174) |
+| 2 | `_pdhBreakout` top | symbol is MNQ/MES/MCL | Combined PF 0.954, net -$1,451 |
+| 3 | `_orBreakout` top | dexBias === 'neutral' | PF 1.164 (n=286) |
+| 4 | `_pdhBreakout` loop | MGC + (hour 9 or hour >= 11 ET) | Hour 9 PF 0.983, hour 11+ PF 0.700 |
+
+### Score penalty
+| Filter | Location | Condition | Penalty |
+|--------|----------|-----------|---------|
+| 5 | `_orConf` | DXY rising + ET hour <= 10 | score -= 8 |
+
+### Deferred
+- Filter 6: IA3 TODO comment. Conf 90-100 = PF 1.349 (weakest), 70-75 = PF 2.770 (strongest). Needs calibration investigation.
+
+### B9 validation (job 9392cd8f9a9f)
+- 729 trades, WR 42.7%, PF 2.265, Net $145,178, MaxDD $5,157, Sharpe 6.106
+- Delta vs B8: -147 trades (-16.8%), WR +0.9pp, PF +0.036, Sharpe +0.41
+- Filters active in B9: 1, 3, 5 (DXY and DEX gates on or_breakout). Filters 2, 4 had no effect (B9 uses or_breakout only on MNQ/MES/MCL).
+
+### Technical notes
+- DST-aware `_etHour()` added for accurate ET hour computation in filter gates
+- `marketContext` passed to detection functions via existing `extras` parameter
+- DXY direction source: `mktCtx.dxy.direction` → `mktCtx.breadth.dollarRegime` fallback → `'flat'`
 
 ---
 

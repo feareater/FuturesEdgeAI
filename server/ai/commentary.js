@@ -143,6 +143,21 @@ function _buildPrompt(alerts, getCandles, extrasMap = {}) {
       lines.push(detail);
     }
 
+    // Market context fields (from scoreBreakdown.context populated by applyMarketContext)
+    const ctx = s.scoreBreakdown?.context;
+    if (ctx) {
+      const mktLines = [];
+      if (ctx.vixRegime)      mktLines.push(`VIX regime: ${ctx.vixRegime}`);
+      if (ctx.dxyDirection)   mktLines.push(`DXY direction: ${ctx.dxyDirection}`);
+      if (ctx.breadthDetail) {
+        const bd = ctx.breadthDetail;
+        if (bd.equityBreadth != null) mktLines.push(`Equity breadth: ${bd.equityBreadth}/4 indices bullish`);
+        if (bd.bondRegime)            mktLines.push(`Bond regime: ${bd.bondRegime}`);
+        if (bd.riskAppetite)          mktLines.push(`Risk appetite: ${bd.riskAppetite}`);
+      }
+      if (mktLines.length > 0) lines.push('Market context: ' + mktLines.join(' | '));
+    }
+
     return lines.join('\n');
   }).join('\n\n---\n\n');
 

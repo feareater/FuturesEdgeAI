@@ -16,12 +16,20 @@
 (function () {
 
   // ── Constants ───────────────────────────────────────────────────────────────
-  const FUTURES      = ['MNQ', 'MES', 'MGC', 'MCL'];
+  // Row 1 — Equity Futures (4 cols)
+  const EQUITY_ROW = ['MNQ', 'MES', 'M2K', 'MYM'];
+  // Row 2 — Commodities & FX (4 cols)
+  const COMMODITIES_ROW = ['MGC', 'MCL', 'MHG', 'M6E'];
+  // Row 3 — Crypto (3 cols)
   const CRYPTO       = ['BTC', 'ETH', 'XRP'];
-  const GRID_SYMBOLS = [...FUTURES, ...CRYPTO];
+  const GRID_SYMBOLS = [...EQUITY_ROW, ...COMMODITIES_ROW, ...CRYPTO];
 
   // Decimal places for each symbol's price display
-  const PRICE_DEC = { MNQ: 2, MES: 2, MGC: 1, MCL: 2, BTC: 0, ETH: 2, XRP: 4 };
+  const PRICE_DEC = {
+    MNQ: 2, MES: 2, M2K: 2, MYM: 0,
+    MGC: 1, MCL: 2, MHG: 4, M6E: 4,
+    BTC: 0, ETH: 2, XRP: 4,
+  };
 
   const LS_MODE    = 'fe_chart_mode';
   const LS_GRID_TF = 'fe_grid_tf_all';
@@ -78,9 +86,14 @@
   }
 
   function _buildGridHTML() {
-    const futuresHTML = FUTURES.map(_cellHTML).join('');
-    const cryptoHTML  = CRYPTO.map(_cellHTML).join('');
-    return `<div class="chart-grid-futures">${futuresHTML}</div>
+    const equityHTML     = EQUITY_ROW.map(_cellHTML).join('');
+    const commodHTML     = COMMODITIES_ROW.map(_cellHTML).join('');
+    const cryptoHTML     = CRYPTO.map(_cellHTML).join('');
+    return `<div class="chart-grid-row chart-grid-label">Equity Futures</div>
+<div class="chart-grid-futures">${equityHTML}</div>
+<div class="chart-grid-row chart-grid-label">Commodities &amp; FX</div>
+<div class="chart-grid-commodities">${commodHTML}</div>
+<div class="chart-grid-row chart-grid-label">Crypto</div>
 <div class="chart-grid-crypto">${cryptoHTML}</div>`;
   }
 

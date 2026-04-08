@@ -41,6 +41,7 @@
             <span id="data-age-text">—</span>
           </div>
           <a href="/backtest2.html"       id="backtest2-nav-link"  title="Historical Backtesting">Backtest</a>
+          <a href="/forwardtest.html"    id="forwardtest-nav-link" title="Forward Test / Paper Trading">Live Trades</a>
           <a href="/docs.html"           id="docs-nav-link"       title="Setup Guide">Guide</a>
           <a href="/performance.html"    id="perf-nav-link"       title="Performance Stats">Stats</a>
           <a href="/tradelog.html"       id="tradelog-nav-link"   title="Trade Log">Trade Log</a>
@@ -65,6 +66,8 @@
             <div class="btn-group">
               <button class="sym-btn active" data-symbol="MNQ" data-mode="index">MNQ</button>
               <button class="sym-btn"        data-symbol="MES" data-mode="index">MES</button>
+              <button class="sym-btn"        data-symbol="M2K" data-mode="index">M2K</button>
+              <button class="sym-btn"        data-symbol="MYM" data-mode="index">MYM</button>
             </div>
           </div>
           <div class="sym-group-divider"></div>
@@ -73,7 +76,16 @@
             <div class="btn-group">
               <button class="sym-btn" data-symbol="MGC" data-mode="index">MGC</button>
               <button class="sym-btn" data-symbol="MCL" data-mode="index">MCL</button>
+              <button class="sym-btn" data-symbol="MHG" data-mode="index">MHG</button>
               <button class="sym-btn" data-symbol="SIL" data-mode="index">SIL</button>
+            </div>
+          </div>
+          <div class="sym-group-divider"></div>
+          <div class="sym-group">
+            <span class="sym-group-label">FX</span>
+            <div class="btn-group">
+              <button class="sym-btn" data-symbol="M6E" data-mode="index">M6E</button>
+              <button class="sym-btn" data-symbol="M6B" data-mode="index">M6B</button>
             </div>
           </div>
         </div>
@@ -86,12 +98,24 @@
               <button class="sym-btn" data-symbol="ETH" data-mode="crypto">ETH</button>
               <button class="sym-btn" data-symbol="XRP" data-mode="crypto">XRP</button>
               <button class="sym-btn" data-symbol="XLM" data-mode="crypto">XLM</button>
+              <button class="sym-btn" data-symbol="MBT" data-mode="crypto">MBT</button>
             </div>
           </div>
         </div>
         <!-- Reference symbols (always visible) -->
         <div class="sym-group-divider"></div>
         <div class="sym-groups" id="sym-groups-ref">
+          <div class="sym-group">
+            <span class="sym-group-label">Bonds</span>
+            <div class="btn-group">
+              <button class="sym-btn" data-symbol="ZT" data-mode="ref">ZT</button>
+              <button class="sym-btn" data-symbol="ZF" data-mode="ref">ZF</button>
+              <button class="sym-btn" data-symbol="ZN" data-mode="ref">ZN</button>
+              <button class="sym-btn" data-symbol="ZB" data-mode="ref">ZB</button>
+              <button class="sym-btn" data-symbol="UB" data-mode="ref">UB</button>
+            </div>
+          </div>
+          <div class="sym-group-divider"></div>
           <div class="sym-group">
             <span class="sym-group-label">Reference</span>
             <div class="btn-group">
@@ -104,7 +128,7 @@
         </div>
       </div>
 
-      <!-- Row 3: Timeframe selection + chart mode toggle -->
+      <!-- Row 3: Timeframe selection -->
       <div class="tb-row tb-row-tf">
         <span class="control-label">Timeframe</span>
         <div class="btn-group">
@@ -116,7 +140,6 @@
           <button class="tf-btn"        data-tf="2h">2h</button>
           <button class="tf-btn"        data-tf="4h">4h</button>
         </div>
-        <button id="chart-mode-toggle" class="chart-mode-toggle" title="Switch to grid view">Grid</button>
       </div>
 
       <!-- Row 4: Correlation heatmap -->
@@ -130,52 +153,79 @@
         </div>
       </div>
 
-      <!-- Row 5: OHLC · Last price · RS · Options -->
-      <div class="tb-row tb-row-data">
-        <div id="ohlc-display">
-          <span class="ohlc-label">O</span><span id="ohlc-o">—</span>
-          <span class="ohlc-label">H</span><span id="ohlc-h">—</span>
-          <span class="ohlc-label">L</span><span id="ohlc-l">—</span>
-          <span class="ohlc-label">C</span><span id="ohlc-c">—</span>
-        </div>
-        <div id="last-price">
-          <span id="price-value">—</span>
-          <span id="price-symbol">MNQ · 5m</span>
-        </div>
-        <div id="rs-widget" class="rs-widget" style="display:none">
-          <span class="rs-label">RS</span>
-          <span id="rs-ratio" class="rs-ratio">—</span>
-          <span id="rs-signal" class="rs-signal">—</span>
-        </div>
-        <div id="options-widget" class="options-widget" style="display:none">
-          <span id="opt-source" class="opt-source"></span>
-          <span class="opt-label">P/C</span>
-          <span id="opt-pc" class="opt-value">—</span>
-          <span class="opt-sep">|</span>
-          <span class="opt-label">IV</span>
-          <span id="opt-iv" class="opt-value">—</span>
-          <span class="opt-sep">|</span>
-          <span class="opt-label">MaxPain</span>
-          <span id="opt-maxpain" class="opt-value">—</span>
-          <span class="opt-sep">|</span>
-          <span class="opt-label">DEX</span>
-          <span id="opt-dex" class="opt-value">—</span>
-          <span class="opt-sep">|</span>
-          <span class="opt-label">Resilience</span>
-          <span id="opt-resilience" class="opt-value">—</span>
-        </div>
-        <div id="gamma-widget" class="gamma-widget" style="display:none"></div>
-        <div id="ddband-widget" class="ddband-widget" style="display:none">
-          <span id="dd-upper" class="dd-level">DD↑ —</span>
-          <span class="dd-sep">|</span>
-          <span id="dd-lower" class="dd-level">DD↓ —</span>
-          <span id="dd-position" class="dd-position-badge badge-ok">INSIDE DD</span>
-        </div>
-        <!-- Hidden span kept for JS compatibility -->
-        <span id="data-age" class="data-age" style="display:none">—</span>
-      </div>
-
     </header>
+
+    <!-- ── Bias Panel ────────────────────────────────────────────────── -->
+    <div id="bias-panel" class="bias-panel">
+      <div class="bias-panel-header">
+        <span class="bias-panel-title">MARKET CONTEXT</span>
+        <span class="bias-panel-symbol" id="bias-symbol-label">MNQ</span>
+        <span class="bias-mode-badge" id="bias-mode-badge" style="display:none">MANUAL</span>
+        <button class="bias-mode-toggle" id="bias-mode-btn" title="Toggle AUTO/MANUAL mode">AUTO</button>
+        <button class="bias-panel-toggle" id="bias-toggle-btn">&#9650;</button>
+      </div>
+      <div class="bias-panel-body" id="bias-panel-body">
+        <div class="bias-sections-row">
+          <div class="bias-section" id="bias-readiness-section">
+            <div class="bias-init-placeholder">Initializing...</div>
+          </div>
+          <div class="bias-divider"></div>
+          <div class="bias-section" id="bias-direction-section">
+            <div class="bias-init-placeholder">Initializing...</div>
+          </div>
+          <div class="bias-divider"></div>
+          <div class="bias-section" id="bias-setup-score-section">
+            <div class="bias-init-placeholder">Initializing...</div>
+          </div>
+        </div>
+        <div class="bias-conviction-row" id="bias-conviction-row">
+          <span class="conviction-label" id="conviction-label">INITIALIZING</span>
+          <span class="conviction-detail" id="conviction-detail">Waiting for scan data...</span>
+        </div>
+        <div class="bias-data-row" id="bias-data-row">
+          <div id="ohlc-display">
+            <span class="ohlc-label">O</span><span id="ohlc-o">—</span>
+            <span class="ohlc-label">H</span><span id="ohlc-h">—</span>
+            <span class="ohlc-label">L</span><span id="ohlc-l">—</span>
+            <span class="ohlc-label">C</span><span id="ohlc-c">—</span>
+          </div>
+          <div id="last-price">
+            <span id="price-value">—</span>
+            <span id="price-symbol">MNQ · 5m</span>
+          </div>
+          <div id="rs-widget" class="rs-widget" style="display:none">
+            <span class="rs-label">RS</span>
+            <span id="rs-ratio" class="rs-ratio">—</span>
+            <span id="rs-signal" class="rs-signal">—</span>
+          </div>
+          <div id="options-widget" class="options-widget" style="display:none">
+            <span id="opt-source" class="opt-source"></span>
+            <span class="opt-label">P/C</span>
+            <span id="opt-pc" class="opt-value">—</span>
+            <span class="opt-sep">|</span>
+            <span class="opt-label">IV</span>
+            <span id="opt-iv" class="opt-value">—</span>
+            <span class="opt-sep">|</span>
+            <span class="opt-label">MaxPain</span>
+            <span id="opt-maxpain" class="opt-value">—</span>
+            <span class="opt-sep">|</span>
+            <span class="opt-label">DEX</span>
+            <span id="opt-dex" class="opt-value">—</span>
+            <span class="opt-sep">|</span>
+            <span class="opt-label">Resilience</span>
+            <span id="opt-resilience" class="opt-value">—</span>
+          </div>
+          <div id="gamma-widget" class="gamma-widget" style="display:none"></div>
+          <div id="ddband-widget" class="ddband-widget" style="display:none">
+            <span id="dd-upper" class="dd-level">DD↑ —</span>
+            <span class="dd-sep">|</span>
+            <span id="dd-lower" class="dd-level">DD↓ —</span>
+            <span id="dd-position" class="dd-position-badge badge-ok">INSIDE DD</span>
+          </div>
+          <span id="data-age" class="data-age" style="display:none">—</span>
+        </div>
+      </div>
+    </div>
 
     <main id="main">
 
@@ -214,6 +264,13 @@
               <input id="mnq-contracts" type="number" class="filter-input narrow" value="5" min="1" max="20" />
               <span class="filter-sym">MGC</span>
               <input id="mgc-contracts" type="number" class="filter-input narrow" value="3" min="1" max="20" />
+            </div>
+            <div class="filter-row">
+              <label class="filter-label"></label>
+              <span class="filter-sym">M2K</span>
+              <input id="m2k-contracts" type="number" class="filter-input narrow" value="2" min="1" max="20" />
+              <span class="filter-sym">MYM</span>
+              <input id="mym-contracts" type="number" class="filter-input narrow" value="2" min="1" max="20" />
             </div>
             <div class="filter-row">
               <label class="filter-label">Crypto Cts</label>
@@ -266,17 +323,15 @@
 
       <aside id="right-panel">
 
-        <!-- ── Directional Prediction ─────────────────────────────────── -->
-        <div class="panel-section" id="prediction-section">
-          <div class="panel-header collapsible-header" data-section="prediction">
-            Bias <span id="pred-symbol-label" class="pred-symbol-label"></span>
-            <span class="section-chevron">▾</span>
-          </div>
-          <div class="section-body">
-            <div id="prediction-widget" class="prediction-widget">
-              <div class="pred-loading">Computing…</div>
-            </div>
-          </div>
+        <!-- ── Chart Mode Toggle ────────────────────────────────────────── -->
+        <div class="panel-section" id="chart-mode-section">
+          <button id="chart-mode-toggle" class="chart-mode-toggle" title="Switch to grid view" style="width:100%">Grid</button>
+        </div>
+
+        <!-- Hidden prediction widget (data source for setup score section) -->
+        <div id="prediction-section" style="display:none">
+          <span id="pred-symbol-label" class="pred-symbol-label"></span>
+          <div id="prediction-widget" class="prediction-widget"></div>
         </div>
 
         <!-- ── Scan Predictions ────────────────────────────────────────── -->
@@ -383,6 +438,18 @@
                 </label>
 
                 <label class="layer-row">
+                  <input type="checkbox" data-layer="hpMonthly" checked />
+                  <span class="swatch" style="background:#00e676"></span>
+                  <span class="layer-name">HP Monthly</span>
+                </label>
+
+                <label class="layer-row">
+                  <input type="checkbox" data-layer="hpQuarterly" checked />
+                  <span class="swatch" style="background:#69ff8c"></span>
+                  <span class="layer-name">HP Quarterly</span>
+                </label>
+
+                <label class="layer-row">
                   <input type="checkbox" data-layer="ddBands" checked />
                   <span class="swatch" style="background:rgba(255,152,0,0.85)"></span>
                   <span class="layer-name">DD Bands</span>
@@ -481,6 +548,71 @@
           .catch(err => console.warn('[SW] Registration failed:', err));
       });
     }
+  </script>
+  <!-- Paper Trading Monitor -->
+  <script>
+  (function() {
+    const PT_INTERVAL = 60000;
+    async function fetchPaperTrading() {
+      try {
+        const res = await fetch('/api/forwardtest/summary');
+        const d = await res.json();
+        const empty = document.getElementById('pt-empty');
+        const wrap  = document.getElementById('pt-table-wrap');
+        const openRow = document.getElementById('pt-open');
+
+        if (!d.totalTrades) {
+          empty.style.display = 'block';
+          wrap.style.display  = 'none';
+          openRow.textContent = '';
+          document.getElementById('pt-trades').textContent = '0';
+          document.getElementById('pt-wr').textContent     = '--';
+          document.getElementById('pt-pf').textContent     = '--';
+          document.getElementById('pt-pnl').textContent    = '$0';
+          return;
+        }
+
+        empty.style.display = 'none';
+        wrap.style.display  = 'block';
+
+        document.getElementById('pt-trades').textContent = d.totalTrades;
+        document.getElementById('pt-wr').textContent     = (d.winRate * 100).toFixed(1) + '%';
+        document.getElementById('pt-pf').textContent     = d.profitFactor === Infinity ? '---' : d.profitFactor.toFixed(2);
+        const pnlEl = document.getElementById('pt-pnl');
+        pnlEl.textContent = (d.netPnl >= 0 ? '+$' : '-$') + Math.abs(d.netPnl).toFixed(0);
+        pnlEl.className   = 'pt-val ' + (d.netPnl >= 0 ? 'pt-pos' : 'pt-neg');
+
+        if (d.openPositions > 0) {
+          openRow.textContent = d.openPositions + ' open position' + (d.openPositions > 1 ? 's' : '');
+          openRow.style.display = 'block';
+        } else {
+          openRow.style.display = 'none';
+        }
+
+        const tbody = document.getElementById('pt-tbody');
+        tbody.innerHTML = '';
+        const recent = (d.recentTrades || []).slice(0, 5);
+        for (const t of recent) {
+          const tr = document.createElement('tr');
+          const won = t.outcome === 'won';
+          const lost = t.outcome === 'lost';
+          tr.innerHTML =
+            '<td>' + t.symbol + '</td>' +
+            '<td>' + (t.direction === 'bullish' ? '\u2191' : '\u2193') + '</td>' +
+            '<td>' + (t.confidence || '--') + '</td>' +
+            '<td class="' + (won ? 'pt-pos' : lost ? 'pt-neg' : 'pt-to') + '">' +
+              (won ? 'WIN' : lost ? 'LOSS' : 'T/O') + '</td>' +
+            '<td class="' + (t.netPnl >= 0 ? 'pt-pos' : 'pt-neg') + '">' +
+              (t.netPnl >= 0 ? '+' : '') + '$' + Math.abs(t.netPnl || 0).toFixed(0) + '</td>';
+          tbody.appendChild(tr);
+        }
+      } catch (err) {
+        console.warn('[PT] fetch error:', err.message);
+      }
+    }
+    fetchPaperTrading();
+    setInterval(fetchPaperTrading, PT_INTERVAL);
+  })();
   </script>
 </body>
 </html>

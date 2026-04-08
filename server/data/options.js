@@ -1,12 +1,30 @@
 'use strict';
-// Fetches options chain from CBOE delayed quotes API — free, no auth required.
-// Targets QQQ (MNQ proxy) and SPY (MES proxy) for equity index futures.
-// Computes: OI walls, max pain, put/call ratio, ATM IV, and GEX (gamma exposure).
-// GEX flip level is where net gamma exposure crosses zero — a key vol regime indicator.
-// Caches results per symbol; re-applies futures-space scaling on each request.
+// Fetches options chain for HP/GEX/DEX/resilience computation.
+// Primary source: Databento OPRA.PILLAR live TCP feed (features.liveOpra=true).
+// Fallback:       CBOE delayed quotes API (free, 15-min delayed).
+//
+// When liveOpra is enabled and opraLive has accumulated OI data, getOptionsData()
+// converts the live strike map into the same intermediate format as the CBOE response
+// and passes it through the unchanged _computeMetrics() pipeline.  The return shape
+// of getOptionsData() is identical in both cases — callers (marketContext.js, index.js)
+// see no difference.
+//
+// Feature flag: config/settings.json → features.liveOpra (default false).
+// Hot-toggle:   POST /api/features { "liveOpra": true|false } — no restart needed.
 
 const BASE_URL     = 'https://cdn.cboe.com/api/global/delayed_quotes/options';
 const YAHOO_BASE   = 'https://query2.finance.yahoo.com/v8/finance/chart';
+
+// Lazy-require opraLive to avoid circular deps; resolved on first getOptionsData() call.
+let _opraLive = null;
+function _getOpraLive() {
+  if (!_opraLive) _opraLive = require('./opraLive');
+  return _opraLive;
+}
+
+// Read features from settings at call time so hot-toggles take effect without restart.
+// We import the settings object (mutable reference) — the same pattern used elsewhere.
+const settings = require('../../config/settings.json');
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour (CBOE data is 15-min delayed)
 const DAILY_TTL_MS = 30 * 60 * 1000; // 30 min for daily OHLC cache
 
@@ -449,6 +467,105 @@ function _computeMetrics(raw, futuresPrice) {
   };
 }
 
+// ── Expiry-bucket HP computation ─────────────────────────────────────────────
+// Splits the full options chain into DTE buckets and computes HP zones per bucket.
+// Bucket 0 (0–14 DTE): daily/weekly — already covered by _computeMetrics
+// Bucket 1 (15–60 DTE): monthly — standard monthly expiry territory
+// Bucket 2 (61–120 DTE): quarterly — quarterly / near-term LEAPS
+// Returns { weeklyMonthlyHP, quarterlyHP } or nulls for empty/insufficient buckets.
+
+function _computeExpiryBucketHP(raw, scalingRatio) {
+  const spot       = raw.current_price;
+  const opts       = raw.options || [];
+  const underlying = raw.symbol;
+  if (!spot || spot <= 0) return { weeklyMonthlyHP: null, quarterlyHP: null };
+
+  const today      = new Date();
+  const todayStr   = today.toISOString().slice(0, 10);
+  const maxDTE     = 120;
+  const maxDate    = new Date(today.getTime() + maxDTE * 86400_000);
+  const maxStr     = maxDate.toISOString().slice(0, 10);
+  const minStrike  = spot * 0.75;
+  const maxStrike  = spot * 1.25;
+  const CONTRACT_SIZE = 100;
+
+  // Parse all options within 120 DTE + strike range, compute DTE for each
+  const allParsed = [];
+  for (const o of opts) {
+    if (!o.option || o.open_interest == null) continue;
+    const p = _parseOpt(o.option, underlying);
+    if (p.expiry < todayStr || p.expiry > maxStr) continue;
+    if (p.strike < minStrike || p.strike > maxStrike) continue;
+    const dte = Math.max(0, Math.round((new Date(p.expiry) - today) / 86400_000));
+    allParsed.push({ ...p, oi: o.open_interest, gamma: o.gamma ?? 0, dte });
+  }
+
+  // Bucket definitions: [minDTE, maxDTE]
+  const BUCKETS = [
+    { name: 'daily',     min: 0,  max: 14 },   // bucket 0 — already in _computeMetrics, skip
+    { name: 'monthly',   min: 15, max: 60 },    // bucket 1
+    { name: 'quarterly', min: 61, max: 120 },   // bucket 2
+  ];
+
+  function _hpForBucket(contracts, topN) {
+    // Build strike → { callGamma, putGamma } map
+    const strikeMap = new Map();
+    for (const c of contracts) {
+      const e = strikeMap.get(c.strike) || { callGamma: 0, putGamma: 0, totalOI: 0 };
+      if (c.type === 'C') { e.callGamma += c.gamma * c.oi; }
+      else                { e.putGamma  += c.gamma * c.oi; }
+      e.totalOI += c.oi;
+      strikeMap.set(c.strike, e);
+    }
+
+    // Count strikes with OI > 0
+    let strikesWithOI = 0;
+    for (const e of strikeMap.values()) { if (e.totalOI > 0) strikesWithOI++; }
+    if (strikesWithOI < 10) return null; // insufficient data
+
+    // Compute GEX per strike
+    const gexByStrike = [];
+    let bucketTotalOI = 0;
+    for (const [strike, e] of strikeMap) {
+      const gex = (e.callGamma - e.putGamma) * CONTRACT_SIZE * spot;
+      gexByStrike.push({ strike, gex });
+      bucketTotalOI += e.totalOI;
+    }
+
+    // Top N by |GEX|
+    const zones = gexByStrike
+      .filter(g => Math.abs(g.gex) > 0)
+      .sort((a, b) => Math.abs(b.gex) - Math.abs(a.gex))
+      .slice(0, topN)
+      .map(g => ({
+        strike:   g.strike,
+        gex:      Math.round(g.gex),
+        pressure: g.gex > 0 ? 'support' : 'resistance',
+        scaled:   scalingRatio != null ? Math.round(g.strike * scalingRatio) : null,
+      }));
+
+    if (zones.length === 0) return null;
+
+    // DTE range actually present in this bucket
+    const dtes = contracts.map(c => c.dte);
+    return {
+      zones,
+      totalOI: bucketTotalOI,
+      bucketDTE: { min: Math.min(...dtes), max: Math.max(...dtes) },
+    };
+  }
+
+  // Bucket 1 — monthly (DTE 15–60), top 3 zones
+  const monthlyContracts   = allParsed.filter(c => c.dte >= BUCKETS[1].min && c.dte <= BUCKETS[1].max);
+  const weeklyMonthlyHP    = _hpForBucket(monthlyContracts, 3);
+
+  // Bucket 2 — quarterly (DTE 61–120), top 3 zones
+  const quarterlyContracts = allParsed.filter(c => c.dte >= BUCKETS[2].min && c.dte <= BUCKETS[2].max);
+  const quarterlyHP        = _hpForBucket(quarterlyContracts, 3);
+
+  return { weeklyMonthlyHP, quarterlyHP };
+}
+
 // ── Scale daily ETF levels to futures price space ────────────────────────────
 
 function _scaleDailyLevels(daily, ratio) {
@@ -464,8 +581,13 @@ function _scaleDailyLevels(daily, ratio) {
 
 /**
  * Returns options metrics for a symbol with 1-hour caching.
- * Uses CBOE delayed quotes; falls back gracefully on error.
+ *
+ * Data source priority:
+ *   1. Databento OPRA live TCP (features.liveOpra=true AND opraLive has OI data)
+ *   2. CBOE delayed quotes API (fallback; always available)
+ *
  * Returns scaled* fields (in futures price space) when futuresPrice is provided.
+ * Return shape is identical regardless of which source is used.
  *
  * @param {string} symbol        'MNQ' | 'MES' | 'MGC' | 'MCL'
  * @param {number|null} futuresPrice  Current futures price for strike scaling (optional)
@@ -484,6 +606,83 @@ async function getOptionsData(symbol, futuresPrice) {
     if (fp != null && d?.etfPrice > 0) return fp / d.etfPrice;
     return null;
   }
+
+  // ── Check OPRA live source ────────────────────────────────────────────────
+  // Use Databento OPRA data when:
+  //   a) features.liveOpra is true (hot-toggle safe — settings is a mutable reference)
+  //   b) opraLive has accumulated OI data for this ETF (hasData=true)
+  //   c) OPRA data is only available for QQQ/SPY proxies (same as CBOE primary targets)
+  const liveOpraEnabled = settings.features?.liveOpra === true;
+  if (liveOpraEnabled) {
+    try {
+      const opraLive = _getOpraLive();
+      const chain    = opraLive.getOpraRawChain(etf);
+      if (chain?.hasData) {
+        // Re-use existing daily levels fetch (Yahoo) for spot price and scaling ratio.
+        // This ensures consistent daily levels (prevDayOpen/Close/curDayOpen) regardless
+        // of which options source is active.
+        const futYahoo = FUTURES_YAHOO[symbol] ?? null;
+        const daily    = await _fetchDailyLevels(etf, futYahoo);
+
+        const liveFut = daily?.liveFuturesPrice ?? null;
+        const liveEtf = daily?.liveEtfPrice     ?? null;
+        const bestFp  = (liveFut && liveEtf && liveEtf > 0) ? liveFut : futuresPrice;
+
+        // Build CBOE-compatible raw structure from the OPRA strike map.
+        // current_price must be the ETF spot (used by _computeMetrics for strike ±25%
+        // filtering and as the base for GEX scaling).  We require the live ETF price
+        // from Yahoo — if unavailable, fall through to CBOE which also fetches it.
+        const fakeRaw = {
+          current_price: liveEtf,
+          symbol:  etf,
+          options: chain.options,
+        };
+
+        // current_price is required; fall back to CBOE if we don't have it
+        if (fakeRaw.current_price != null && fakeRaw.current_price > 0) {
+          const metrics = _computeMetrics(fakeRaw, bestFp);
+          if (metrics) {
+            const result = {
+              ...metrics,
+              source:     etf,
+              dataSource: 'opra-live',
+              daily:      daily ?? null,
+              lastFetchedAt: Date.now(),
+            };
+            // Cache with shorter TTL for live data (5 min) to pick up OI updates
+            _cache.set(symbol, { data: result, timestamp: Date.now() - (CACHE_TTL_MS - 5 * 60 * 1000) });
+            if (result.scalingRatio != null) {
+              result.scaledDaily = _scaleDailyLevels(result.daily, result.scalingRatio);
+            }
+            // Expiry-bucket HP (monthly + quarterly)
+            const bucketHP = _computeExpiryBucketHP(fakeRaw, result.scalingRatio);
+            result.weeklyMonthlyHP = bucketHP.weeklyMonthlyHP;
+            result.quarterlyHP     = bucketHP.quarterlyHP;
+
+            const maxStr  = result.scaledMaxPain ?? result.maxPain;
+            const flipStr = result.scaledGexFlip ?? result.gexFlip;
+            const dl      = result.scaledDaily;
+            const st      = opraLive.getOpraStatus();
+            console.log(
+              `[options] ${symbol} via OPRA live (${etf}): ` +
+              `maxPain=${maxStr} gexFlip=${flipStr} pc=${result.pcRatio} atmIV=${result.atmIV} ` +
+              `ratio=${result.scalingRatio?.toFixed(3) ?? '—'} ` +
+              `pdO=${dl?.prevDayOpen} pdC=${dl?.prevDayClose} cdO=${dl?.curDayOpen} ` +
+              `strikes=${st.strikeCount}` +
+              ` mHP=${bucketHP.weeklyMonthlyHP?.zones?.length ?? 0} qHP=${bucketHP.quarterlyHP?.zones?.length ?? 0}`
+            );
+            return result;
+          }
+        }
+        // If metrics computation failed (e.g. no near-term options), fall through to CBOE
+        console.warn(`[options] ${symbol} OPRA chain has data but _computeMetrics failed — falling back to CBOE`);
+      }
+    } catch (err) {
+      console.warn(`[options] ${symbol} OPRA live error: ${err.message} — falling back to CBOE`);
+    }
+  }
+
+  // ── CBOE delayed quotes (existing path — unchanged) ───────────────────────
 
   const cached = _cache.get(symbol);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
@@ -519,7 +718,7 @@ async function getOptionsData(symbol, futuresPrice) {
   const metrics = _computeMetrics(raw, bestFp);
   if (!metrics) { _cache.set(symbol, { data: null, timestamp: Date.now() }); return null; }
 
-  const result = { ...metrics, source: etf, daily: daily ?? null, lastFetchedAt: Date.now() };
+  const result = { ...metrics, source: etf, dataSource: 'cboe', daily: daily ?? null, lastFetchedAt: Date.now() };
   _cache.set(symbol, { data: result, timestamp: Date.now() });
 
   // Scale daily levels with the same ratio used for options strikes
@@ -527,12 +726,17 @@ async function getOptionsData(symbol, futuresPrice) {
     result.scaledDaily = _scaleDailyLevels(result.daily, result.scalingRatio);
   }
 
+  // Expiry-bucket HP (monthly + quarterly)
+  const bucketHP = _computeExpiryBucketHP(raw, result.scalingRatio);
+  result.weeklyMonthlyHP = bucketHP.weeklyMonthlyHP;
+  result.quarterlyHP     = bucketHP.quarterlyHP;
+
   if (result) {
     const maxStr  = result.scaledMaxPain ?? result.maxPain;
     const flipStr = result.scaledGexFlip ?? result.gexFlip;
     const dl      = result.scaledDaily;
     const src     = liveFut ? 'live Yahoo' : 'seed candle';
-    console.log(`[options] ${symbol} via ${etf}: maxPain=${maxStr} gexFlip=${flipStr} pc=${result.pcRatio} atmIV=${result.atmIV} ratio=${result.scalingRatio?.toFixed(3) ?? '—'} (${src}) pdO=${dl?.prevDayOpen} pdC=${dl?.prevDayClose} cdO=${dl?.curDayOpen}`);
+    console.log(`[options] ${symbol} via ${etf}: maxPain=${maxStr} gexFlip=${flipStr} pc=${result.pcRatio} atmIV=${result.atmIV} ratio=${result.scalingRatio?.toFixed(3) ?? '—'} (${src}) pdO=${dl?.prevDayOpen} pdC=${dl?.prevDayClose} cdO=${dl?.curDayOpen} mHP=${bucketHP.weeklyMonthlyHP?.zones?.length ?? 0} qHP=${bucketHP.quarterlyHP?.zones?.length ?? 0}`);
   } else {
     console.warn(`[options] ${symbol} via ${etf}: fetch OK but no near-term options found`);
   }

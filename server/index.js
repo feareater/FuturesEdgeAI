@@ -9,7 +9,9 @@ const express = require('express');
 const { WebSocketServer } = require('ws');
 const { authenticate }      = require('./auth/tradovate');
 const { getCandles, writeLiveCandle } = require('./data/snapshot');
+const { writeLiveCandleToDisk, getLiveBarStats } = require('./data/liveArchive');
 const { getLiveFeedStatus, startLiveFeed } = require('./data/databento');
+const { validateBar, getValidatorStats } = require('./data/barValidator');
 const { computeIndicators, computeDDBands } = require('./analysis/indicators');
 const { classifyRegime, computeAlignment } = require('./analysis/regime');
 const { detectSetups }      = require('./analysis/setups');
@@ -18,21 +20,24 @@ const { generateCommentary, generateSingle } = require('./ai/commentary');
 const { checkTFZoneStack }  = require('./analysis/confluence');
 const { saveAlertCache, loadAlertCache, saveCommentaryCache, loadCommentaryCache,
         saveTradeLog, loadTradeLog,
-        loadArchive, appendToArchive, updateArchiveOutcome } = require('./storage/log');
+        loadArchive, appendToArchive, updateArchiveOutcome,
+        loadForwardTrades } = require('./storage/log');
 const { fetchAll }              = require('./data/seedFetch');
 const { fetchAllCrypto }        = require('./data/coinbaseFetch');
 const coinbaseWS                = require('./data/coinbaseWS');
 const { getForexRate, getOptionsFlow, getGammaData } = require('./data/polygonFetch');
 const autotrader                = require('./trading/autotrader');
 const simulator                 = require('./trading/simulator');
-const { checkLiveOutcomes }    = require('./trading/simulator');
+const { checkLiveOutcomes, getOpenForwardTestCount } = require('./trading/simulator');
 const { computeRelativeStrength } = require('./analysis/relativeStrength');
 const { computeCorrelationMatrix } = require('./analysis/correlation');
 const { computePerformanceStats, computeOptimizeStats } = require('./analysis/performanceStats');
 const { predict }                  = require('./analysis/predictor');
 const { getCalendarEvents } = require('./data/calendar');
 const { getOptionsData }    = require('./data/options');
+const opraLive              = require('./data/opraLive');
 const { buildMarketContext } = require('./analysis/marketContext');
+const { computeSetupReadiness, computeDirectionalBias } = require('./analysis/bias');
 const { isDuplicate, applyStaleness, pruneExpired } = require('./analysis/alertDedup');
 const pushManager = require('./push/pushManager');
 const settings              = require('../config/settings.json');
@@ -59,8 +64,16 @@ const alertSeenKeys = new Set();   // dedup: symbol:tf:type:time
 const reEvalKeys    = new Set();   // open-outcome keys being re-evaluated (not "new")
 // ATR cache: keyed 'symbol:tf' → atrCurrent; updated during runScan for dedup proximity
 const _lastAtr      = new Map();
+// Per-symbol caches for bias panel — updated during runScan
+const _lastMarketContext = new Map(); // symbol → marketContext object
+const _lastIndicators    = new Map(); // symbol → indicators (15m) object
+const _lastCalendarNear  = new Map(); // symbol → boolean (near high-impact event)
 
 const MAX_ALERTS = 100;
+
+// ── Commentary rate-limit map (per-symbol, for auto-commentary on fresh alerts) ──
+const _lastCommentaryTs = new Map(); // symbol → Date.now() of last commentary call
+const COMMENTARY_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes per symbol
 
 // ── Commentary cache ──────────────────────────────────────────────────────────
 // Holds the last successful AI commentary run.
@@ -652,8 +665,8 @@ app.get('/api/accounts', (_req, res) => {
   res.json({ accounts: [...pfAccounts, ...raBrokers] });
 });
 
-// Point values for P&L auto-calc
-const FILL_POINT_VALUE = { MNQ: 2, MGC: 10, MES: 5, MCL: 100, BTC: 1, ETH: 0.01, XRP: 0.0001 };
+// Point values for P&L auto-calc — sourced from instruments.js
+const { POINT_VALUE: FILL_POINT_VALUE, INSTRUMENTS: _INSTRUMENTS, loadSettingsOverrides } = require('./data/instruments');
 
 function _recomputeTrade(t) {
   const entries = t.entries || [];
@@ -1414,9 +1427,66 @@ app.get('/api/ddbands', (req, res) => {
   }
 });
 
-// GET /api/datastatus — live feed health (source, lag, WS connected, last bar times)
+// GET /api/bias?symbol=MNQ — setup readiness + directional bias
+const _biasCache   = new Map(); // symbol → { ts, data }
+const BIAS_CACHE_TTL = 30 * 1000; // 30 seconds
+
+app.get('/api/bias', (req, res) => {
+  const symbol = req.query.symbol || 'MNQ';
+  const mode   = req.query.mode === 'manual' ? 'manual' : 'auto';
+  const cacheKey = `${symbol}:${mode}`;
+  try {
+    // Return cached if fresh
+    const cached = _biasCache.get(cacheKey);
+    if (cached && (Date.now() - cached.ts) < BIAS_CACHE_TTL) {
+      return res.json(cached.data);
+    }
+
+    const mktCtx = _lastMarketContext.get(symbol);
+    if (!mktCtx) {
+      return res.json({ readiness: null, bias: null, status: 'initializing' });
+    }
+
+    // Current ET hour
+    const etHourStr = new Date().toLocaleString('en-US', {
+      timeZone: 'America/New_York', hour: 'numeric', hour12: false
+    });
+    const currentHour = parseInt(etHourStr, 10);
+
+    // Attach calendar near-event flag to context for bias computation
+    const ctxWithCal = Object.assign({}, mktCtx, {
+      _calendarNearEvent: _lastCalendarNear.get(symbol) || false,
+    });
+
+    const readiness = computeSetupReadiness(symbol, ctxWithCal, currentHour, mode);
+    const indicators = _lastIndicators.get(symbol) || null;
+    const regime = indicators ? require('./analysis/regime').classifyRegime(indicators) : null;
+    const indWithRegime = indicators ? Object.assign({}, indicators, { regime }) : null;
+    const bias = computeDirectionalBias(symbol, ctxWithCal, indWithRegime);
+
+    const data = { readiness, bias };
+    _biasCache.set(cacheKey, { ts: Date.now(), data });
+    res.json(data);
+  } catch (e) {
+    console.error('[api] /bias error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/datastatus — live feed health (source, lag, WS connected, last bar times, OPRA)
 app.get('/api/datastatus', (_req, res) => {
-  const liveMode = settings.features?.liveData === true;
+  const liveMode     = settings.features?.liveData  === true;
+  const opraEnabled  = settings.features?.liveOpra  === true;
+  const opraSt       = opraLive.getOpraStatus();
+
+  const opraStatus = {
+    enabled:        opraEnabled,
+    connected:      opraSt.connected,
+    lastUpdateTime: opraSt.lastUpdateTime,
+    strikeCount:    opraSt.strikeCount,
+    totalRecords:   opraSt.totalRecords,
+  };
+
   if (!liveMode) {
     return res.json({
       source:      'seed',
@@ -1424,6 +1494,7 @@ app.get('/api/datastatus', (_req, res) => {
       lagSeconds:  null,
       lastBarTime: null,
       symbols:     [],
+      opra:        opraStatus,
     });
   }
   const st = getLiveFeedStatus();
@@ -1434,7 +1505,144 @@ app.get('/api/datastatus', (_req, res) => {
     lastBarTime: st.lastPollTime,
     lastBarTimes: st.lastBarTimes,
     symbols:     st.symbols,
+    opra:        opraStatus,
   });
+});
+
+// GET /api/barvalidator/stats — per-symbol bar validation statistics
+app.get('/api/barvalidator/stats', (_req, res) => {
+  res.json(getValidatorStats());
+});
+
+// GET /api/livestats — bar counts, date range, and disk usage for persisted live bars
+app.get('/api/livestats', async (_req, res) => {
+  try {
+    // Only report futures symbols (crypto uses Coinbase, not Databento disk archive)
+    const futuresSymbols = SCAN_SYMBOLS.filter(s =>
+      !['BTC', 'ETH', 'XRP', 'XLM'].includes(s)
+    );
+    const stats = await getLiveBarStats(futuresSymbols);
+    res.json(stats);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Forward-test API ─────────────────────────────────────────────────────────
+
+// GET /api/forwardtest/summary — aggregate stats from forward-test trades
+app.get('/api/forwardtest/summary', (_req, res) => {
+  const trades = loadForwardTrades();
+  if (!trades.length) {
+    return res.json({ totalTrades: 0, message: 'No forward-test trades yet' });
+  }
+
+  const won     = trades.filter(t => t.outcome === 'won');
+  const lost    = trades.filter(t => t.outcome === 'lost');
+  const timeout = trades.filter(t => t.outcome === 'timeout');
+
+  const totalWins  = won.reduce((s, t) => s + (t.netPnl || 0), 0);
+  const totalLoss  = lost.reduce((s, t) => s + Math.abs(t.netPnl || 0), 0);
+  const timeoutPnl = timeout.reduce((s, t) => s + (t.netPnl || 0), 0);
+  const netPnl     = parseFloat((totalWins - totalLoss + timeoutPnl).toFixed(2));
+
+  const winRate      = parseFloat((won.length / trades.length).toFixed(3));
+  const profitFactor = totalLoss > 0 ? parseFloat((totalWins / totalLoss).toFixed(2)) : won.length > 0 ? Infinity : 0;
+  const avgWin       = won.length  > 0 ? parseFloat((totalWins / won.length).toFixed(2))               : 0;
+  const avgLoss      = lost.length > 0 ? parseFloat((totalLoss / lost.length).toFixed(2))              : 0;
+
+  // By symbol
+  const bySymbol = {};
+  for (const t of trades) {
+    if (!bySymbol[t.symbol]) bySymbol[t.symbol] = { trades: 0, won: 0, netPnl: 0 };
+    bySymbol[t.symbol].trades++;
+    if (t.outcome === 'won') bySymbol[t.symbol].won++;
+    bySymbol[t.symbol].netPnl += (t.netPnl || 0);
+  }
+  for (const sym of Object.keys(bySymbol)) {
+    const b = bySymbol[sym];
+    b.wr     = b.trades > 0 ? parseFloat((b.won / b.trades).toFixed(3)) : 0;
+    b.netPnl = parseFloat(b.netPnl.toFixed(2));
+  }
+
+  // By hour (ET entry hour)
+  const byHour = {};
+  for (const t of trades) {
+    const h = t.entryTime ? new Date(t.entryTime).toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }) : '?';
+    if (!byHour[h]) byHour[h] = { trades: 0, won: 0, netPnl: 0 };
+    byHour[h].trades++;
+    if (t.outcome === 'won') byHour[h].won++;
+    byHour[h].netPnl = parseFloat((byHour[h].netPnl + (t.netPnl || 0)).toFixed(2));
+  }
+
+  res.json({
+    totalTrades:    trades.length,
+    openPositions:  getOpenForwardTestCount(),
+    won:            won.length,
+    lost:           lost.length,
+    timeout:        timeout.length,
+    winRate,
+    profitFactor,
+    netPnl,
+    avgWin,
+    avgLoss,
+    bySymbol,
+    byHour,
+    recentTrades:   [...trades].reverse().slice(0, 10),
+  });
+});
+
+// GET /api/forwardtest/trades — full forward-test trade log with optional filters
+app.get('/api/forwardtest/trades', (req, res) => {
+  let trades = loadForwardTrades();
+  if (req.query.symbol)  trades = trades.filter(t => t.symbol === req.query.symbol.toUpperCase());
+  if (req.query.outcome) trades = trades.filter(t => t.outcome === req.query.outcome);
+  trades = [...trades].reverse(); // newest first
+  const limit = Math.min(parseInt(req.query.limit, 10) || 100, 500);
+  res.json({ trades: trades.slice(0, limit) });
+});
+
+// GET /api/forwardtest/open — current open positions tracked by simulator
+app.get('/api/forwardtest/open', (_req, res) => {
+  try {
+    const { loadAlertCache } = require('./storage/log');
+    const alerts = loadAlertCache();
+    const open = alerts
+      .filter(a => (a.setup?.outcome === 'open' || a.setup?.outcome == null) && a.setup?.entry)
+      .map(a => ({
+        alertKey:    a.alertKey || `${a.symbol}-${a.setup?.type}-${a.ts}`,
+        symbol:      a.symbol,
+        setupType:   a.setup?.type,
+        direction:   a.setup?.direction,
+        confidence:  a.setup?.confidence,
+        entryPrice:  a.setup?.entry,
+        sl:          a.setup?.sl,
+        tp:          a.setup?.tp,
+        entryTime:   a.ts,
+        currentPnl:  null,
+      }));
+    res.json({ positions: open });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/forwardtest/export — save AI analysis prompt to data/analysis/
+app.post('/api/forwardtest/export', (req, res) => {
+  const { prompt, filename } = req.body || {};
+  if (!prompt || !filename) return res.status(400).json({ error: 'prompt and filename required' });
+
+  const dir = path.join(__dirname, '..', 'data', 'analysis');
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+  const safeName = filename.replace(/[^a-zA-Z0-9_\-\.]/g, '_');
+  const filePath = path.join(dir, safeName);
+  try {
+    fs.writeFileSync(filePath, prompt, 'utf8');
+    res.json({ saved: true, path: `data/analysis/${safeName}` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // POST /api/settings/span — update SPAN margin values without editing JSON manually
@@ -1445,6 +1653,62 @@ app.post('/api/settings/span', (req, res) => {
   try {
     fs.writeFileSync('./config/settings.json', JSON.stringify(settings, null, 2));
     res.json({ ok: true, spanMargin: settings.spanMargin });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Instrument settings routes ──────────────────────────────────────────────
+
+// GET /api/instruments — returns all instrument metadata (merged with settings.json overrides)
+app.get('/api/instruments', (_req, res) => {
+  // Merge instruments.js defaults with any settings.json overrides
+  const result = {};
+  for (const [sym, meta] of Object.entries(_INSTRUMENTS)) {
+    result[sym] = {
+      tickSize: meta.tickSize,
+      tickValue: meta.tickValue,
+      pointValue: meta.pointValue,
+      feePerRT: meta.feePerRT ?? null,
+      category: meta.category,
+      dbRoot: meta.dbRoot,
+      optionsProxy: meta.optionsProxy ?? null,
+      tradeable: meta.tradeable,
+    };
+  }
+  res.json(result);
+});
+
+// POST /api/instruments/:symbol — update tick/point/fee values for a single symbol
+// Body: { tickSize, tickValue, pointValue, feePerRT }
+app.post('/api/instruments/:symbol', (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  if (!_INSTRUMENTS[symbol]) {
+    return res.status(404).json({ error: `Unknown symbol: ${symbol}` });
+  }
+
+  const { tickSize, tickValue, pointValue, feePerRT } = req.body;
+  const updates = {};
+  for (const [key, val] of [['tickSize', tickSize], ['tickValue', tickValue], ['pointValue', pointValue], ['feePerRT', feePerRT]]) {
+    if (val === undefined) continue;
+    const n = Number(val);
+    if (!Number.isFinite(n) || n <= 0) {
+      return res.status(400).json({ error: `${key} must be a positive number` });
+    }
+    updates[key] = n;
+  }
+  if (Object.keys(updates).length === 0) {
+    return res.status(400).json({ error: 'No valid fields to update' });
+  }
+
+  // Update settings.json
+  if (!settings.instruments) settings.instruments = {};
+  settings.instruments[symbol] = { ...(settings.instruments[symbol] || {}), ...updates };
+  try {
+    fs.writeFileSync('./config/settings.json', JSON.stringify(settings, null, 2));
+    // Reload overrides so INSTRUMENTS reflects the change immediately
+    loadSettingsOverrides();
+    res.json({ ok: true, symbol, ...settings.instruments[symbol] });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -2090,33 +2354,52 @@ app.post('/api/backtest/run', (req, res) => {
     resourceLimits: { maxOldGenerationSizeMb: 4096 },  // Allow 4GB heap for large backtests
   });
 
+  // 2-hour safety net — mark job failed if worker never completes
+  const workerTimeout = setTimeout(() => {
+    const job = workerJobs.get(jobId);
+    if (job && job.status === 'running') {
+      job.status = 'error';
+      job.error  = 'Worker timed out after 2h — no completion received';
+      console.error(`[Worker] Job ${jobId} timed out after 2h`);
+    }
+  }, 2 * 60 * 60 * 1000);
+
   worker.on('message', (msg) => {
     const job = workerJobs.get(jobId);
     if (!job) return;
     if (msg.type === 'progress') {
       job.progress = { phase: msg.phase, pct: msg.pct ?? 0, message: msg.message ?? '' };
     } else if (msg.type === 'complete') {
+      clearTimeout(workerTimeout);
       job.status      = 'completed';
       job.completedAt = new Date().toISOString();
       job.progress    = { phase: 'done', pct: 100, message: 'Complete' };
       job.stats       = msg.stats;
     } else if (msg.type === 'error') {
+      clearTimeout(workerTimeout);
       job.status = 'error';
       job.error  = msg.message;
     }
   });
 
   worker.on('error', (err) => {
+    clearTimeout(workerTimeout);
     const job = workerJobs.get(jobId);
     if (job && job.status === 'running') { job.status = 'error'; job.error = err.message; }
     console.error(`[Worker] Job ${jobId} error: ${err.message}`);
   });
 
   worker.on('exit', (code) => {
+    clearTimeout(workerTimeout);
+    const job = workerJobs.get(jobId);
     if (code !== 0) {
-      const job = workerJobs.get(jobId);
       if (job && job.status === 'running') { job.status = 'error'; job.error = `Worker exited with code ${code}`; }
       console.error(`[Worker] Job ${jobId} exited with code ${code}`);
+    } else if (job && job.status === 'running') {
+      // Worker exited cleanly (code 0) without ever posting 'complete' — treat as error
+      job.status = 'error';
+      job.error  = 'Worker exited without completing (code 0)';
+      console.error(`[Worker] Job ${jobId} exited with code 0 without completing`);
     }
   });
 });
@@ -2263,7 +2546,7 @@ function _isZeroDTE() {
 // In seed mode it runs once at startup and is re-runnable via GET /api/scan.
 // ---------------------------------------------------------------------------
 
-const SCAN_SYMBOLS    = ['MNQ', 'MGC', 'MES', 'MCL', 'BTC', 'ETH', 'XRP', 'XLM', 'SIL'];
+const SCAN_SYMBOLS    = ['MNQ', 'MGC', 'MES', 'MCL', 'BTC', 'ETH', 'XRP', 'XLM', 'SIL', 'M2K', 'MYM', 'MHG'];
 // 1m/2m/3m removed: with 15-min delayed data they are stale by the time they display.
 // 5m removed: ~3 candles stale with delayed seed data — not actionable.
 // 15m/30m/1h/2h/4h give actionable signals even accounting for the data lag.
@@ -2305,6 +2588,14 @@ async function runScan({ targetSymbols = null, targetTimeframes = null } = {}) {
     try { calendarCache[sym] = await getCalendarEvents(sym); } catch { calendarCache[sym] = []; }
   }
 
+  // Cache calendar near-event status for bias panel
+  const nowSec = Math.floor(Date.now() / 1000);
+  for (const sym of scanSymbols) {
+    const events = calendarCache[sym] || [];
+    const near = events.some(e => e.symbols?.includes(sym) && Math.abs(e.time - nowSec) <= 15 * 60);
+    _lastCalendarNear.set(sym, near);
+  }
+
   for (const symbol of scanSymbols) {
     // Pre-compute 5m and 15m regimes for the alignment flag
     const regime5m  = _regimeFor(symbol, '5m');
@@ -2331,6 +2622,9 @@ async function runScan({ targetSymbols = null, targetTimeframes = null } = {}) {
         ` vix=${marketContext.vix.regime}` +
         ` dxy=${marketContext.dxy.direction}`
       );
+      // Cache for bias panel
+      _lastMarketContext.set(symbol, marketContext);
+      if (ind15m) _lastIndicators.set(symbol, ind15m);
     } catch (err) {
       console.warn(`[marketContext] ${symbol} failed: ${err.message}`);
       marketContext = null;
@@ -2418,9 +2712,8 @@ async function runScan({ targetSymbols = null, targetTimeframes = null } = {}) {
       if (alreadyOpen) continue;
 
       // Calculate suggested contracts based on risk limit
-      const POINT_VALUE = { MNQ: 2, MGC: 10, MES: 5, MCL: 100, BTC: 1, ETH: 0.01, XRP: 0.0001 };
       const slDistance  = Math.abs((setup.entry ?? setup.price) - setup.sl);
-      const pointVal    = POINT_VALUE[symbol] || 1;
+      const pointVal    = FILL_POINT_VALUE[symbol] || 1;
       if (slDistance > 0 && pointVal > 0) {
         const maxRisk = settings.risk.maxRiskDollars || 200;
         setup.suggestedContracts = Math.max(1, Math.floor(maxRisk / (slDistance * pointVal)));
@@ -2442,6 +2735,38 @@ async function runScan({ targetSymbols = null, targetTimeframes = null } = {}) {
             .then(result => ({ _result: result, _alert: alert }))
             .catch(err => { console.error('[autotrader] Error:', err.message); return null; })
         );
+
+        // ── Auto-commentary on fresh, high-confidence alerts ─────────────
+        // Guards: conf >= 75, fresh staleness, 30-min per-symbol cooldown,
+        // no high-impact calendar event within 15 minutes.
+        if (setup.confidence >= 75 &&
+            (setup.staleness === 'fresh' || !setup.staleness)) {
+          const lastTs = _lastCommentaryTs.get(symbol) || 0;
+          const cooldownOk = (Date.now() - lastTs) >= COMMENTARY_COOLDOWN_MS;
+
+          // Check if a high-impact calendar event is within 15 minutes
+          const calEvts = calendarEvents || [];
+          const nowMs   = Date.now();
+          const nearCalendar = calEvts.some(evt => {
+            if (!evt.impact || evt.impact !== 'high') return false;
+            const evtMs = new Date(evt.date || evt.time).getTime();
+            return Math.abs(evtMs - nowMs) < 15 * 60 * 1000;
+          });
+
+          if (cooldownOk && !nearCalendar) {
+            _lastCommentaryTs.set(symbol, Date.now());
+            // Fire-and-forget — don't block the scan loop
+            generateSingle(alert, getCandles).then(commentary => {
+              if (commentary) {
+                saveAlertCache(alertCache);
+                broadcast({ type: 'commentary_update', symbol, timeframe: tf });
+                console.log(`[ai] Auto-commentary generated for ${symbol} ${tf} ${setup.type}`);
+              }
+            }).catch(err => {
+              console.error(`[ai] Auto-commentary error ${symbol}: ${err.message}`);
+            });
+          }
+        }
       }
     }
   }
@@ -2573,12 +2898,22 @@ function _regimeFor(symbol, tf) {
  * Stores the bar, broadcasts a live_candle event for the chart, and fires a
  * targeted scan whenever a higher-TF window (5m / 15m / 30m) completes.
  */
-async function _onLiveCandle(symbol, candle) {
-  // Store 1m bar; get list of completed higher-TF aggregates
-  const completed = writeLiveCandle(symbol, candle);
+const _lastValidatedBar = {};  // symbol → last validated bar (for continuity check)
 
-  // Broadcast the raw 1m bar so the chart can extend in real time
-  broadcast({ type: 'live_candle', symbol, timeframe: '1m', candle });
+async function _onLiveCandle(symbol, candle) {
+  // Validate the bar before it enters any pipeline
+  const validated = validateBar(symbol, candle, _lastValidatedBar[symbol] || null);
+  if (!validated) return; // Bar rejected — skip entirely
+  _lastValidatedBar[symbol] = validated;
+
+  // Store 1m bar; get list of completed higher-TF aggregates
+  const completed = writeLiveCandle(symbol, validated);
+
+  // Persist the raw 1m bar to disk for future backtests (fire-and-forget)
+  writeLiveCandleToDisk(symbol, validated);
+
+  // Broadcast the validated 1m bar so the chart can extend in real time
+  broadcast({ type: 'live_candle', symbol, timeframe: '1m', candle: validated });
 
   // For each completed higher-TF window, broadcast and trigger a targeted scan
   for (const { tf, candle: aggCandle } of completed) {
@@ -2592,7 +2927,7 @@ async function _onLiveCandle(symbol, candle) {
 
   // Check open alert outcomes against this live 1m bar
   try {
-    const resolved = await checkLiveOutcomes(symbol, candle);
+    const resolved = await checkLiveOutcomes(symbol, validated);
     if (resolved.length > 0) {
       // Sync in-memory alertCache with the resolved outcomes
       for (const r of resolved) {
@@ -2616,11 +2951,11 @@ async function _onLiveCandle(symbol, candle) {
 }
 
 /**
- * Start the Databento live feed for the four supported futures symbols.
+ * Start the Databento live feed for all 8 CME futures symbols.
  * Called at startup when features.liveData === true.
  */
 function _startDatabento() {
-  const liveSymbols = ['MNQ', 'MES', 'MGC', 'MCL'];
+  const liveSymbols = ['MNQ', 'MES', 'MGC', 'MCL', 'SIL', 'M2K', 'MYM', 'MHG'];
   startLiveFeed(
     liveSymbols,
     (symbol, candle) => {
@@ -2633,6 +2968,16 @@ function _startDatabento() {
     }
   );
   console.log('[startup] Databento live feed started for', liveSymbols.join(', '));
+
+  // Log per-symbol data source status
+  const LIVE_SET = new Set(liveSymbols);
+  for (const sym of SCAN_SYMBOLS) {
+    if (LIVE_SET.has(sym)) {
+      console.log(`[startup]   ${sym}: LIVE FEED`);
+    } else {
+      console.log(`[startup]   ${sym}: SEED DATA (no live feed)`);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2794,6 +3139,16 @@ async function start() {
         console.warn('[startup] WARNING: Seed data is stale — run node server/data/seedFetch.js');
       }
 
+      // Check for symbols with neither seed candles nor live feed
+      const liveEnabled = settings.features?.liveData === true;
+      for (const sym of SCAN_SYMBOLS) {
+        const hasSeed = fs.existsSync(path.join(SEED_DIR, `${sym}_5m.json`));
+        const hasLive = liveEnabled && ['MNQ','MES','MGC','MCL','SIL','M2K','MYM','MHG'].includes(sym);
+        if (!hasSeed && !hasLive) {
+          console.warn(`[startup] WARNING: ${sym} has NO seed data and NO live feed — chart will be empty`);
+        }
+      }
+
       // Restore persisted alerts + commentary before scanning so the feed is
       // instantly populated and existing commentary doesn't need regeneration.
       _loadPersistedData();
@@ -2830,6 +3185,19 @@ async function start() {
         console.log('[startup] Databento API key: NOT SET — add to .env to enable live feed');
       }
 
+      // OPRA live feed — check available schemas then start if feature enabled
+      opraLive.checkOpraSchemas().then(() => {
+        if (settings.features?.liveOpra === true) {
+          opraLive.startOpraFeed();
+          console.log('[startup] OPRA live feed started (features.liveOpra=true)');
+        } else {
+          console.log('[startup] OPRA live feed disabled (features.liveOpra=false) — using CBOE delayed quotes');
+        }
+      }).catch(() => {
+        // checkOpraSchemas is non-fatal; still start the feed if flag is set
+        if (settings.features?.liveOpra === true) opraLive.startOpraFeed();
+      });
+
     // Real-time crypto prices — Coinbase Exchange WebSocket (free, no auth)
     coinbaseWS.start();
     coinbaseWS.on('price', ({ symbol, price, time }) => {
@@ -2843,7 +3211,8 @@ async function start() {
     console.log('\u2501'.repeat(60));
     console.log('[startup] DATA SOURCE SUMMARY');
     console.log(`[startup] Market data:    ${liveMode ? 'LIVE (Databento 1m feed)' : 'SEED (Yahoo Finance snapshots)'}`);
-    console.log('[startup] Options data:   LIVE (CBOE delayed + Yahoo Finance)');
+    const opraLiveMode = settings.features?.liveOpra === true;
+    console.log(`[startup] Options data:   ${opraLiveMode ? 'LIVE (Databento OPRA TCP + Yahoo Finance)' : 'LIVE (CBOE delayed + Yahoo Finance)'}`);
     console.log('[startup] Crypto prices:  LIVE (Coinbase WebSocket)');
     console.log('[startup] VIX proxy:      HISTORICAL (data/seed/VIX_5m.json)');
     console.log('[startup] DXY proxy:      HISTORICAL (data/seed/DXY_5m.json)');

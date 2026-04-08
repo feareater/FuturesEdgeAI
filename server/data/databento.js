@@ -58,7 +58,7 @@ const LIVE_PORT    = 13000;
 // Parent symbols for stype_in=parent subscription.
 // GC.FUT is the parent for both GC and MGC — we receive definition records for all
 // GC-family contracts and map those whose root is 'GC' to internal symbol 'MGC'.
-const LIVE_SUBSCRIBE_SYMBOLS = 'MNQ.FUT,MES.FUT,GC.FUT,MCL.FUT';
+const LIVE_SUBSCRIBE_SYMBOLS = 'MNQ.FUT,MES.FUT,GC.FUT,MCL.FUT,M2K.FUT,MYM.FUT,SI.FUT,HG.FUT';
 
 // Map Databento root (extracted from raw_symbol, e.g. "MNQH6" → "MNQ") to internal symbol.
 // GC contracts (full-size Gold) are mapped to MGC — same underlying price, different multiplier.
@@ -67,6 +67,10 @@ const ROOT_TO_INTERNAL = {
   MES: 'MES',
   GC:  'MGC',
   MCL: 'MCL',
+  M2K: 'M2K',
+  MYM: 'MYM',
+  SI:  'SIL',
+  HG:  'MHG',
 };
 
 // Regex to extract root from a raw_symbol like "MNQH6", "MESH6", "GCJ6", "MCLK6"
@@ -108,10 +112,11 @@ function _price(val) {
 
 /**
  * Normalize a raw Databento JSON record to the codebase candle shape.
+ * Returns null if the bar fails OHLC sanity checks.
  */
 function _normalize(rec) {
   const tsEvent = rec.hd?.ts_event ?? rec.ts_event;
-  return {
+  const candle = {
     time:   _tsToSeconds(tsEvent),
     open:   _price(rec.open),
     high:   _price(rec.high),
@@ -119,6 +124,32 @@ function _normalize(rec) {
     close:  _price(rec.close),
     volume: Number(rec.volume ?? 0),
   };
+
+  // OHLC sanity: high must be >= low, all prices positive
+  if (candle.high < candle.low || candle.open <= 0 || candle.close <= 0) {
+    console.warn(`[databento] Rejected bar — invalid OHLC: O=${candle.open} H=${candle.high} L=${candle.low} C=${candle.close}`);
+    return null;
+  }
+
+  return candle;
+}
+
+/**
+ * Check if a price is a spike relative to the last known good price for a symbol.
+ * Returns true if the price should be REJECTED (i.e. it's a phantom spike).
+ */
+function _isSpikePrice(symbol, price) {
+  const prev = _lastGoodPrice[symbol];
+  if (!prev) return false;  // no reference yet — accept
+  const pctDev = Math.abs(price - prev) / prev;
+  return pctDev > SPIKE_MAX_PCT;
+}
+
+/**
+ * Accept a price as the new "last known good" reference for a symbol.
+ */
+function _acceptPrice(symbol, price) {
+  _lastGoodPrice[symbol] = price;
 }
 
 // ---------------------------------------------------------------------------
@@ -354,6 +385,12 @@ let _lastBarTimes   = {};     // internal symbol → Unix seconds of last emitte
 let _lastConnectMs  = null;   // Date.now() at last successful auth
 let _lastTickLog    = {};     // internal symbol → Date.now() of last tick log line
 
+// Spike filter: track last known good price per symbol for outlier rejection.
+// A tick/bar whose price deviates more than SPIKE_MAX_PCT from the last known
+// price is discarded as a bad tick from the exchange feed.
+const _lastGoodPrice = {};    // internal symbol → last accepted close price
+const SPIKE_MAX_PCT  = 0.02;  // 2% — larger than any realistic 1-second move
+
 // ---------------------------------------------------------------------------
 // CRAM authentication helper
 // ---------------------------------------------------------------------------
@@ -489,6 +526,12 @@ function _handleStreamRecord(rec) {
     const price = _price(rec.close);
     const time  = _tsToSeconds(rec.hd?.ts_event ?? rec.ts_event);
     if (price > 0 && time > 0) {
+      // Spike filter: reject tick if price deviates > SPIKE_MAX_PCT from last good price
+      if (_isSpikePrice(internal, price)) {
+        console.warn(`[databento:live] SPIKE REJECTED tick ${internal} ${price.toFixed(2)} (last good: ${_lastGoodPrice[internal]?.toFixed(2)})`);
+        return;
+      }
+      _acceptPrice(internal, price);
       _onTickCb(internal, price, time);
       // Throttled log: once per minute per symbol to confirm ticks are flowing
       const now = Date.now();
@@ -517,6 +560,38 @@ function _handleStreamRecord(rec) {
     const prev = _lastBarTimes[internal] ?? 0;
     if (candle.time <= prev) return;
 
+    // Spike filter: reject entire 1m bar if close deviates > SPIKE_MAX_PCT from last good price.
+    // Also clamp high/low: if H or L are spikes but O/C are fine, clamp them to bar range.
+    if (_isSpikePrice(internal, candle.close)) {
+      console.warn(
+        `[databento:live] SPIKE REJECTED 1m bar ${internal} ` +
+        `O=${candle.open.toFixed(2)} H=${candle.high.toFixed(2)} L=${candle.low.toFixed(2)} C=${candle.close.toFixed(2)} ` +
+        `(last good: ${_lastGoodPrice[internal]?.toFixed(2)})`
+      );
+      return;
+    }
+    // Clamp high/low to prevent phantom wicks even when close is valid.
+    // If high or low deviates > SPIKE_MAX_PCT from close, clamp to the bar's O/C range.
+    const barMax = Math.max(candle.open, candle.close);
+    const barMin = Math.min(candle.open, candle.close);
+    if (_lastGoodPrice[internal]) {
+      const ref = _lastGoodPrice[internal];
+      if (Math.abs(candle.high - ref) / ref > SPIKE_MAX_PCT) {
+        console.warn(`[databento:live] CLAMPED high ${internal} ${candle.high.toFixed(2)} → ${barMax.toFixed(2)}`);
+        candle.high = barMax;
+      }
+      if (Math.abs(candle.low - ref) / ref > SPIKE_MAX_PCT) {
+        console.warn(`[databento:live] CLAMPED low ${internal} ${candle.low.toFixed(2)} → ${barMin.toFixed(2)}`);
+        candle.low = barMin;
+      }
+    }
+    // Ensure OHLC consistency after clamping
+    if (candle.high < candle.open) candle.high = candle.open;
+    if (candle.high < candle.close) candle.high = candle.close;
+    if (candle.low > candle.open) candle.low = candle.open;
+    if (candle.low > candle.close) candle.low = candle.close;
+
+    _acceptPrice(internal, candle.close);
     _lastBarTimes[internal] = candle.time;
 
     console.log(

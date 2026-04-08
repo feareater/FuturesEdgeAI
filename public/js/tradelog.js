@@ -78,7 +78,13 @@
     });
   }
 
-  const POINT_VALUE = { MNQ: 2, MGC: 10, MES: 5, MCL: 100, BTC: 1, ETH: 0.01, XRP: 0.0001 };
+  // Point values — loaded from server (instruments.js is source of truth)
+  let POINT_VALUE = { MNQ: 2, MGC: 10, MES: 5, MCL: 100, SIL: 200, M2K: 5, MYM: 0.5, MHG: 2500, BTC: 1, ETH: 0.01, XRP: 0.0001 };
+  fetch('/api/instruments').then(r => r.json()).then(data => {
+    for (const [sym, meta] of Object.entries(data)) {
+      if (meta.pointValue != null) POINT_VALUE[sym] = meta.pointValue;
+    }
+  }).catch(() => {});
 
   // ── Fetch ─────────────────────────────────────────────────────────────────
 
