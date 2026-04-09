@@ -22,6 +22,8 @@ const SYMBOLS = {
   MES: 'MES=F',
   MCL: 'MCL=F',
   SIL: 'SIL',   // Global X Silver Miners ETF — full multi-TF
+  M2K: 'RTY=F',  // Micro Russell 2000 (RTY is the full-size ticker on Yahoo)
+  MYM: 'MYM=F',  // Micro Dow Jones
 };
 
 // Reference/correlation symbols — fetched with full timeframes so they can be charted.

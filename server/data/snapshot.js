@@ -88,6 +88,10 @@ function getCandles(symbol, timeframe) {
     let seed;
     try { seed = _fromSeed(symbol, timeframe); } catch { seed = []; }
 
+    // Strip non-aligned Yahoo partial bar (last bar often has odd timestamp like :01:22)
+    const tfSec = _TF_SECONDS[timeframe] ?? 60;
+    seed = seed.filter(c => c.time % tfSec === 0);
+
     if (!live || live.length === 0) {
       // No live bars yet — return seed only (startup / reconnect gap)
       if (seed.length === 0) console.log(`[snapshot] Live store empty for ${symbol}:${timeframe} — falling back to seed data`);
@@ -98,14 +102,15 @@ function getCandles(symbol, timeframe) {
     // never hold mutable references into the live store.
     if (seed.length === 0) return live.map(c => ({ ...c }));
 
-    // Merge: seed bars up to (but not including) the first live bar timestamp,
-    // then all live bars. This avoids duplicates where seed and live overlap.
-    const firstLiveTime = live[0].time;
-    const seedPrefix    = seed.filter(c => c.time < firstLiveTime);
-    const merged        = [...seedPrefix, ...live.map(c => ({ ...c }))];
+    // Full merge: live bars take priority where they exist; seed bars fill in
+    // everywhere else (including gaps in the live feed). This replaces the old
+    // "seed before firstLiveTime, live after" strategy which discarded seed bars
+    // that fell within live feed gaps.
+    const liveTimes = new Set(live.map(c => c.time));
+    const seedFill  = seed.filter(c => !liveTimes.has(c.time));
+    const merged    = [...seedFill, ...live.map(c => ({ ...c }))].sort((a, b) => a.time - b.time);
 
-    // Trim to MAX_LIVE_BARS so we don't return an unbounded array
-    return merged.length > MAX_LIVE_BARS ? merged.slice(merged.length - MAX_LIVE_BARS) : merged;
+    return merged;
   }
 
   switch (DATA_SOURCE) {
@@ -204,6 +209,9 @@ function _validate(symbol, timeframe) {
   if (!VALID_TIMEFRAMES.includes(timeframe)) throw new Error(`Unknown timeframe: ${timeframe}`);
 }
 
+// TF seconds lookup — used for timestamp alignment filtering
+const _TF_SECONDS = { '1m': 60, '2m': 120, '3m': 180, '5m': 300, '15m': 900, '30m': 1800, '1h': 3600, '2h': 7200, '4h': 14400 };
+
 // Higher-TF aggregation config for live mode
 const LIVE_AGG_TFS = [
   { tf: '5m',  seconds: 300  },
@@ -291,4 +299,66 @@ function writeLiveCandle(symbol, candle) {
 
 // ---------------------------------------------------------------------------
 
-module.exports = { getCandles, getAllTimeframes, writeLiveCandle, VALID_SYMBOLS, VALID_TIMEFRAMES, CRYPTO_SYMBOLS, MACRO_SYMBOLS };
+// ---------------------------------------------------------------------------
+// Bar injection — used by gapFill.js to backfill missing bars into the store
+// ---------------------------------------------------------------------------
+
+/**
+ * Inject an array of candle bars into the live candle store for a given symbol/TF.
+ * Merges with existing bars, deduplicates by timestamp, and trims to MAX_LIVE_BARS.
+ *
+ * @param {string} symbol  Internal symbol, e.g. 'MNQ'
+ * @param {string} tf      Timeframe, e.g. '1m', '5m'
+ * @param {Array}  bars    Array of { time, open, high, low, close, volume }
+ * @returns {number} Number of new bars actually inserted
+ */
+function injectBars(symbol, tf, bars) {
+  if (!bars || bars.length === 0) return 0;
+
+  const key = `${symbol}:${tf}`;
+  const existing = liveCandles.get(key) ?? [];
+  const existingTimes = new Set(existing.map(b => b.time));
+  const toAdd = bars.filter(b => !existingTimes.has(b.time));
+  if (toAdd.length === 0) return 0;
+
+  const merged = [...existing, ...toAdd].sort((a, b) => a.time - b.time);
+  if (merged.length > MAX_LIVE_BARS) merged.splice(0, merged.length - MAX_LIVE_BARS);
+  liveCandles.set(key, merged);
+  return toAdd.length;
+}
+
+/**
+ * Aggregate an array of 1m bars into higher-TF bars using window-aligned logic.
+ * Returns the aggregated bar array for the given TF seconds.
+ */
+function aggregateBarsToTF(bars1m, tfSeconds) {
+  if (!bars1m || bars1m.length === 0) return [];
+
+  // Group bars by window
+  const windows = new Map();
+  for (const bar of bars1m) {
+    const windowStart = Math.floor(bar.time / tfSeconds) * tfSeconds;
+    if (!windows.has(windowStart)) windows.set(windowStart, []);
+    windows.get(windowStart).push(bar);
+  }
+
+  // Merge each window into a single bar
+  const result = [];
+  for (const [windowStart, windowBars] of windows) {
+    result.push({
+      time:   windowStart,
+      open:   windowBars[0].open,
+      high:   Math.max(...windowBars.map(c => c.high)),
+      low:    Math.min(...windowBars.map(c => c.low)),
+      close:  windowBars[windowBars.length - 1].close,
+      volume: windowBars.reduce((sum, c) => sum + c.volume, 0),
+    });
+  }
+
+  return result.sort((a, b) => a.time - b.time);
+}
+
+module.exports = {
+  getCandles, getAllTimeframes, writeLiveCandle, injectBars, aggregateBarsToTF,
+  VALID_SYMBOLS, VALID_TIMEFRAMES, CRYPTO_SYMBOLS, MACRO_SYMBOLS, LIVE_FUTURES,
+};

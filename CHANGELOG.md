@@ -4,6 +4,158 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v14.21] — 2026-04-08 — Conviction row directional agreement fix
+
+### Fixed: Conviction row ignoring setup/macro directional conflict (`public/js/alerts.js`)
+- **Root cause**: Conviction logic combined setup score magnitude and macro score magnitude without checking whether setup direction (SHORT/LONG) agreed with macro direction (BULLISH/BEARISH). A SHORT setup with BULLISH macro was awarded HIGH CONVICTION — should be STAND ASIDE or COUNTER-MACRO.
+- **Fix**: New `_computeConviction(setupScore, macroScore)` function derives directional agreement from signed scores before awarding conviction labels. Uses `window._lastSetupData.score` (signed) instead of `window._lastSetupScore` (unsigned confidence).
+- Priority-ordered matrix: STAND ASIDE (strongest conflict) > CAUTION > COUNTER-MACRO > MARGINAL > HIGH CONVICTION > GOOD SETUP > TECHNICALLY DRIVEN > MACRO TAILWIND > MODERATE SETUP > default STAND ASIDE
+- Conflict checks run before agreement checks — directional disagreement is always caught first
+
+### Changed: Conviction color classes (`public/css/dashboard.css`)
+- Replaced `.conviction-high` with `.conviction-bright-green` (declarative color naming)
+- Added `font-weight: 900` for bright-green conviction state
+
+### Files changed
+- `public/js/alerts.js` — conviction row renderer rewritten with directional agreement logic
+- `public/css/dashboard.css` — conviction color class update
+
+---
+
+## [v14.20] — 2026-04-08 — Dashboard cleanup + M2K/MYM data + Yahoo backfill
+
+### Fixed: Reference symbols selectable on dashboard with no chart data (`public/index.html`)
+- Removed clickable symbol buttons for ZT, ZF, ZN, ZB, UB (Bonds group), M6E, M6B (FX group), and MBT (from Crypto group)
+- These are reference/breadth-only instruments — they remain in the system for breadth computation and live feed, just not selectable on the dashboard chart
+- Kept: QQQ, SPY, DXY, VIX (Reference group) — these have seed data and charts
+
+### Fixed: M2K and MYM show no historical chart data (`server/data/seedFetch.js`, `server/data/gapFill.js`)
+- **Root cause**: M2K (Micro Russell 2000) and MYM (Micro Dow Jones) were added to the live feed (v13.8) and SCAN_SYMBOLS but never added to seedFetch.js. They had full historical pipeline files on disk back to 2019 but these were never loaded at startup.
+- Added M2K (`RTY=F`) and MYM (`MYM=F`) to seedFetch.js SYMBOLS map
+- Added bootstrap logic in gapFill.js: when a symbol has no candles in store but has historical 1m files on disk, writes seed-format JSON files from historical data so getCandles() picks them up via _fromSeed() without hitting the MAX_LIVE_BARS cap
+- MHG (Micro Copper) also bootstrapped — same issue, same fix
+
+### Added: Yahoo Finance 60-day intraday backfill (`server/data/gapFill.js`)
+- New `backfillFromYahoo(symbol, yahooTicker)` function bridges the gap between historical pipeline end and current time
+- Two-pass strategy: 5m/60d for broad coverage, then 1m/7d for recent detail
+- Uses full-size tickers for symbols with thin micro data (GC=F for MGC, CL=F for MCL, SI=F for SIL, RTY=F for M2K, HG=F for MHG)
+- `runBackfillAll()` runs all 8 tradeable futures in parallel via Promise.all
+- Per-symbol error handling: logs and skips on failure, never crashes server
+
+### Changed: Startup sequence (`server/index.js`)
+- Gap fill from historical files is now **awaited** (was non-blocking fire-and-forget)
+- Yahoo Finance 60-day backfill runs after gap fill, also awaited
+- Gap fill scheduler starts after both complete
+- Live feed starts only after all data is loaded
+- `server.listen` callback made async to support await
+
+### Files changed
+- `public/index.html` — removed ZT/ZF/ZN/ZB/UB/M6E/M6B/MBT buttons, removed Bonds and FX groups
+- `server/data/seedFetch.js` — added M2K (`RTY=F`) and MYM (`MYM=F`) to SYMBOLS
+- `server/data/gapFill.js` — `_writeSeedFile()`, bootstrap-from-historical logic, `YAHOO_BACKFILL_SYMBOLS`, `backfillFromYahoo()`, `runBackfillAll()`
+- `server/index.js` — awaited gap fill + backfill, async listen callback
+
+---
+
+## [v14.19] — 2026-04-08 — Chart data source merge fix + timestamp alignment
+
+### Fixed: Seed/live merge discards bars in live feed gaps (`server/data/snapshot.js`)
+- **Root cause**: `getCandles()` merged seed + live by taking seed bars *before* `firstLiveTime`, then all live bars. When the live feed had gaps (disconnections), seed bars that could fill those gaps were excluded because they fell after `firstLiveTime`.
+- **Fix**: Full merge strategy — live bars take priority where they exist; seed bars fill everywhere else. Uses a `Set` of live timestamps for O(1) dedup instead of a simple time-split.
+- Result: 73-minute mid-session gap on 1m chart is now filled by seed bars. All remaining gaps are legitimate overnight/weekend closures.
+
+### Fixed: 500-bar cap on merged chart data (`server/data/snapshot.js`)
+- **Root cause**: `MAX_LIVE_BARS=500` was applied to the merged seed+live output, not just the live store. For 5m, this reduced chart data from 6838 bars (30 days) to 500 bars (~2 trading days).
+- **Fix**: Removed the cap on merged output. The live store is still capped at 500 bars internally (memory management), but the merged result returns the full seed history plus live bars. 5m chart now shows the full 30-day range.
+
+### Fixed: Yahoo partial bar timestamp misalignment (`server/data/snapshot.js`)
+- **Root cause**: Yahoo Finance's last bar (the "forming" candle) has a non-minute-aligned timestamp (e.g., `18:01:22`, mod60=22). This propagated into the chart, creating a visually offset bar.
+- **Fix**: Seed bars are filtered to only include bars aligned to the timeframe interval (`time % tfSec === 0`). Added `_TF_SECONDS` lookup map for all supported timeframes.
+
+### Fixed: Historical file timestamp normalization (`server/data/gapFill.js`)
+- `_readHistoricalBars()` now floors timestamps to the nearest minute boundary (`Math.floor(time / 60) * 60`) at read time, ensuring bars from historical files are always minute-aligned regardless of source.
+
+### Files changed
+- `server/data/snapshot.js` — full merge strategy, removed merged output cap, seed alignment filter, `_TF_SECONDS` map
+- `server/data/gapFill.js` — timestamp normalization in `_readHistoricalBars()`
+
+---
+
+## [v14.18] — 2026-04-08 — Gap fill reliability improvements
+
+### Changed: Per-timeframe gap fill intervals (`server/data/gapFill.js`)
+- 1m timeframe: gap fill runs every **2 minutes** (was 15 min — 15-min gaps are 15 missing bars on a 1m chart)
+- 5m timeframe: gap fill runs every **5 minutes**
+- 15m/30m timeframes: unchanged at 15 minutes
+- Separate `setInterval` timers per TF group for independent scheduling
+
+### Fixed: Injection path verification (`server/data/gapFill.js`)
+- Added `[gapfill-debug]` logging throughout the fill pipeline: gap detection → bar fetch → injection → store verification
+- Post-injection verification confirms bar count actually grew in `getCandles()` output
+- Warns if injection appears to silently fail (bar count unchanged after inject)
+- Internal gap detection now runs even when tail gap is within threshold (catches mid-session holes)
+
+### Added: Databento reconnect gap fill trigger (`server/data/databento.js`, `server/index.js`)
+- `startLiveFeed()` now accepts an `onReconnect` callback (4th parameter)
+- Fires after successful re-authentication (not on initial connect — tracked via `_hasConnectedOnce` flag)
+- `_startDatabento()` in index.js wires up immediate 1m gap fill on reconnect
+- New `triggerImmediateGapFill(symbols, tf)` export in gapFill.js for on-demand fills
+
+### Improved: Client-side gap retry logic (`public/js/chart.js`)
+- Gap detected → refetch after 2s → if still present, retry at 5s → retry at 15s → give up
+- Total wait: up to ~22 seconds before showing "Gap in data" label (was single 2s attempt)
+- Each retry logs: `[chart] gap still present after refetch N, retrying...`
+- Manual refresh button (⟳) now resets the retry counter so it will try again fresh
+
+### Files changed
+- `server/data/gapFill.js` — per-TF intervals, debug logging, verification, `triggerImmediateGapFill()`
+- `server/data/databento.js` — `onReconnect` callback parameter, `_hasConnectedOnce` tracking
+- `server/index.js` — reconnect callback wiring in `_startDatabento()`
+- `public/js/chart.js` — 3-retry backoff logic, retry counter reset on manual refresh
+
+---
+
+## [v14.17] — 2026-04-08 — Automatic chart gap fill
+
+### Added: `server/data/gapFill.js` — gap detection and backfill module
+- `fillCandleGaps(symbol, tf)` — detects gaps in the candle store (both tail gaps and internal gaps), backfills from historical 1m files on disk, falls back to Yahoo Finance if no historical files available
+- `runGapFillAll(symbols, timeframes)` — sequential gap fill across all CME futures symbols with 500ms inter-symbol delay
+- `startGapFillScheduler(symbols, timeframes)` — runs `runGapFillAll` every 15 minutes (configurable via `GAP_FILL_INTERVAL_MS`)
+- Reads from `data/historical/futures/{SYMBOL}/1m/{DATE}.json` (archived bars from live feed)
+- Crypto symbols (BTC, ETH, XRP, XLM) are skipped — no historical files, different data source
+- All operations are best-effort: errors are logged but never crash the server
+
+### Added: `injectBars()` and `aggregateBarsToTF()` in `server/data/snapshot.js`
+- `injectBars(symbol, tf, bars)` — merges bars into the live candle store, deduplicates by timestamp, maintains sort order
+- `aggregateBarsToTF(bars1m, tfSeconds)` — window-aligned aggregation of 1m bars into higher timeframes
+- `LIVE_FUTURES` set now exported for external use
+
+### Changed: Server startup sequence (`server/index.js`)
+- Gap fill runs after seed data loads and before Databento live feed starts
+- 15-minute gap fill scheduler starts automatically
+- `/api/candles` now accepts `refresh=true` query parameter — triggers on-demand gap fill before returning candles
+
+### Added: Client-side gap detection and auto-refetch (`public/js/chart.js`)
+- `_detectChartGaps(candles, tf)` — walks candle array looking for gaps > 2x timeframe interval
+- When a gap is detected, shows "Refreshing data..." indicator and re-fetches with `refresh=true` after 2-second delay
+- If gap persists after refetch, shows a subtle "Gap in data" indicator
+- Single-attempt auto-refetch prevents infinite retry loops
+
+### Added: Manual chart refresh button
+- Refresh button (&#x27F3;) added to the timeframe selector row in dashboard
+- Triggers `/api/candles?refresh=true` for the current symbol/TF
+- Spinning animation during refresh, styled to match existing toolbar buttons
+
+### Files changed
+- `server/data/gapFill.js` — **new** (gap detection + backfill + scheduler)
+- `server/data/snapshot.js` — added `injectBars()`, `aggregateBarsToTF()`, exported `LIVE_FUTURES`
+- `server/index.js` — gapFill import, startup integration, `/api/candles` refresh param
+- `public/js/chart.js` — gap detection, auto-refetch, manual refresh button handler
+- `public/index.html` — refresh button in TF row, gap indicator overlay div
+- `public/css/dashboard.css` — refresh button styles, spinning animation, gap indicator styles
+
+---
+
 ## [v14.16] — 2026-04-07 — Market Context panel redesign
 
 ### Changed: Panel and widget renames

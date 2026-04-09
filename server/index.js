@@ -8,7 +8,8 @@ const crypto  = require('crypto');
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const { authenticate }      = require('./auth/tradovate');
-const { getCandles, writeLiveCandle } = require('./data/snapshot');
+const { getCandles, writeLiveCandle, LIVE_FUTURES } = require('./data/snapshot');
+const gapFill                       = require('./data/gapFill');
 const { writeLiveCandleToDisk, getLiveBarStats } = require('./data/liveArchive');
 const { getLiveFeedStatus, startLiveFeed } = require('./data/databento');
 const { validateBar, getValidatorStats } = require('./data/barValidator');
@@ -182,12 +183,20 @@ app.get('/api/health', (_req, res) => {
              refreshIntervalMins: Math.round(refreshIntervalMs / 60000) });
 });
 
-// GET /api/candles?symbol=MNQ&timeframe=5m
-app.get('/api/candles', (req, res) => {
-  const { symbol = 'MNQ', timeframe = '5m' } = req.query;
+// GET /api/candles?symbol=MNQ&timeframe=5m&refresh=true
+app.get('/api/candles', async (req, res) => {
+  const { symbol = 'MNQ', timeframe = '5m', refresh } = req.query;
   try {
+    // When refresh=true, run gap fill for this symbol/TF before returning
+    if (refresh === 'true') {
+      try {
+        await gapFill.fillCandleGaps(symbol, timeframe);
+      } catch (err) {
+        console.warn(`[api] /candles refresh gap fill failed: ${err.message}`);
+      }
+    }
     const candles = getCandles(symbol, timeframe);
-    console.log(`[api] /candles  symbol=${symbol}  tf=${timeframe}  count=${candles.length}`);
+    console.log(`[api] /candles  symbol=${symbol}  tf=${timeframe}  count=${candles.length}${refresh === 'true' ? '  (refreshed)' : ''}`);
     res.json({ symbol, timeframe, candles });
   } catch (err) {
     console.error(`[api] /candles error: ${err.message}`);
@@ -2965,6 +2974,13 @@ function _startDatabento() {
     },
     (symbol, price, time) => {
       broadcast({ type: 'live_price', symbol, price, time });
+    },
+    () => {
+      // Reconnect callback: immediately fill 1m gaps for all live symbols
+      console.log('[live] Feed reconnected — triggering immediate 1m gap fill');
+      gapFill.triggerImmediateGapFill(liveSymbols, '1m').catch(err =>
+        console.error('[live] Reconnect gap fill failed:', err.message)
+      );
     }
   );
   console.log('[startup] Databento live feed started for', liveSymbols.join(', '));
@@ -3111,7 +3127,7 @@ async function start() {
     await authenticate();
   }
 
-  server.listen(PORT, () => {
+  server.listen(PORT, async () => {
     console.log(`[server] Listening on http://localhost:${PORT}`);
 
     // Load persisted push subscriptions
@@ -3168,6 +3184,28 @@ async function start() {
         _scheduleRefresh(); // start the recurring interval from this point
       }, refreshIntervalMs);
       console.log(`[startup] Auto-refresh scheduled every ${refreshIntervalMs / 60000} min`);
+
+      // Gap fill: backfill missing candle bars from historical files before live feed starts.
+      // AWAITED so data is fully loaded before the live feed connects.
+      const gapFillTFs = ['1m', '5m', '15m', '30m'];
+      try {
+        await gapFill.runGapFillAll(SCAN_SYMBOLS, gapFillTFs);
+        console.log('[startup] Gap fill from historical files complete');
+      } catch (err) {
+        console.error('[startup] Gap fill failed (non-fatal):', err.message);
+      }
+
+      // Yahoo Finance 60-day backfill: bridges the gap between historical pipeline end
+      // (~last Databento download) and the current time. Uses 1m intraday data.
+      try {
+        await gapFill.runBackfillAll();
+        console.log('[startup] Yahoo Finance 60-day backfill complete');
+      } catch (err) {
+        console.error('[startup] Yahoo backfill failed (non-fatal):', err.message);
+      }
+
+      // Start gap fill scheduler (periodic maintenance after initial fill)
+      gapFill.startGapFillScheduler(SCAN_SYMBOLS, gapFillTFs);
 
       // Start Databento live feed if liveData feature is enabled.
       // Futures symbols (MNQ/MES/MGC/MCL) will be served from liveCandles in real time;

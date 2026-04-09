@@ -17,6 +17,9 @@
   let activeTf     = '5m';
   let lastCandle   = null;
   let _liveTickBar = null;  // in-progress bar for the current 1m window (from live_price ticks)
+  let _gapRefetchPending = false;  // prevents multiple auto-refetches
+  let _gapRetryCount     = 0;     // tracks retry attempts (max 3)
+  const _GAP_RETRY_DELAYS = [2000, 5000, 15000];  // backoff delays in ms
 
   // Chart + base series
   let chart        = null;
@@ -287,6 +290,87 @@
     });
   }
 
+  // ── Gap detection ──────────────────────────────────────────────────────────
+  const _TF_SECS = { '1m':60, '2m':120, '3m':180, '5m':300, '15m':900, '30m':1800, '1h':3600, '2h':7200, '4h':14400 };
+
+  function _detectChartGaps(candles, tf) {
+    const tfSec = _TF_SECS[tf] ?? 300;
+    const threshold = tfSec * 2;
+
+    // Check for tail gap (last bar vs current time)
+    const nowTs = Math.floor(Date.now() / 1000);
+    const lastTs = candles[candles.length - 1]?.time ?? 0;
+    if (nowTs - lastTs > threshold) {
+      return { hasGap: true, gapStart: lastTs, gapEnd: nowTs, type: 'tail' };
+    }
+
+    // Check for internal gaps
+    for (let i = 1; i < candles.length; i++) {
+      if (candles[i].time - candles[i - 1].time > threshold) {
+        return { hasGap: true, gapStart: candles[i - 1].time, gapEnd: candles[i].time, type: 'internal' };
+      }
+    }
+    return { hasGap: false };
+  }
+
+  function _showGapIndicator(msg) {
+    const el = document.getElementById('chart-gap-indicator');
+    if (el) { el.textContent = msg; el.style.display = 'block'; }
+  }
+
+  function _hideGapIndicator() {
+    const el = document.getElementById('chart-gap-indicator');
+    if (el) el.style.display = 'none';
+  }
+
+  /**
+   * Schedule a gap refetch with exponential backoff.
+   * Retries up to 3 times (2s, 5s, 15s) before showing "Gap in data".
+   */
+  function _scheduleGapRetry(symbol, tf) {
+    if (_gapRetryCount >= _GAP_RETRY_DELAYS.length) {
+      _showGapIndicator('Gap in data');
+      _gapRefetchPending = false;
+      console.log(`[chart] Gap persists after ${_gapRetryCount} retries — giving up`);
+      return;
+    }
+
+    const delay = _GAP_RETRY_DELAYS[_gapRetryCount];
+    _gapRefetchPending = true;
+    _showGapIndicator('\u27F3 Refreshing data...');
+    console.log(`[chart] Gap detected — refetch ${_gapRetryCount + 1}/${_GAP_RETRY_DELAYS.length} in ${delay / 1000}s`);
+
+    setTimeout(async () => {
+      try {
+        const refreshRes = await fetch(`/api/candles?symbol=${symbol}&timeframe=${tf}&refresh=true`);
+        if (refreshRes.ok) {
+          const { candles: freshCandles } = await refreshRes.json();
+          if (freshCandles && freshCandles.length >= 2) {
+            candleSeries.setData(freshCandles);
+            rawCandles = freshCandles;
+            lastCandle = freshCandles[freshCandles.length - 1];
+            _liveTickBar = null;
+            activeCandleTimes = freshCandles.map(c => c.time);
+            console.log(`[chart] Refreshed: ${freshCandles.length} candles`);
+          }
+        }
+      } catch (err) {
+        console.warn('[chart] Gap refetch failed:', err.message);
+      }
+
+      const postGap = _detectChartGaps(rawCandles, tf);
+      if (postGap.hasGap) {
+        _gapRetryCount++;
+        console.log(`[chart] Gap still present after refetch ${_gapRetryCount}, retrying...`);
+        _scheduleGapRetry(symbol, tf);
+      } else {
+        _hideGapIndicator();
+        _gapRefetchPending = false;
+        _gapRetryCount = 0;
+      }
+    }, delay);
+  }
+
   // ── Data loading ───────────────────────────────────────────────────────────
   async function loadData(symbol, tf) {
     console.log(`[chart] Loading ${symbol} ${tf}`);
@@ -356,6 +440,18 @@
     if (pendingOverlay) { _drawSetupOverlay(pendingOverlay); pendingOverlay = null; }
 
     console.log(`[chart] Rendered ${candles.length} candles  ATR:${indicators.atrCurrent?.toFixed(2)}`);
+
+    // Gap detection: auto-refetch with backoff (up to 3 retries: 2s, 5s, 15s)
+    _hideGapIndicator();
+    const gapResult = _detectChartGaps(candles, tf);
+    if (gapResult.hasGap && !_gapRefetchPending) {
+      _gapRetryCount = 0;
+      _scheduleGapRetry(symbol, tf);
+    } else if (!gapResult.hasGap) {
+      _hideGapIndicator();
+      _gapRetryCount = 0;
+    }
+
     _notifyView();
   }
 
@@ -1337,6 +1433,35 @@
       loadData(activeSymbol, activeTf).catch(err => console.error('[chart]', err.message));
     });
   });
+
+  // Manual chart refresh button
+  const refreshBtn = document.getElementById('chart-refresh-btn');
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', async () => {
+      refreshBtn.classList.add('spinning');
+      _gapRetryCount = 0;      // reset retry counter so gap retry will try again fresh
+      _gapRefetchPending = false;
+      _showGapIndicator('\u27F3 Refreshing data...');
+      try {
+        const res = await fetch(`/api/candles?symbol=${activeSymbol}&timeframe=${activeTf}&refresh=true`);
+        if (res.ok) {
+          const { candles: freshCandles } = await res.json();
+          if (freshCandles && freshCandles.length >= 2) {
+            candleSeries.setData(freshCandles);
+            rawCandles = freshCandles;
+            lastCandle = freshCandles[freshCandles.length - 1];
+            _liveTickBar = null;
+            activeCandleTimes = freshCandles.map(c => c.time);
+            console.log(`[chart] Manual refresh: ${freshCandles.length} candles`);
+          }
+        }
+      } catch (err) {
+        console.warn('[chart] Manual refresh failed:', err.message);
+      }
+      _hideGapIndicator();
+      refreshBtn.classList.remove('spinning');
+    });
+  }
 
   // chartLoadSymbol — allows chartManager.js to switch to any symbol/TF directly
   // without needing to simulate button clicks or deal with mode toggle state.

@@ -2,7 +2,7 @@
 // server/data/databento.js — Databento market data adapter
 //
 // Exports:
-//   startLiveFeed(symbols, onCandle)               — fires onCandle(symbol, candle) on each 1m bar close
+//   startLiveFeed(symbols, onCandle, onTick, onReconnect) — fires callbacks on bar close, tick, and reconnect
 //   stopLiveFeed()                                 — close TCP connection and cancel reconnect
 //   fetchHistoricalCandles(symbol, startIso, endIso) — returns sorted normalized candle array
 //   getLiveFeedStatus()                            — returns connection/health state (used by B2 /api/datastatus)
@@ -375,7 +375,9 @@ let _reconnectDelay = RECONNECT_BASE_MS;
 
 let _onCandleCb     = null;   // (symbol, candle) callback — fired on each completed 1m bar
 let _onTickCb       = null;   // (symbol, price, time) callback — fired on each 1s bar close
+let _onReconnectCb  = null;   // () callback — fired after successful reconnect (not initial connect)
 let _liveSymbols    = [];     // internal symbol list passed to startLiveFeed
+let _hasConnectedOnce = false; // distinguishes initial connect from reconnect
 
 // instrument_id → internal symbol (rebuilt on every connection from rtype=19 definitions)
 const _instrumentMap = new Map();
@@ -468,6 +470,15 @@ function _handleLine(rawLine, apiKey) {
       _lastConnectMs  = Date.now();
       _reconnectDelay = RECONNECT_BASE_MS;
       console.log(`[databento:live] Subscribed and session started (ohlcv-1m + ohlcv-1s, ${LIVE_SUBSCRIBE_SYMBOLS})`);
+
+      // Fire reconnect callback (not on initial connect — only after a disconnect/reconnect cycle)
+      if (_hasConnectedOnce && _onReconnectCb) {
+        console.log('[databento:live] Reconnected — firing onReconnect callback');
+        try { _onReconnectCb(); } catch (err) {
+          console.error(`[databento:live] onReconnect callback error: ${err.message}`);
+        }
+      }
+      _hasConnectedOnce = true;
     } else {
       console.error(`[databento:live] Auth failed: ${line.slice(0, 120)}`);
       _socket?.destroy();
@@ -677,8 +688,9 @@ function _connect(apiKey) {
  * @param {string[]} symbols  Internal symbols (e.g. ['MNQ', 'MES', 'MGC', 'MCL']) — informational only
  * @param {Function} onCandle Callback for completed 1m bars: (symbol, { time, open, high, low, close, volume })
  * @param {Function} [onTick] Optional callback for 1s price ticks: (symbol, price, time)
+ * @param {Function} [onReconnect] Optional callback fired after a successful reconnect (not initial connect)
  */
-function startLiveFeed(symbols, onCandle, onTick) {
+function startLiveFeed(symbols, onCandle, onTick, onReconnect) {
   const apiKey = process.env.DATABENTO_API_KEY;
   if (!apiKey) {
     console.warn('[databento] DATABENTO_API_KEY not set — live feed disabled');
@@ -688,6 +700,8 @@ function startLiveFeed(symbols, onCandle, onTick) {
   _liveSymbols = Array.isArray(symbols) ? symbols : [];
   _onCandleCb  = onCandle;
   _onTickCb    = onTick ?? null;
+  _onReconnectCb = onReconnect ?? null;
+  _hasConnectedOnce = false;
   _stopped     = false;
 
   console.log(`[databento] Live feed starting (TCP) for ${_liveSymbols.join(', ') || 'default futures'}`);

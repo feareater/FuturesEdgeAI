@@ -3212,68 +3212,97 @@
   }
 
   // ── Conviction Row ─────────────────────────────────────────────────────────
+  function _computeConviction(setupScore, macroScore) {
+    // setupScore: negative = short signal, positive = long signal (range roughly -100 to +100)
+    // macroScore: negative = bearish macro, positive = bullish macro (range -18 to +18)
+    const setupMag = Math.abs(setupScore);
+    const macroMag = Math.abs(macroScore);
+    const setupDir = setupScore < -15 ? 'short' : setupScore > 15 ? 'long' : 'neutral';
+    const macroDir = macroScore < -4 ? 'bearish' : macroScore > 4 ? 'bullish' : 'neutral';
+
+    const agree = (setupDir === 'short' && macroDir === 'bearish') ||
+                  (setupDir === 'long' && macroDir === 'bullish');
+    const conflict = (setupDir === 'short' && macroDir === 'bullish') ||
+                     (setupDir === 'long' && macroDir === 'bearish');
+    const noSetup = setupDir === 'neutral';
+    const noMacro = macroDir === 'neutral';
+    // Soft agreement: both lean same direction even if macro below threshold
+    const sameSign = (setupScore > 0 && macroScore > 0) || (setupScore < 0 && macroScore < 0);
+
+    // STAND ASIDE: strong conflict with strong macro — most severe, check first
+    if (conflict && setupMag >= 35 && macroMag >= 8)
+      return { label: 'STAND ASIDE', sublabel: 'Setup and macro in direct opposition \u2014 do not trade', color: 'conviction-red' };
+
+    // COUNTER-MACRO: setup conflicts with macro direction (meaningful both sides)
+    if (conflict && setupMag >= 35 && macroMag >= 5)
+      return { label: 'COUNTER-MACRO', sublabel: 'Setup direction conflicts with macro bias \u2014 reduced confidence', color: 'conviction-amber' };
+
+    // CAUTION: strong setup conflicts with weaker macro signal
+    if (conflict && setupMag >= 50)
+      return { label: 'CAUTION', sublabel: 'Setup strongly conflicts with macro \u2014 high risk', color: 'conviction-red' };
+
+    // MARGINAL: weak conflict or weak signals
+    if (conflict)
+      return { label: 'MARGINAL', sublabel: 'Weak or conflicting signals', color: 'conviction-amber' };
+
+    // HIGH CONVICTION: strong setup + macro agree
+    if (agree && setupMag >= 50 && macroMag >= 8)
+      return { label: 'HIGH CONVICTION', sublabel: 'Strong setup with broad macro confirmation', color: 'conviction-bright-green' };
+
+    // GOOD SETUP: setup + macro agree, setup strong
+    if (agree && setupMag >= 35 && macroMag >= 5)
+      return { label: 'GOOD SETUP', sublabel: 'Setup and macro aligned', color: 'conviction-green' };
+
+    // TECHNICALLY DRIVEN: strong setup, macro neutral
+    if (!conflict && setupMag >= 50 && noMacro)
+      return { label: 'TECHNICALLY DRIVEN', sublabel: 'Strong setup, macro neutral \u2014 watch for confirmation', color: 'conviction-green' };
+
+    // MACRO TAILWIND: macro strong but setup weak/neutral
+    if (!conflict && !noMacro && macroMag >= 8 && noSetup)
+      return { label: 'MACRO TAILWIND', sublabel: 'Macro favorable but no setup yet \u2014 wait for entry', color: 'conviction-amber' };
+
+    // MODERATE SETUP: both lean same direction (agree or soft sameSign)
+    if ((agree || sameSign) && setupMag >= 20 && macroMag >= 3)
+      return { label: 'MODERATE SETUP', sublabel: 'Moderate alignment \u2014 size down', color: 'conviction-amber' };
+
+    // MACRO TAILWIND NO SETUP: macro present, setup neutral/absent
+    if (!noMacro && noSetup && !conflict)
+      return { label: 'MACRO TAILWIND', sublabel: 'No active setup \u2014 wait', color: 'conviction-gray' };
+
+    // Default
+    return { label: 'STAND ASIDE', sublabel: 'Insufficient signal clarity', color: 'conviction-gray' };
+  }
+
   function _renderConviction() {
     const labelEl  = document.getElementById('conviction-label');
     const detailEl = document.getElementById('conviction-detail');
     if (!labelEl || !detailEl) return;
 
-    const setupScore = window._lastSetupScore;
+    const setupData  = window._lastSetupData;
     const macroScore = window._lastMacroScore;
 
     // Default fallback
-    if (setupScore == null || macroScore == null) {
+    if (!setupData || macroScore == null) {
       labelEl.textContent = 'INITIALIZING';
       labelEl.className = 'conviction-label conviction-gray';
       detailEl.textContent = 'Waiting for scan data...';
       return;
     }
 
-    const setupStrong = setupScore >= 70;
-    const setupMild   = setupScore >= 55 && setupScore < 70;
-    // setupWeak = setupScore < 55
+    // Use signed setup score for directional agreement check
+    const setupScore = setupData.score ?? 0;
+    const result = _computeConviction(setupScore, macroScore);
 
-    const macroStrong  = macroScore >= 6;
-    const macroMild    = macroScore >= 3 && macroScore < 6;
-    const macroNeutral = macroScore > -3 && macroScore < 3;
-    // macroBear = macroScore <= -3
+    console.log('conviction:', { setupScore, macroScore,
+      setupDir: setupScore < -15 ? 'short' : setupScore > 15 ? 'long' : 'neutral',
+      macroDir: macroScore < -4 ? 'bearish' : macroScore > 4 ? 'bullish' : 'neutral',
+      agree: (setupScore < -15 && macroScore < -4) || (setupScore > 15 && macroScore > 4),
+      conflict: (setupScore < -15 && macroScore > 4) || (setupScore > 15 && macroScore < -4),
+      result });
 
-    let label, detail, colorCls;
-
-    if (setupStrong && macroStrong) {
-      label = 'HIGH CONVICTION'; detail = 'Strong setup with broad macro confirmation'; colorCls = 'conviction-high';
-    } else if (setupStrong && macroMild) {
-      label = 'GOOD SETUP'; detail = 'Strong setup, macro context supportive'; colorCls = 'conviction-green';
-    } else if (setupStrong && macroNeutral) {
-      label = 'TECHNICALLY DRIVEN'; detail = 'Strong price action \u2014 macro context mixed, trade with care'; colorCls = 'conviction-amber';
-    } else if (setupStrong) {
-      // macroBear
-      label = 'COUNTER-MACRO'; detail = 'Strong setup but macro headwinds present \u2014 reduce size'; colorCls = 'conviction-amber';
-    } else if (setupMild && macroStrong) {
-      label = 'MACRO TAILWIND'; detail = 'Macro strongly favors direction \u2014 wait for cleaner entry'; colorCls = 'conviction-green';
-    } else if (setupMild && macroMild) {
-      label = 'MODERATE SETUP'; detail = 'Decent conditions \u2014 standard position sizing'; colorCls = 'conviction-amber';
-    } else if (setupMild && macroNeutral) {
-      label = 'MARGINAL'; detail = 'Mixed signals \u2014 consider waiting for better conditions'; colorCls = 'conviction-gray';
-    } else if (setupMild) {
-      // macroBear
-      label = 'CAUTION'; detail = 'Setup forming but macro context unfavorable'; colorCls = 'conviction-red';
-    } else if (macroStrong) {
-      // setupWeak + macroStrong
-      label = 'MACRO TAILWIND, NO SETUP'; detail = 'Macro confirms direction but no quality entry yet \u2014 watch'; colorCls = 'conviction-amber';
-    } else if (macroMild) {
-      // setupWeak + macroMild
-      label = 'STAND ASIDE'; detail = 'Insufficient setup quality and macro support'; colorCls = 'conviction-gray';
-    } else if (macroNeutral) {
-      // setupWeak + macroNeutral
-      label = 'STAND ASIDE'; detail = 'No edge present \u2014 wait for conditions to develop'; colorCls = 'conviction-gray';
-    } else {
-      // setupWeak + macroBear
-      label = 'STAND ASIDE'; detail = 'Weak setup with macro headwinds \u2014 no trade'; colorCls = 'conviction-gray';
-    }
-
-    labelEl.textContent = label;
-    labelEl.className = 'conviction-label ' + colorCls;
-    detailEl.textContent = detail;
+    labelEl.textContent = result.label;
+    labelEl.className = 'conviction-label ' + result.color;
+    detailEl.textContent = result.sublabel;
   }
 
   // ── Hook into symbol switches and WS messages ─────────────────────────────

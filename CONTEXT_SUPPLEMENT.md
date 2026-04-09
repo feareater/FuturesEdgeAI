@@ -26,6 +26,33 @@
 | T | v12.6 | A5 isolation runs — or_breakout@65: Net +$262K, PF 1.86, 5m-only, MNQ leads; zone_rejection@80: Net -$204K, raising conf doesn't fix R:R mismatch; recommended config: or_breakout+pdh_breakout |
 | U | v12.7 | DX/VIX pipeline — Phase 1b loop 5 (DX zips → raw/DX/), Phase 1d DX block (dxy.json 2251 dates), historicalVolatility.js + Phase 1g (vix.json 1767 dates, March 2020=80.5%), engine enrichment (vixRegime/vixLevel/dxyDirection/dxyClose on trades, byVixRegime/byDxyDirection stats), zone_rejection disabled default, OR breakout 5m-only guard. Final A5: Net +$233K PF 1.69 |
 | V | v12.8 | Market breadth scoring — marketBreadth.js (16 CME instruments, classifyInstrumentRegime, riskAppetite composite), breadth in applyMarketContext (±15 pts cap), trade record breadth fields, Optimize tab Market Breadth + Inter-market sub-tabs |
+| AD | v14.17 | Automatic chart gap fill — gapFill.js (startup + 15min scheduler), historical 1m file backfill, Yahoo Finance fallback, client-side gap detection + auto-refetch, manual refresh button |
+
+---
+
+## Gap Fill System (v14.17)
+
+### How it works
+- At server startup (after seed data loads, before live feed starts), `runGapFillAll()` scans all CME futures symbols for gaps in the candle store
+- Gaps are detected when the last bar timestamp is > 2x the timeframe interval behind current time
+- Backfill sources (in priority order): (1) historical 1m files at `data/historical/futures/{SYMBOL}/1m/{DATE}.json`, (2) Yahoo Finance fallback
+- After 1m bars are injected, higher TFs (5m/15m/30m) are re-aggregated using window-aligned logic
+- Per-TF scheduler intervals: 1m every 2 min, 5m every 5 min, 15m/30m every 15 min (v14.18)
+
+### Symbols covered
+- All `LIVE_FUTURES`: MNQ, MES, MGC, MCL, SIL, M2K, MYM, MHG
+- Crypto symbols (BTC, ETH, XRP, XLM) are **skipped** — no historical files, different data source
+
+### Graceful degradation
+- Historical files missing → falls back to Yahoo Finance
+- Yahoo Finance unreachable → logs warning, continues
+- All errors caught and logged — never crashes server or blocks scan engine
+
+### Client-side
+- `_detectChartGaps()` in chart.js checks candle array after every load
+- Auto-refetches with backoff: 2s → 5s → 15s (3 retries max, then shows "Gap in data")
+- Manual refresh button (⟳) in TF row resets retry counter for fresh attempts
+- Reconnect gap fill: Databento feed reconnect triggers immediate 1m fill for all symbols
 
 ---
 
@@ -392,10 +419,25 @@ const SYMBOLS = {
   MES: 'MES=F',
   MCL: 'MCL=F',
   SIL: 'SIL',
+  M2K: 'RTY=F',  // Micro Russell 2000 (RTY is full-size ticker on Yahoo)
+  MYM: 'MYM=F',  // Micro Dow Jones
 };
 ```
 Using NQ=F for MNQ data produces a ~0.1–0.3% price discrepancy which compounds into
 incorrect options scaling ratios.
+
+### Dashboard symbol selector (v14.20)
+Reference-only instruments (ZT, ZF, ZN, ZB, UB, M6E, M6B, MBT) removed from the dashboard
+symbol selector. They remain in the system for breadth computation and live feed — only their
+clickable buttons were removed since they have no chart display logic.
+
+### Startup data loading sequence (v14.20)
+1. Seed data loads (seedFetch.js initial load)
+2. Gap fill from historical files — **awaited** (loads 1m pipeline files, writes seed files for symbols without seed data)
+3. Yahoo Finance 60-day backfill — **awaited** (5m/60d + 1m/7d, bridges pipeline gap)
+4. Gap fill scheduler starts (periodic 1m/5m/15m/30m maintenance)
+5. Databento live feed starts (if enabled)
+6. Scan engine starts
 
 ---
 

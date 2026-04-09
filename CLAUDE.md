@@ -70,7 +70,8 @@ FuturesEdgeAI/
 │   ├── data/
 │   │   ├── instruments.js     ← Single source of truth: all 16 CME symbols + 6 OPRA underlyings (pointValue, dbRoot, optionsProxy, etc.)
 │   │   ├── snapshot.js        ← OHLCV fetch + candle normalization (source-agnostic)
-│   │   ├── seedFetch.js       ← Yahoo Finance seed data fetch (MNQ/MGC/MES/MCL)
+│   │   ├── seedFetch.js       ← Yahoo Finance seed data fetch (MNQ/MGC/MES/MCL/SIL/M2K/MYM)
+│   │   ├── gapFill.js         ← Automatic candle gap detection + backfill (startup + 15min scheduler)
 │   │   ├── historicalPipeline.js ← Databento historical data pipeline (phases 1a–1f)
 │   │   └── calendar.js        ← ForexFactory economic calendar (1h cache)
 │   ├── analysis/

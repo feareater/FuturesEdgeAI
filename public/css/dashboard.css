@@ -319,6 +319,50 @@ html, body {
   color: #fff;
 }
 
+/* ── Chart refresh button ──────────────────────────────────────────────── */
+
+.chart-refresh-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 2px 7px;
+  border-radius: var(--radius);
+  margin-left: 8px;
+  transition: color 0.12s, border-color 0.12s, transform 0.3s;
+  line-height: 1;
+}
+.chart-refresh-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.chart-refresh-btn.spinning {
+  animation: spin-refresh 0.8s linear infinite;
+  color: var(--accent);
+  border-color: var(--accent);
+}
+@keyframes spin-refresh {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* ── Chart gap indicator ──────────────────────────────────────────────── */
+
+#chart-gap-indicator {
+  position: absolute;
+  top: 8px;
+  right: 60px;
+  background: rgba(0, 0, 0, 0.6);
+  color: var(--text-dim);
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: var(--radius);
+  z-index: 10;
+  display: none;
+  pointer-events: none;
+}
+
 /* ── OHLC display ───────────────────────────────────────────────────────── */
 
 #ohlc-display {
@@ -3231,8 +3275,8 @@ html, body {
   text-overflow: ellipsis;
 }
 
-.conviction-high    { color: #00e676; }
-.conviction-green   { color: var(--bull); }
+.conviction-bright-green { color: #00e676; font-weight: 900; }
+.conviction-green   { color: var(--bull); opacity: 0.85; }
 .conviction-amber   { color: #f59e0b; }
 .conviction-red     { color: var(--bear); }
 .conviction-gray    { color: var(--text-dim); }

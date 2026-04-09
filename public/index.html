@@ -80,14 +80,6 @@
               <button class="sym-btn" data-symbol="SIL" data-mode="index">SIL</button>
             </div>
           </div>
-          <div class="sym-group-divider"></div>
-          <div class="sym-group">
-            <span class="sym-group-label">FX</span>
-            <div class="btn-group">
-              <button class="sym-btn" data-symbol="M6E" data-mode="index">M6E</button>
-              <button class="sym-btn" data-symbol="M6B" data-mode="index">M6B</button>
-            </div>
-          </div>
         </div>
         <!-- Crypto symbols (shown in Crypto mode) -->
         <div class="sym-groups" id="sym-groups-crypto" style="display:none">
@@ -98,24 +90,12 @@
               <button class="sym-btn" data-symbol="ETH" data-mode="crypto">ETH</button>
               <button class="sym-btn" data-symbol="XRP" data-mode="crypto">XRP</button>
               <button class="sym-btn" data-symbol="XLM" data-mode="crypto">XLM</button>
-              <button class="sym-btn" data-symbol="MBT" data-mode="crypto">MBT</button>
             </div>
           </div>
         </div>
         <!-- Reference symbols (always visible) -->
         <div class="sym-group-divider"></div>
         <div class="sym-groups" id="sym-groups-ref">
-          <div class="sym-group">
-            <span class="sym-group-label">Bonds</span>
-            <div class="btn-group">
-              <button class="sym-btn" data-symbol="ZT" data-mode="ref">ZT</button>
-              <button class="sym-btn" data-symbol="ZF" data-mode="ref">ZF</button>
-              <button class="sym-btn" data-symbol="ZN" data-mode="ref">ZN</button>
-              <button class="sym-btn" data-symbol="ZB" data-mode="ref">ZB</button>
-              <button class="sym-btn" data-symbol="UB" data-mode="ref">UB</button>
-            </div>
-          </div>
-          <div class="sym-group-divider"></div>
           <div class="sym-group">
             <span class="sym-group-label">Reference</span>
             <div class="btn-group">
@@ -140,6 +120,7 @@
           <button class="tf-btn"        data-tf="2h">2h</button>
           <button class="tf-btn"        data-tf="4h">4h</button>
         </div>
+        <button id="chart-refresh-btn" class="chart-refresh-btn" title="Refresh chart data">&#x27F3;</button>
       </div>
 
       <!-- Row 4: Correlation heatmap -->
@@ -312,8 +293,9 @@
 
       </aside>
 
-      <div id="chart-wrap">
+      <div id="chart-wrap" style="position:relative">
         <div id="chart-no-data"></div>
+        <div id="chart-gap-indicator"></div>
         <div id="chart-container"></div>
         <div id="cvd-container"></div>
       </div>
