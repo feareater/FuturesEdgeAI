@@ -4,6 +4,23 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v14.24.1] — 2026-04-09 — Chart race condition fix (gap retry) + wick-based spike purge
+
+### Fixed: Gap retry timer overwrites new symbol's chart data (`public/js/chart.js`)
+- **Root cause**: `_scheduleGapRetry()` captured the old symbol in a `setTimeout` closure. When user switched MNQ→MES, the pending MNQ gap retry fired 2-15s later and called `candleSeries.setData()` with MNQ data, overwriting the MES chart.
+- **Fix**: (1) Store timer ID in `_gapRetryTimer`; cancel via `clearTimeout()` at the start of every `loadData()` call. (2) Symbol/TF guard in the callback — discards result if user switched away during the timer or fetch. (3) Manual refresh button also guards against stale results.
+
+### Fixed: MES overnight spike candles — wick-based sanitization + higher-TF rebuild (`server/data/snapshot.js`)
+- **Root cause**: `_sanitizeCandles()` only checked close-to-close deviation (8% threshold). Bad Yahoo/historical bars with extreme wicks (H=6865, C=6810 → 55pt wick on 1pt body) passed through because close was normal. Additionally, bad 1m bars were aggregated into 5m/15m/30m by `writeLiveCandle()` BEFORE `purgeAllInvalidBars()` ran — the bad highs/lows persisted in all higher-TF bars.
+- **Fix**: (1) Added Pass 3 to `_sanitizeCandles()`: wick-based spike detection — removes bars where wick exceeds 5× body AND 3× median neighbor range. (2) `purgeAllInvalidBars()` now REBUILDS 5m/15m/30m from sanitized 1m data via `aggregateBarsToTF()` instead of only sanitizing existing higher-TF bars. (3) `_readHistoricalBars()` in gapFill.js now sanitizes bars before returning.
+
+### Files changed
+- `public/js/chart.js` — `_gapRetryTimer` cancel on loadData, symbol guard in gap retry + manual refresh
+- `server/data/snapshot.js` — Pass 3 wick detection in `_sanitizeCandles()`, higher-TF rebuild in `purgeAllInvalidBars()`, exported `sanitizeCandles`
+- `server/data/gapFill.js` — imported `sanitizeCandles`, applied to `_readHistoricalBars()` output
+
+---
+
 ## [v14.24] — 2026-04-08 — Spike filtering at source + chart race condition fix
 
 ### Fixed: 1s tick spike filter (`_isSpikePrice`) — rolling median + per-symbol thresholds (`server/data/databento.js`)

@@ -132,7 +132,40 @@ function _sanitizeCandles(symbol, candles) {
     }
   }
 
-  // Also check last bar for spike (no next bar to verify — be conservative, keep it)
+  // Pass 3: remove bars with extreme wicks (bad Yahoo backfill data).
+  // A bar where the wick extends far beyond its body AND far beyond neighboring bars'
+  // range is a phantom wick from bad data, not real price action.
+  // Max allowed wick: 5× the body size AND 3× the median bar range of surrounding bars.
+  const WICK_BODY_MULT = 5;    // wick must exceed 5× body to even be suspect
+  const WICK_RANGE_MULT = 3;   // wick must exceed 3× median neighbor range
+  const NEIGHBOR_WINDOW = 5;   // look at 5 bars on each side for median range
+  for (let i = 0; i < valid.length; i++) {
+    if (spikeIndices.has(i)) continue; // already flagged
+    const c = valid[i];
+    const body = Math.abs(c.close - c.open) || (c.close * 0.0001); // avoid zero body
+    const wickUp   = c.high - Math.max(c.close, c.open);
+    const wickDown = Math.min(c.close, c.open) - c.low;
+    const maxWick  = Math.max(wickUp, wickDown);
+
+    if (maxWick <= body * WICK_BODY_MULT) continue; // wick is proportional — fine
+
+    // Compute median range of neighboring bars (excluding already-flagged ones)
+    const ranges = [];
+    for (let j = Math.max(0, i - NEIGHBOR_WINDOW); j <= Math.min(valid.length - 1, i + NEIGHBOR_WINDOW); j++) {
+      if (j === i || spikeIndices.has(j)) continue;
+      ranges.push(valid[j].high - valid[j].low);
+    }
+    if (ranges.length === 0) continue;
+    ranges.sort((a, b) => a - b);
+    const medianRange = ranges[Math.floor(ranges.length / 2)];
+
+    if (maxWick > medianRange * WICK_RANGE_MULT && medianRange > 0) {
+      console.warn(`[SANITIZE] Removed extreme-wick bar for ${symbol} @ ${c.time}: H=${c.high} L=${c.low} C=${c.close} wick=${maxWick.toFixed(2)} medianRange=${medianRange.toFixed(2)}`);
+      spikeIndices.add(i);
+      removed++;
+    }
+  }
+
   // Check first bar for near-zero (catastrophic bad data) — only for futures
   // Crypto (XRP ~$0.50, XLM ~$0.15) and MHG (~$5) naturally have low prices
   if (valid.length > 0 && valid[0].close < 1 && !CRYPTO_SYMBOLS.has(symbol) && symbol !== 'MHG') {
@@ -176,11 +209,33 @@ function purgeInvalidBars(symbol) {
 
 /**
  * Purge invalid bars for all live futures symbols at startup.
+ * After purging 1m bars, REBUILD higher TFs (5m/15m/30m) from the cleaned 1m data.
+ * This is necessary because the higher-TF store may contain bars that were aggregated
+ * from bad 1m bars before they were purged — those bad highs/lows persist in the
+ * aggregated bars and can't be detected by wick analysis (all neighbors are similarly bad).
  */
 function purgeAllInvalidBars() {
   let total = 0;
   for (const sym of LIVE_FUTURES) {
     total += purgeInvalidBars(sym);
+
+    // Rebuild higher TFs from sanitized 1m data to eliminate bad aggregated wicks
+    const key1m = `${sym}:1m`;
+    const clean1m = liveCandles.get(key1m);
+    if (clean1m && clean1m.length > 0) {
+      for (const { tf, seconds } of LIVE_AGG_TFS) {
+        const keyTf = `${sym}:${tf}`;
+        const oldBars = liveCandles.get(keyTf);
+        const rebuilt = aggregateBarsToTF(clean1m, seconds);
+        if (rebuilt.length > 0) {
+          liveCandles.set(keyTf, rebuilt);
+          const oldLen = oldBars ? oldBars.length : 0;
+          if (oldLen !== rebuilt.length) {
+            console.log(`[PURGE] ${sym}:${tf} — rebuilt from clean 1m (${oldLen} → ${rebuilt.length} bars)`);
+          }
+        }
+      }
+    }
   }
   if (total > 0) console.log(`[PURGE] Total: ${total} invalid bars removed across all symbols`);
   return total;
@@ -481,6 +536,7 @@ function aggregateBarsToTF(bars1m, tfSeconds) {
 module.exports = {
   getCandles, getAllTimeframes, writeLiveCandle, injectBars, aggregateBarsToTF,
   purgeInvalidBars, purgeAllInvalidBars,
+  sanitizeCandles: _sanitizeCandles,
   VALID_SYMBOLS, VALID_TIMEFRAMES, CRYPTO_SYMBOLS, MACRO_SYMBOLS, LIVE_FUTURES,
   SPIKE_THRESHOLD,
 };

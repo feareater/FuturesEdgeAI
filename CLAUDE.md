@@ -69,7 +69,7 @@ FuturesEdgeAI/
 │   │   └── tradovate.js       ← OAuth + session token management
 │   ├── data/
 │   │   ├── instruments.js     ← Single source of truth: all 16 CME symbols + 6 OPRA underlyings (pointValue, dbRoot, optionsProxy, etc.)
-│   │   ├── snapshot.js        ← OHLCV fetch + candle normalization (source-agnostic)
+│   │   ├── snapshot.js        ← OHLCV fetch + candle normalization (source-agnostic); _sanitizeCandles has 3-pass filter (null/zero, close spikes, wick spikes); purgeAllInvalidBars rebuilds higher TFs from clean 1m
 │   │   ├── seedFetch.js       ← Yahoo Finance seed data fetch (MNQ/MGC/MES/MCL/SIL/M2K/MYM)
 │   │   ├── gapFill.js         ← Automatic candle gap detection + backfill (startup + 15min scheduler)
 │   │   ├── historicalPipeline.js ← Databento historical data pipeline (phases 1a–1f)
@@ -110,7 +110,7 @@ FuturesEdgeAI/
 │   │   ├── performance.css    ← Performance page styles
 │   │   └── backtest.css       ← Backtest page styles
 │   ├── js/
-│   │   ├── chart.js           ← TradingView chart renderer + all indicator overlays
+│   │   ├── chart.js           ← TradingView chart renderer + all indicator overlays; loadData() clears all series before fetching, AbortController cancels in-flight, gap retry timer cancelled on symbol switch
 │   │   ├── chartManager.js    ← Multi-symbol grid mode (7 charts); mode toggle; single/grid switching
 │   │   ├── layers.js          ← Layer toggles + feature toggle panel
 │   │   ├── alerts.js          ← Alert feed, WS, RS widget, calendar badge, sound alerts

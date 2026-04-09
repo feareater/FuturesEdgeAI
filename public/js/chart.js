@@ -19,6 +19,7 @@
   let _liveTickBar = null;  // in-progress bar for the current 1m window (from live_price ticks)
   let _gapRefetchPending = false;  // prevents multiple auto-refetches
   let _gapRetryCount     = 0;     // tracks retry attempts (max 3)
+  let _gapRetryTimer     = null;  // setTimeout ID — cleared on symbol/TF switch to prevent stale data overwrite
   const _GAP_RETRY_DELAYS = [2000, 5000, 15000];  // backoff delays in ms
   let _currentFetchController = null;  // AbortController for in-flight candle/indicator fetches
 
@@ -341,9 +342,26 @@
     _showGapIndicator('\u27F3 Refreshing data...');
     console.log(`[chart] Gap detected — refetch ${_gapRetryCount + 1}/${_GAP_RETRY_DELAYS.length} in ${delay / 1000}s`);
 
-    setTimeout(async () => {
+    _gapRetryTimer = setTimeout(async () => {
+      _gapRetryTimer = null;
+
+      // Guard: if user switched symbol/TF since this retry was scheduled, abort
+      if (symbol !== activeSymbol || tf !== activeTf) {
+        console.log(`[chart] Gap retry cancelled — symbol changed from ${symbol} to ${activeSymbol}`);
+        _gapRefetchPending = false;
+        _gapRetryCount = 0;
+        return;
+      }
+
       try {
         const refreshRes = await fetch(`/api/candles?symbol=${symbol}&timeframe=${tf}&refresh=true`);
+        // Re-check after await — user may have switched during fetch
+        if (symbol !== activeSymbol || tf !== activeTf) {
+          console.log(`[chart] Gap retry result discarded — symbol changed during fetch`);
+          _gapRefetchPending = false;
+          _gapRetryCount = 0;
+          return;
+        }
         if (refreshRes.ok) {
           const { candles: freshCandles } = await refreshRes.json();
           if (freshCandles && freshCandles.length >= 2) {
@@ -458,6 +476,15 @@
     }
     _currentFetchController = new AbortController();
     const signal = _currentFetchController.signal;
+
+    // Cancel any pending gap retry — its closure captured the OLD symbol and would
+    // overwrite this new symbol's chart data when it fires
+    if (_gapRetryTimer) {
+      clearTimeout(_gapRetryTimer);
+      _gapRetryTimer = null;
+      _gapRefetchPending = false;
+      _gapRetryCount = 0;
+    }
 
     // Clear all series and overlays immediately — prevents stale data from
     // the previous symbol persisting during the async fetch
@@ -1549,8 +1576,16 @@
       _gapRetryCount = 0;      // reset retry counter so gap retry will try again fresh
       _gapRefetchPending = false;
       _showGapIndicator('\u27F3 Refreshing data...');
+      const snapSymbol = activeSymbol;
+      const snapTf     = activeTf;
       try {
-        const res = await fetch(`/api/candles?symbol=${activeSymbol}&timeframe=${activeTf}&refresh=true`);
+        const res = await fetch(`/api/candles?symbol=${snapSymbol}&timeframe=${snapTf}&refresh=true`);
+        // Discard result if user switched symbol during the fetch
+        if (snapSymbol !== activeSymbol || snapTf !== activeTf) {
+          console.log('[chart] Manual refresh result discarded — symbol changed during fetch');
+          refreshBtn.classList.remove('spinning');
+          return;
+        }
         if (res.ok) {
           const { candles: freshCandles } = await res.json();
           if (freshCandles && freshCandles.length >= 2) {

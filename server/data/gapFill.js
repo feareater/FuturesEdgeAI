@@ -14,7 +14,7 @@
 
 const fs   = require('fs');
 const path = require('path');
-const { getCandles, injectBars, aggregateBarsToTF, LIVE_FUTURES } = require('./snapshot');
+const { getCandles, injectBars, aggregateBarsToTF, sanitizeCandles, LIVE_FUTURES } = require('./snapshot');
 const { TICK_SPIKE_THRESHOLD } = require('./databento');
 
 const SEED_DIR = path.join(__dirname, '..', '..', 'data', 'seed');
@@ -171,7 +171,9 @@ function _readHistoricalBars(symbol, fromTs, toTs) {
     d.setUTCDate(d.getUTCDate() + 1);
   }
 
-  return bars.sort((a, b) => a.time - b.time);
+  // Sanitize historical bars before returning — removes spikes and extreme wicks
+  // that may exist in raw Databento/Yahoo historical files
+  return sanitizeCandles(symbol, bars.sort((a, b) => a.time - b.time));
 }
 
 // ---------------------------------------------------------------------------
