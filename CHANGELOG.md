@@ -4,6 +4,78 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v14.23] — 2026-04-09 — Instrument data audit + options proxy expansion
+
+### Added: Candle sanitization layer in `getCandles()` (`server/data/snapshot.js`)
+- New `_sanitizeCandles(symbol, candles)` function filters bars with null/zero/NaN close or open before returning data
+- Isolated spike detection: bars where close deviates beyond per-symbol threshold AND reverts in the next bar are removed (bad ticks). Sustained multi-bar moves (real market events) are preserved.
+- Per-symbol `SPIKE_THRESHOLD` map: equity index 8%, metals 8%, crude 15%, MHG 10%
+- Applied to all return paths in `getCandles()` — seed, live, and merged
+
+### Added: `purgeInvalidBars()` / `purgeAllInvalidBars()` startup cleanup (`server/data/snapshot.js`)
+- Scans live candle store for each futures symbol on all TFs (1m/5m/15m/30m) at startup
+- Removes any bars failing sanitization checks from in-memory store
+- Called in `server/index.js` after gap fill + Yahoo backfill, before live feed starts
+
+### Added: Instrument price sanity log at startup (`server/index.js`)
+- Logs `[INSTRUMENTS] ${symbol}: pointValue=${pv}, currentPrice=${close}` for each tradeable futures symbol
+- Quick visual verification that price and pointValue are in expected ranges
+
+### Added: High-confidence setup logging (`server/index.js`)
+- `[HIGH CONF]` log line fires when any setup reaches >= 85% confidence
+- Includes symbol, setup type, direction, confidence, timeframe, and regime direction
+
+### Added: `scripts/auditInstruments.js` diagnostic script
+- Checks candle store health for all 8 tradeable futures (MNQ, MES, M2K, MYM, MGC, MCL, MHG, SIL)
+- Reports bar count, timestamp range, min/max close, bad bars, spike bars, staleness
+- Summary table with PASS/WARN/FAIL per symbol
+
+### Fixed: Options proxy coverage expanded (`server/data/options.js`)
+- **M2K → IWM** added to `ETF_PROXY` and `FUTURES_YAHOO` maps
+- **MYM → DIA** added to `ETF_PROXY` and `FUTURES_YAHOO` maps
+- M2K and MYM now have full HP/GEX/DEX options data from CBOE via ETF proxy scaling
+- Fixed SIL Yahoo ticker: `'SIL'` → `'SI=F'` (was pointing to silver miners ETF instead of silver futures)
+- Same fix applied in `server/data/gapFill.js` YAHOO_SYMBOLS map
+
+### Fixed: MHG bias panel shows "N/A (no options proxy)" for HP signals (`server/analysis/bias.js`)
+- Daily HP and Monthly HP signals now check `INSTRUMENTS[symbol].optionsProxy` before rendering
+- Symbols without an options proxy (MHG) show "N/A (no options proxy)" instead of misleading "neutral" / "none"
+- HP contribution is correctly 0 for proxy-less symbols (no false signal)
+
+### Fixed: DXY alignment now applies to M2K and MYM (`server/analysis/marketContext.js`)
+- `DXY_APPLICABLE` set expanded from `['MNQ', 'MES', 'MGC', 'MCL']` to include `M2K` and `MYM`
+- Small-cap and Dow indices are dollar-sensitive — DXY alignment should contribute to their context scoring
+
+### Files changed
+- `server/data/snapshot.js` — `_sanitizeCandles()`, `purgeInvalidBars()`, `purgeAllInvalidBars()`, `SPIKE_THRESHOLD`
+- `server/data/options.js` — `ETF_PROXY` +M2K/MYM, `FUTURES_YAHOO` +M2K/MYM, SIL ticker fix
+- `server/data/gapFill.js` — SIL Yahoo ticker fix (`'SIL'` → `'SI=F'`)
+- `server/analysis/bias.js` — HP signal N/A for proxy-less symbols (imports `INSTRUMENTS`)
+- `server/analysis/marketContext.js` — `DXY_APPLICABLE` +M2K/MYM
+- `server/index.js` — `purgeAllInvalidBars()` at startup, instrument price log, high-confidence logging
+- `scripts/auditInstruments.js` — new diagnostic script
+
+---
+
+## [v14.22.1] — 2026-04-08 — Monthly HP direction fix + breadth override threshold tuning
+
+### Fixed: Monthly HP direction check now correctly compares price vs HP level (`server/analysis/bias.js`)
+- **Root cause**: Monthly HP code path had a fallback that used zone metadata (`monthlyNearest.pressure`) when `monthlyNearest.price` or `_currentPrice` was null. The zone metadata carries a pre-computed pressure label that doesn't reflect current price position — e.g., a level at 25,254 with price at 25,012 was labeled "support" by the zone metadata instead of "resistance".
+- **Fix**: Removed the zone metadata fallback entirely. Monthly HP now exclusively uses price comparison (`hpLevel > currentPrice` → resistance, `hpLevel < currentPrice` → support), matching the Daily HP block structure. Falls back to zero contribution if no numeric price available.
+- Added rich Monthly HP diagnostics to `/api/bias/debug` endpoint (relation, interpretation, raw fields)
+
+### Fixed: Breadth dual-window override thresholds too conservative (`server/analysis/marketBreadth.js`)
+- **Root cause**: The 5-bar SMA override in `classifyInstrumentRegime()` used 0.3× ATR for downgrade and 0.6× ATR for full flip — too conservative for micro futures intraday volatility. Sustained downtrends weren't triggering the override.
+- **Fix**: Lowered thresholds to 0.15× ATR (downgrade to neutral) and 0.35× ATR (full flip). Added ATR proxy fallback (0.1% of last close) when bar-to-bar changes are too few or zero. Added per-instrument `console.log` debug output showing primary classification, SMA5 direction, move magnitude, ATR proxy, move ratio, and override result.
+- Same threshold changes applied to `_classifyWithOverrideFlag()` (equity breadth staleness detection)
+
+### Files changed
+- `server/analysis/bias.js` — Monthly HP signal: removed zone metadata fallback, price-only comparison
+- `server/analysis/marketBreadth.js` — override thresholds 0.3→0.15 / 0.6→0.35, ATR fallback, debug logging
+- `server/index.js` — `/api/bias/debug` enriched Monthly HP diagnostics
+
+---
+
 ## [v14.21] — 2026-04-08 — Conviction row directional agreement fix
 
 ### Fixed: Conviction row ignoring setup/macro directional conflict (`public/js/alerts.js`)

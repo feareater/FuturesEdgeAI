@@ -20,6 +20,16 @@ const DATA_SOURCE  = process.env.DATA_SOURCE ?? 'seed';
 const SEED_DIR     = path.join(__dirname, '..', '..', 'data', 'seed');
 const SETTINGS_FILE = path.join(__dirname, '..', '..', 'config', 'settings.json');
 
+// Per-symbol spike threshold: max allowed SINGLE-bar close change as a fraction.
+// Only bars where the move from previous close exceeds this AND the move reverses
+// within the next few bars are considered spikes (bad tick data).
+// A sustained multi-bar move (even if large) is kept — that's a real market event.
+const SPIKE_THRESHOLD = {
+  MNQ: 0.08, MES: 0.08, M2K: 0.08, MYM: 0.08,  // 8% for equity index
+  MGC: 0.08, SIL: 0.08, MHG: 0.10,               // 8% for metals
+  MCL: 0.15,                                       // 15% for crude (volatile, overnight gaps)
+};
+
 const VALID_SYMBOLS    = [
   // Tradeable futures
   'MNQ', 'MGC', 'MES', 'MCL', 'SIL', 'M2K', 'MYM', 'MHG',
@@ -67,6 +77,116 @@ function _isLiveMode() {
 }
 
 // ---------------------------------------------------------------------------
+// Candle sanitization — removes bars with impossible prices before returning
+// ---------------------------------------------------------------------------
+
+/**
+ * Filter out bars with null/zero/NaN close, null/zero open, or isolated spike
+ * bars that are clearly bad ticks (not sustained market moves).
+ *
+ * Spike detection strategy: a bar is only removed if its close deviates beyond
+ * the threshold AND the move is isolated (the NEXT bar returns to near the
+ * previous level). This avoids removing legitimate multi-bar market moves
+ * like crude oil overnight gaps or commodity sell-offs.
+ *
+ * @param {string} symbol   Internal symbol
+ * @param {Array}  candles  Sorted candle array
+ * @returns {Array} Sanitized candle array
+ */
+function _sanitizeCandles(symbol, candles) {
+  if (!candles || candles.length === 0) return candles;
+
+  const threshold = SPIKE_THRESHOLD[symbol] ?? 0.10;
+  let removed = 0;
+
+  // Pass 1: remove null/zero/NaN bars
+  const valid = [];
+  for (const c of candles) {
+    if (c.close == null || !isFinite(c.close) || c.close <= 0 ||
+        c.open == null  || !isFinite(c.open)  || c.open <= 0) {
+      console.warn(`[SANITIZE] Removed bad bar for ${symbol} @ ${c.time}: close=${c.close}, open=${c.open}`);
+      removed++;
+      continue;
+    }
+    valid.push(c);
+  }
+
+  // Pass 2: remove isolated spike bars (bad ticks that revert immediately)
+  // A spike is only removed if: move from prev > threshold AND next bar is back near prev
+  const spikeIndices = new Set();
+  for (let i = 1; i < valid.length - 1; i++) {
+    const prev = valid[i - 1];
+    const curr = valid[i];
+    const next = valid[i + 1];
+    const movePrev = Math.abs(curr.close - prev.close) / prev.close;
+    if (movePrev > threshold) {
+      // Check if next bar reverts back toward prev (isolated spike)
+      const moveNext = Math.abs(next.close - prev.close) / prev.close;
+      if (moveNext < threshold * 0.5) {
+        // Isolated spike — next bar is back near previous level
+        console.warn(`[SANITIZE] Removed isolated spike for ${symbol} @ ${curr.time}: close=${curr.close}, prevClose=${prev.close}, nextClose=${next.close}`);
+        spikeIndices.add(i);
+        removed++;
+      }
+      // If next bar stays at the new level, it's a real move — keep it
+    }
+  }
+
+  // Also check last bar for spike (no next bar to verify — be conservative, keep it)
+  // Check first bar for near-zero (catastrophic bad data) — only for futures
+  // Crypto (XRP ~$0.50, XLM ~$0.15) and MHG (~$5) naturally have low prices
+  if (valid.length > 0 && valid[0].close < 1 && !CRYPTO_SYMBOLS.has(symbol) && symbol !== 'MHG') {
+    console.warn(`[SANITIZE] Removed near-zero first bar for ${symbol} @ ${valid[0].time}: close=${valid[0].close}`);
+    spikeIndices.add(0);
+    removed++;
+  }
+
+  const result = valid.filter((_, i) => !spikeIndices.has(i));
+
+  if (removed > 0) {
+    console.warn(`[SANITIZE] ${symbol}: removed ${removed} bad/spike bars from ${candles.length} total`);
+  }
+  return result;
+}
+
+/**
+ * Purge invalid bars from the in-memory live candle store for a symbol.
+ * Removes bars where close <= 0, close is null/NaN, or spike exceeds threshold.
+ * Called at startup after seed data loads.
+ *
+ * @param {string} symbol  Internal symbol
+ */
+function purgeInvalidBars(symbol) {
+  let totalPurged = 0;
+  for (const tf of ['1m', '5m', '15m', '30m']) {
+    const key = `${symbol}:${tf}`;
+    const bars = liveCandles.get(key);
+    if (!bars || bars.length === 0) continue;
+
+    const clean = _sanitizeCandles(symbol, bars);
+    if (clean.length < bars.length) {
+      const purged = bars.length - clean.length;
+      totalPurged += purged;
+      liveCandles.set(key, clean);
+      console.log(`[PURGE] ${symbol}:${tf} — removed ${purged} invalid bars from live store`);
+    }
+  }
+  return totalPurged;
+}
+
+/**
+ * Purge invalid bars for all live futures symbols at startup.
+ */
+function purgeAllInvalidBars() {
+  let total = 0;
+  for (const sym of LIVE_FUTURES) {
+    total += purgeInvalidBars(sym);
+  }
+  if (total > 0) console.log(`[PURGE] Total: ${total} invalid bars removed across all symbols`);
+  return total;
+}
+
+// ---------------------------------------------------------------------------
 // Public interface — these signatures stay constant regardless of data source
 // ---------------------------------------------------------------------------
 
@@ -95,12 +215,12 @@ function getCandles(symbol, timeframe) {
     if (!live || live.length === 0) {
       // No live bars yet — return seed only (startup / reconnect gap)
       if (seed.length === 0) console.log(`[snapshot] Live store empty for ${symbol}:${timeframe} — falling back to seed data`);
-      return seed;
+      return _sanitizeCandles(symbol, seed);
     }
 
     // DEFENSIVE COPY: return cloned candle objects so callers (scans, chart)
     // never hold mutable references into the live store.
-    if (seed.length === 0) return live.map(c => ({ ...c }));
+    if (seed.length === 0) return _sanitizeCandles(symbol, live.map(c => ({ ...c })));
 
     // Full merge: live bars take priority where they exist; seed bars fill in
     // everywhere else (including gaps in the live feed). This replaces the old
@@ -110,11 +230,11 @@ function getCandles(symbol, timeframe) {
     const seedFill  = seed.filter(c => !liveTimes.has(c.time));
     const merged    = [...seedFill, ...live.map(c => ({ ...c }))].sort((a, b) => a.time - b.time);
 
-    return merged;
+    return _sanitizeCandles(symbol, merged);
   }
 
   switch (DATA_SOURCE) {
-    case 'seed':      return _fromSeed(symbol, timeframe);
+    case 'seed':      return _sanitizeCandles(symbol, _fromSeed(symbol, timeframe));
     case 'ironbeam':  throw new Error('Ironbeam source not yet implemented');
     case 'databento': throw new Error('Databento source not yet implemented');
     default:          throw new Error(`Unknown DATA_SOURCE: ${DATA_SOURCE}`);
@@ -360,5 +480,7 @@ function aggregateBarsToTF(bars1m, tfSeconds) {
 
 module.exports = {
   getCandles, getAllTimeframes, writeLiveCandle, injectBars, aggregateBarsToTF,
+  purgeInvalidBars, purgeAllInvalidBars,
   VALID_SYMBOLS, VALID_TIMEFRAMES, CRYPTO_SYMBOLS, MACRO_SYMBOLS, LIVE_FUTURES,
+  SPIKE_THRESHOLD,
 };

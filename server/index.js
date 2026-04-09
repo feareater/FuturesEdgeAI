@@ -8,7 +8,7 @@ const crypto  = require('crypto');
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const { authenticate }      = require('./auth/tradovate');
-const { getCandles, writeLiveCandle, LIVE_FUTURES } = require('./data/snapshot');
+const { getCandles, writeLiveCandle, LIVE_FUTURES, purgeAllInvalidBars } = require('./data/snapshot');
 const gapFill                       = require('./data/gapFill');
 const { writeLiveCandleToDisk, getLiveBarStats } = require('./data/liveArchive');
 const { getLiveFeedStatus, startLiveFeed } = require('./data/databento');
@@ -1473,11 +1473,93 @@ app.get('/api/bias', (req, res) => {
     const indWithRegime = indicators ? Object.assign({}, indicators, { regime }) : null;
     const bias = computeDirectionalBias(symbol, ctxWithCal, indWithRegime);
 
-    const data = { readiness, bias };
+    const breadthStale = ctxWithCal?.breadth?.breadthStale ?? false;
+    const data = { readiness, bias, breadthStale };
     _biasCache.set(cacheKey, { ts: Date.now(), data });
     res.json(data);
   } catch (e) {
     console.error('[api] /bias error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/bias/debug?symbol=MNQ — diagnostic view of all bias signal inputs + outputs
+app.get('/api/bias/debug', (req, res) => {
+  const symbol = req.query.symbol || 'MNQ';
+  try {
+    const mktCtx = _lastMarketContext.get(symbol);
+    if (!mktCtx) {
+      return res.json({ error: 'No market context available yet', symbol });
+    }
+
+    const indicators = _lastIndicators.get(symbol) || null;
+    const regime = indicators ? require('./analysis/regime').classifyRegime(indicators) : null;
+    const indWithRegime = indicators ? Object.assign({}, indicators, { regime }) : null;
+
+    // Current ET hour
+    const etHourStr = new Date().toLocaleString('en-US', {
+      timeZone: 'America/New_York', hour: 'numeric', hour12: false
+    });
+    const currentHour = parseInt(etHourStr, 10);
+
+    const ctxWithCal = Object.assign({}, mktCtx, {
+      _calendarNearEvent: _lastCalendarNear.get(symbol) || false,
+    });
+
+    const readiness = computeSetupReadiness(symbol, ctxWithCal, currentHour, 'auto');
+    const bias = computeDirectionalBias(symbol, ctxWithCal, indWithRegime);
+
+    // Raw input values for debugging
+    const rawInputs = {
+      hp: {
+        nearestLevel:      mktCtx.hp?.nearestLevel ?? null,
+        pressureDirection: mktCtx.hp?.pressureDirection ?? null,
+        currentPrice:      mktCtx.hp?._currentPrice ?? null,
+        monthlyNearest:    mktCtx.hp?.monthlyNearest ?? null,
+        monthlyHP: (() => {
+          const mn = mktCtx.hp?.monthlyNearest;
+          const cp = mktCtx.hp?._currentPrice;
+          if (!mn) return { available: false };
+          const price = mn.price ?? mn.strike ?? mn.scaled ?? null;
+          return {
+            available: true,
+            price,
+            currentPrice: cp,
+            relation: price != null && cp != null ? (price > cp ? 'above_price' : price < cp ? 'below_price' : 'at_price') : 'unknown',
+            interpretation: price != null && cp != null ? (price > cp ? 'resistance' : price < cp ? 'support' : 'neutral') : 'unknown',
+            rawFields: { price: mn.price, strike: mn.strike, scaled: mn.scaled, pressure: mn.pressure, type: mn.type },
+          };
+        })(),
+      },
+      regime: regime ? { type: regime.type, direction: regime.direction, strength: regime.strength } : null,
+      breadth: {
+        equityBreadth:      mktCtx.breadth?.equityBreadth ?? null,
+        equityBreadthBearish: mktCtx.breadth?.equityBreadthBearish ?? null,
+        riskAppetite:       mktCtx.breadth?.riskAppetite ?? null,
+        riskAppetiteScore:  mktCtx.breadth?.riskAppetiteScore ?? null,
+        bondRegime:         mktCtx.breadth?.bondRegime ?? null,
+        dollarRegime:       mktCtx.breadth?.dollarRegime ?? null,
+        copperRegime:       mktCtx.breadth?.copperRegime ?? null,
+        breadthStale:       mktCtx.breadth?.breadthStale ?? false,
+      },
+      options: {
+        dexBias:         mktCtx.options?.dexBias ?? null,
+        resilienceLabel: mktCtx.options?.resilienceLabel ?? null,
+      },
+      vix: mktCtx.vix ?? null,
+      dxy: mktCtx.dxy ?? null,
+    };
+
+    res.json({
+      symbol,
+      timestamp: new Date().toISOString(),
+      currentHourET: currentHour,
+      rawInputs,
+      readiness,
+      bias,
+    });
+  } catch (e) {
+    console.error('[api] /bias/debug error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
@@ -2735,6 +2817,12 @@ async function runScan({ targetSymbols = null, targetTimeframes = null } = {}) {
         setup,
         ts: new Date().toISOString(),
       };
+
+      // Log high-confidence signals for debugging (Phase 5 audit)
+      if (setup.confidence >= 85) {
+        console.log(`[HIGH CONF] ${symbol} ${setup.type} ${setup.direction} ${setup.confidence}% @ ${tf} — regime: ${regime?.direction ?? 'n/a'}`);
+      }
+
       if (_cacheAlert(alert)) {
         broadcast({ type: 'setup', ...alert });
         newCount++;
@@ -3202,6 +3290,21 @@ async function start() {
         console.log('[startup] Yahoo Finance 60-day backfill complete');
       } catch (err) {
         console.error('[startup] Yahoo backfill failed (non-fatal):', err.message);
+      }
+
+      // Purge any invalid/spike bars from the live candle store after all data is loaded
+      purgeAllInvalidBars();
+
+      // Log instrument price sanity check at startup
+      for (const sym of SCAN_SYMBOLS.filter(s => LIVE_FUTURES.has(s))) {
+        try {
+          const c = getCandles(sym, '5m');
+          if (c && c.length > 0) {
+            const last = c[c.length - 1];
+            const inst = require('./data/instruments').INSTRUMENTS[sym];
+            console.log(`[INSTRUMENTS] ${sym}: pointValue=${inst?.pointValue}, currentPrice=${last.close}`);
+          }
+        } catch (_) {}
       }
 
       // Start gap fill scheduler (periodic maintenance after initial fill)

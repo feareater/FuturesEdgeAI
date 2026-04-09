@@ -40,7 +40,7 @@ const YAHOO_SYMBOLS = {
   MGC: 'MGC=F',
   MES: 'MES=F',
   MCL: 'MCL=F',
-  SIL: 'SIL',
+  SIL: 'SI=F',
   M2K: 'M2K=F',
   MYM: 'MYM=F',
   MHG: 'HG=F',

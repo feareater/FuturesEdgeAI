@@ -530,6 +530,9 @@ Standard backtest window going forward: last 12–24 months (approx 2024-01-01 t
 - `node scripts/precomputeBreadth.js [--force]` — populate `breadth_cache.json`; resumable; saves every 100 dates. Cache already populated: 4082 dates (2010–2026).
 - `node scripts/precomputeTimeframes.js [--symbol SYM] [--force]` — aggregate 1m→5m/15m/30m into `futures_agg/`. Already run for all 16 symbols (134K files, clock-aligned windows).
 
+### Diagnostic scripts
+- `node scripts/auditInstruments.js` — candle store health check for all 8 tradeable futures. Reports bar count, price range, bad bars, spikes, staleness. PASS/WARN/FAIL per symbol.
+
 ### Backtest UI (`public/backtest2.html`, `backtest2.js`, `backtest2.css`)
 - Config: date range, symbols, timeframes, setup types, min confidence, starting balance, HP toggle, max hold, fee/RT, contracts, trading hours filter
 - **Trading Hours filter**: hourly checkboxes (ET) with session presets (All / RTH Only / None); saved to localStorage

@@ -2,6 +2,8 @@
 // Bias computation: setup readiness gate checks and directional bias scoring.
 // Consumed by GET /api/bias endpoint. Pure computation — no side effects.
 
+const { INSTRUMENTS } = require('../data/instruments');
+
 /**
  * Evaluate whether current conditions would allow an OR breakout to fire
  * and pass all hard gates. Mirrors the exact gate logic from setups.js v14.11.
@@ -187,28 +189,98 @@ function computeDirectionalBias(symbol, marketContext, indicators) {
   addSignal('Resilience', resLabel, resPts);
 
   // 8. Market regime (from indicators.regime if available)
+  // Score based on regime direction as a signed value — bullish regime contributes
+  // positively to bullish bias, bearish regime contributes negatively.
+  // Also check regime.direction string with .includes() for robustness.
   const regime = indicators?.regime ?? null;
   let regimePts = 0;
-  if (regime) {
-    if (regime.type === 'trend' && regime.direction === 'bullish') regimePts = 2;
-    else if (regime.type === 'trend' && regime.direction === 'bearish') regimePts = -2;
+  let regimeDir = 'neutral';
+  if (regime && regime.direction) {
+    const rd = regime.direction.toLowerCase();
+    if (rd.includes('bullish'))      { regimeDir = 'bullish'; }
+    else if (rd.includes('bearish')) { regimeDir = 'bearish'; }
   }
-  const regimeLabel = regime ? `${regime.type}/${regime.direction ?? 'n/a'}` : 'n/a';
+  if (regime && regime.type === 'trend') {
+    if (regimeDir === 'bullish')      regimePts = 2;
+    else if (regimeDir === 'bearish') regimePts = -2;
+  } else if (regime && regime.type === 'range') {
+    // Range regime is a weaker signal
+    if (regimeDir === 'bullish')      regimePts = 1;
+    else if (regimeDir === 'bearish') regimePts = -1;
+  }
+  const regimeLabel = regime ? `${regime.type}/${regimeDir}` : 'n/a';
   addSignal('Market Regime', regimeLabel, regimePts);
 
-  // 9. Daily HP nearest
-  const pressureDir = marketContext?.hp?.pressureDirection ?? 'neutral';
-  const hpPts = pressureDir === 'support' ? 1 : pressureDir === 'resistance' ? -1 : 0;
-  addSignal('Daily HP', pressureDir, hpPts);
+  // 9. Daily HP nearest — score based on HP level position RELATIVE to price
+  // HP above price = resistance; HP below price = support
+  // Support is bullish (+), resistance is bearish (-)
+  const hasOptionsProxy = INSTRUMENTS[symbol]?.optionsProxy != null;
+  const dailyHPLevel = marketContext?.hp?.nearestLevel ?? null;
+  const currentPrice = marketContext?.hp?._currentPrice ?? null;
+  let dailyHpPts = 0;
+  let dailyHpLabel = hasOptionsProxy ? 'none' : 'N/A';
+  let dailyHpDetail = null;
+  if (!hasOptionsProxy) {
+    // No options proxy for this symbol — show N/A instead of misleading neutral
+    dailyHpPts = 0;
+    dailyHpLabel = 'N/A (no options proxy)';
+  } else if (dailyHPLevel && dailyHPLevel.price != null && currentPrice != null) {
+    const hpPrice = dailyHPLevel.price;
+    const distPts = Math.abs(hpPrice - currentPrice);
+    if (hpPrice < currentPrice) {
+      // HP below price → support → bullish contribution
+      dailyHpPts = 1;
+      dailyHpLabel = 'support';
+    } else if (hpPrice > currentPrice) {
+      // HP above price → resistance → bearish contribution
+      dailyHpPts = -1;
+      dailyHpLabel = 'resistance';
+    }
+    // else HP at price → neutral
+    dailyHpDetail = { level: +hpPrice.toFixed(2), distance: +distPts.toFixed(2), type: dailyHPLevel.type };
+  } else {
+    // Fallback to pressureDirection if _currentPrice not available
+    const pressureDir = marketContext?.hp?.pressureDirection ?? 'neutral';
+    dailyHpPts = pressureDir === 'support' ? 1 : pressureDir === 'resistance' ? -1 : 0;
+    dailyHpLabel = pressureDir;
+  }
+  const dailyHpSig = { label: 'Daily HP', value: dailyHpLabel, contribution: dailyHpPts, direction: dailyHpPts > 0 ? 'bull' : dailyHpPts < 0 ? 'bear' : 'neutral' };
+  if (dailyHpDetail) dailyHpSig.detail = dailyHpDetail;
+  signals.push(dailyHpSig);
+  totalScore += dailyHpPts;
 
-  // 10. Monthly HP nearest (heavier weight)
+  // 10. Monthly HP nearest (heavier weight) — score based on HP level vs current price
+  // NEVER use zone metadata (pressure field) — only compare price positions directly
   const monthlyNearest = marketContext?.hp?.monthlyNearest ?? null;
   let monthlyPts = 0;
-  if (monthlyNearest) {
-    monthlyPts = monthlyNearest.pressure === 'support' ? 2
-      : monthlyNearest.pressure === 'resistance' ? -2 : 0;
+  let monthlyHpLabel = hasOptionsProxy ? 'none' : 'N/A';
+  let monthlyHpDetail = null;
+  if (!hasOptionsProxy) {
+    // No options proxy — show N/A
+    monthlyPts = 0;
+    monthlyHpLabel = 'N/A (no options proxy)';
+  } else if (monthlyNearest && currentPrice != null) {
+    // Extract HP price from available fields
+    const mPrice = monthlyNearest.price ?? monthlyNearest.strike ?? monthlyNearest.scaled ?? null;
+    if (mPrice != null) {
+      const mDistPts = Math.abs(mPrice - currentPrice);
+      if (mPrice < currentPrice) {
+        // Monthly HP below price → support → bullish
+        monthlyPts = 2;
+        monthlyHpLabel = 'support';
+      } else if (mPrice > currentPrice) {
+        // Monthly HP above price → resistance → bearish
+        monthlyPts = -2;
+        monthlyHpLabel = 'resistance';
+      }
+      monthlyHpDetail = { level: +mPrice.toFixed(2), distance: +mDistPts.toFixed(2) };
+    }
+    // If no numeric price available, leave as 'none' / 0 — do NOT fall back to zone metadata
   }
-  addSignal('Monthly HP', monthlyNearest?.pressure ?? 'none', monthlyPts);
+  const monthlyHpSig = { label: 'Monthly HP', value: monthlyHpLabel, contribution: monthlyPts, direction: monthlyPts > 0 ? 'bull' : monthlyPts < 0 ? 'bear' : 'neutral' };
+  if (monthlyHpDetail) monthlyHpSig.detail = monthlyHpDetail;
+  signals.push(monthlyHpSig);
+  totalScore += monthlyPts;
 
   // Sort signals by |contribution| descending
   signals.sort((a, b) => Math.abs(b.contribution) - Math.abs(a.contribution));

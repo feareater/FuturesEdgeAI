@@ -43,7 +43,7 @@ const BTC_SYMBOL        = 'MBT';     // Bitcoin futures — risk barometer
  * @param {number[]} closes  Chronological close prices (oldest first)
  * @returns {'bullish'|'bearish'|'neutral'}
  */
-function classifyInstrumentRegime(closes) {
+function classifyInstrumentRegime(closes, _sym) {
   if (!closes || closes.length < 11) return 'neutral';
 
   const last = closes[closes.length - 1];
@@ -69,11 +69,150 @@ function classifyInstrumentRegime(closes) {
     else if (currSma < prevSma * 0.9995) smaSignal = 'bearish';
   }
 
-  // ── Combine ──
-  if (priceSignal === smaSignal) return priceSignal;         // both agree (including both neutral)
-  if (priceSignal === 'neutral') return smaSignal;           // price ambiguous → follow SMA
-  if (smaSignal   === 'neutral') return priceSignal;         // SMA ambiguous → follow price position
-  return 'neutral';                                          // disagree → no signal
+  // ── Combine (primary classification) ──
+  let primary;
+  if (priceSignal === smaSignal) primary = priceSignal;         // both agree (including both neutral)
+  else if (priceSignal === 'neutral') primary = smaSignal;      // price ambiguous → follow SMA
+  else if (smaSignal   === 'neutral') primary = priceSignal;    // SMA ambiguous → follow price position
+  else primary = 'neutral';                                     // disagree → no signal
+
+  // ── Short-term override (5-bar SMA vs primary) ──
+  // Detects intraday reversals faster than the 20-bar window alone.
+  // If the 5-bar SMA moves opposite to the primary classification by a
+  // significant magnitude (relative to ATR), downgrade or flip the regime.
+  if (closes.length >= 6) {
+    const curr5 = closes.slice(-5);
+    const prev5 = closes.slice(-6, -1);
+    const curr5Sma = curr5.reduce((s, v) => s + v, 0) / 5;
+    const prev5Sma = prev5.reduce((s, v) => s + v, 0) / 5;
+    const sma5Dir = curr5Sma > prev5Sma ? 'bullish' : curr5Sma < prev5Sma ? 'bearish' : 'neutral';
+
+    // Compute a simple ATR proxy from the available bars (mean absolute bar-to-bar change)
+    const recentBars = closes.slice(-Math.min(14, closes.length));
+    let atrSum = 0;
+    let atrCount = 0;
+    for (let i = 1; i < recentBars.length; i++) {
+      const diff = Math.abs(recentBars[i] - recentBars[i - 1]);
+      if (diff > 0) { atrSum += diff; atrCount++; }
+    }
+    let atrProxy = atrCount > 0 ? atrSum / atrCount : 0;
+
+    // Fallback: if ATR proxy is zero or bars too few, use 0.1% of last close
+    if (atrProxy === 0 || atrCount < 3) {
+      const fallbackATR = last * 0.001;
+      if (_sym) console.log(`[breadth] ${_sym}: ATR proxy fallback (count=${atrCount}, using 0.1% of ${last.toFixed(2)} = ${fallbackATR.toFixed(2)})`);
+      atrProxy = fallbackATR;
+    }
+
+    if (atrProxy > 0) {
+      const sma5Move = Math.abs(curr5Sma - prev5Sma);
+      const moveRatio = sma5Move / atrProxy;
+
+      // Check if 5-bar SMA is opposite to primary classification
+      const isOpposite =
+        (primary === 'bullish' && sma5Dir === 'bearish') ||
+        (primary === 'bearish' && sma5Dir === 'bullish');
+
+      if (_sym) {
+        console.log(`[breadth] ${_sym}: primary=${primary}, sma5Dir=${sma5Dir}, moveMag=${sma5Move.toFixed(4)}, atrProxy=${atrProxy.toFixed(4)}, moveRatio=${moveRatio.toFixed(3)}, isOpposite=${isOpposite}, override=${isOpposite && moveRatio >= 0.15 ? (moveRatio >= 0.35 ? 'FLIP' : 'DOWNGRADE') : 'none'}`);
+      }
+
+      if (isOpposite) {
+        if (moveRatio >= 0.35) {
+          // Strong opposite move — flip classification fully
+          primary = sma5Dir;
+        } else if (moveRatio >= 0.15) {
+          // Moderate opposite move — downgrade to neutral
+          primary = 'neutral';
+        }
+      }
+    }
+  }
+
+  return primary;
+}
+
+/**
+ * Extended version that also reports whether a short-term override was applied.
+ * Used internally by _computeFromCloseArrays to detect breadth staleness.
+ * @param {number[]} closes
+ * @returns {{ regime: string, overridden: boolean }}
+ */
+function _classifyWithOverrideFlag(closes, _sym) {
+  if (!closes || closes.length < 11) return { regime: 'neutral', overridden: false };
+
+  const last = closes[closes.length - 1];
+  const window20 = closes.slice(Math.max(0, closes.length - 21));
+  const high20   = Math.max(...window20);
+  const low20    = Math.min(...window20);
+
+  let priceSignal = 'neutral';
+  if (last > high20 * 0.95) priceSignal = 'bullish';
+  else if (last < low20 * 1.05) priceSignal = 'bearish';
+
+  let smaSignal = 'neutral';
+  if (closes.length >= 11) {
+    const curr10 = closes.slice(-10);
+    const prev10 = closes.slice(-11, -1);
+    const currSma = curr10.reduce((s, v) => s + v, 0) / 10;
+    const prevSma = prev10.reduce((s, v) => s + v, 0) / 10;
+    if (currSma > prevSma * 1.0005) smaSignal = 'bullish';
+    else if (currSma < prevSma * 0.9995) smaSignal = 'bearish';
+  }
+
+  let primary;
+  if (priceSignal === smaSignal) primary = priceSignal;
+  else if (priceSignal === 'neutral') primary = smaSignal;
+  else if (smaSignal   === 'neutral') primary = priceSignal;
+  else primary = 'neutral';
+
+  let overridden = false;
+
+  if (closes.length >= 6) {
+    const curr5 = closes.slice(-5);
+    const prev5 = closes.slice(-6, -1);
+    const curr5Sma = curr5.reduce((s, v) => s + v, 0) / 5;
+    const prev5Sma = prev5.reduce((s, v) => s + v, 0) / 5;
+    const sma5Dir = curr5Sma > prev5Sma ? 'bullish' : curr5Sma < prev5Sma ? 'bearish' : 'neutral';
+
+    const recentBars = closes.slice(-Math.min(14, closes.length));
+    let atrSum = 0;
+    let atrCount = 0;
+    for (let i = 1; i < recentBars.length; i++) {
+      const diff = Math.abs(recentBars[i] - recentBars[i - 1]);
+      if (diff > 0) { atrSum += diff; atrCount++; }
+    }
+    let atrProxy = atrCount > 0 ? atrSum / atrCount : 0;
+
+    // Fallback: if ATR proxy is zero or bars too few, use 0.1% of last close
+    if (atrProxy === 0 || atrCount < 3) {
+      atrProxy = last * 0.001;
+    }
+
+    if (atrProxy > 0) {
+      const sma5Move = Math.abs(curr5Sma - prev5Sma);
+      const moveRatio = sma5Move / atrProxy;
+      const isOpposite =
+        (primary === 'bullish' && sma5Dir === 'bearish') ||
+        (primary === 'bearish' && sma5Dir === 'bullish');
+
+      if (_sym) {
+        console.log(`[breadth-eq] ${_sym}: primary=${primary}, sma5Dir=${sma5Dir}, moveMag=${sma5Move.toFixed(4)}, atrProxy=${atrProxy.toFixed(4)}, moveRatio=${moveRatio.toFixed(3)}, isOpposite=${isOpposite}, override=${isOpposite && moveRatio >= 0.15 ? (moveRatio >= 0.35 ? 'FLIP' : 'DOWNGRADE') : 'none'}`);
+      }
+
+      if (isOpposite) {
+        if (moveRatio >= 0.35) {
+          primary = sma5Dir;
+          overridden = true;
+        } else if (moveRatio >= 0.15) {
+          primary = 'neutral';
+          overridden = true;
+        }
+      }
+    }
+  }
+
+  return { regime: primary, overridden };
 }
 
 // ── Risk appetite composite score ──────────────────────────────────────────────
@@ -146,6 +285,7 @@ function _emptyBreadth() {
     btcRegime:            'neutral',
     riskAppetite:         'neutral',
     riskAppetiteScore:    0,
+    breadthStale:         false,
   };
 }
 
@@ -159,22 +299,26 @@ function _emptyBreadth() {
 function _computeFromCloseArrays(closesBySym) {
   const b = _emptyBreadth();
 
-  // ── Equity breadth ──
+  // ── Equity breadth (with short-term override tracking for staleness) ──
+  let equityOverrideCount = 0;
   for (const sym of EQUITY_SYMBOLS) {
     const closes = closesBySym[sym];
     if (!closes || closes.length < 11) continue;
-    const regime = classifyInstrumentRegime(closes);
+    const { regime, overridden } = _classifyWithOverrideFlag(closes, sym);
     if (regime === 'bullish') b.equityBreadth++;
     else if (regime === 'bearish') b.equityBreadthBearish++;
+    if (overridden) equityOverrideCount++;
   }
+  // breadthStale: true when short-term override has downgraded ≥2 equity instruments
+  b.breadthStale = equityOverrideCount >= 2;
 
   // ── Bond regime (ZN primary, ZB confirmation) ──
   const znCloses = closesBySym[BOND_PRIMARY];
   if (znCloses && znCloses.length >= 11) {
-    const znRegime = classifyInstrumentRegime(znCloses);
+    const znRegime = classifyInstrumentRegime(znCloses, 'ZN');
     const zbCloses = closesBySym[BOND_CONFIRM];
     if (zbCloses && zbCloses.length >= 11) {
-      const zbRegime = classifyInstrumentRegime(zbCloses);
+      const zbRegime = classifyInstrumentRegime(zbCloses, 'ZB');
       // Both agree → use that; otherwise ZN only
       if (znRegime === zbRegime || zbRegime === 'neutral') {
         b.bondRegime = znRegime;
@@ -190,7 +334,7 @@ function _computeFromCloseArrays(closesBySym) {
     // Yield curve: ZT vs ZN
     const ztCloses = closesBySym[YIELD_SHORT];
     if (ztCloses && ztCloses.length >= 11) {
-      const ztRegime = classifyInstrumentRegime(ztCloses);
+      const ztRegime = classifyInstrumentRegime(ztCloses, 'ZT');
       b.yieldCurve = _classifyYieldCurve(ztRegime, znRegime);
     }
   }
@@ -198,13 +342,13 @@ function _computeFromCloseArrays(closesBySym) {
   // ── Copper regime ──
   const mhgCloses = closesBySym[COPPER_SYMBOL];
   if (mhgCloses && mhgCloses.length >= 11) {
-    b.copperRegime = classifyInstrumentRegime(mhgCloses);
+    b.copperRegime = classifyInstrumentRegime(mhgCloses, 'MHG');
   }
 
   // ── Dollar regime (M6E = EUR/USD — inverse of USD) ──
   const m6eCloses = closesBySym[DOLLAR_SYMBOL];
   if (m6eCloses && m6eCloses.length >= 11) {
-    const m6eRegime = classifyInstrumentRegime(m6eCloses);
+    const m6eRegime = classifyInstrumentRegime(m6eCloses, 'M6E');
     // M6E bullish = EUR rising = USD falling; M6E bearish = USD rising
     b.dollarRegime = m6eRegime === 'bullish' ? 'falling'
       : m6eRegime === 'bearish' ? 'rising'
@@ -215,7 +359,7 @@ function _computeFromCloseArrays(closesBySym) {
   for (const sym of METALS_SYMBOLS) {
     const closes = closesBySym[sym];
     if (!closes || closes.length < 11) continue;
-    const regime = classifyInstrumentRegime(closes);
+    const regime = classifyInstrumentRegime(closes, sym);
     if (regime === 'bullish') b.metalsBreadth++;
     else if (regime === 'bearish') b.metalsBreadthBearish++;
   }
@@ -224,13 +368,13 @@ function _computeFromCloseArrays(closesBySym) {
   for (const sym of FIXED_INCOME_SYMS) {
     const closes = closesBySym[sym];
     if (!closes || closes.length < 11) continue;
-    if (classifyInstrumentRegime(closes) === 'bearish') b.fixedIncomeBreadth++;
+    if (classifyInstrumentRegime(closes, sym) === 'bearish') b.fixedIncomeBreadth++;
   }
 
   // ── Bitcoin regime ──
   const mbtCloses = closesBySym[BTC_SYMBOL];
   if (mbtCloses && mbtCloses.length >= 11) {
-    b.btcRegime = classifyInstrumentRegime(mbtCloses);
+    b.btcRegime = classifyInstrumentRegime(mbtCloses, 'MBT');
   }
 
   _computeRiskAppetite(b);

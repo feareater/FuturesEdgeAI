@@ -8,7 +8,7 @@
 const { computeMarketBreadth } = require('./marketBreadth');
 
 // Symbols where DXY alignment is applicable
-const DXY_APPLICABLE = new Set(['MNQ', 'MES', 'MGC', 'MCL']);
+const DXY_APPLICABLE = new Set(['MNQ', 'MES', 'M2K', 'MYM', 'MGC', 'MCL']);
 // Correlation threshold — equity index DXY alignment only applied if |corr| exceeds this
 const DXY_CORR_THRESHOLD = 0.5;
 
@@ -179,6 +179,7 @@ function _buildHpContext(options, currentPrice, atr) {
     multiplier,
     monthlyNearest,
     monthlyMultiplierDelta,
+    _currentPrice: currentPrice,   // exposed for bias.js directional checks
   };
 }
 

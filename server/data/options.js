@@ -28,11 +28,11 @@ const settings = require('../../config/settings.json');
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour (CBOE data is 15-min delayed)
 const DAILY_TTL_MS = 30 * 60 * 1000; // 30 min for daily OHLC cache
 
-// ETF proxies for each futures symbol
-const ETF_PROXY     = { MNQ: 'QQQ', MES: 'SPY', MGC: 'GLD', MCL: 'USO', SIL: 'SLV' };
+// ETF proxies for each futures symbol (MHG has no options proxy — copper has no liquid ETF)
+const ETF_PROXY     = { MNQ: 'QQQ', MES: 'SPY', M2K: 'IWM', MYM: 'DIA', MGC: 'GLD', MCL: 'USO', SIL: 'SLV' };
 // Corresponding micro futures tickers on Yahoo Finance — used to get the live
 // futures price from the same source/time as the ETF price for accurate scaling.
-const FUTURES_YAHOO = { MNQ: 'MNQ=F', MES: 'MES=F', MGC: 'MGC=F', MCL: 'MCL=F', SIL: 'SIL' };
+const FUTURES_YAHOO = { MNQ: 'MNQ=F', MES: 'MES=F', M2K: 'M2K=F', MYM: 'MYM=F', MGC: 'MGC=F', MCL: 'MCL=F', SIL: 'SI=F' };
 
 const _cache      = new Map(); // symbol → { data, timestamp }
 const _dailyCache = new Map(); // etfTicker → { data, timestamp }

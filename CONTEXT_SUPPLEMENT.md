@@ -174,9 +174,22 @@ All option strikes are scaled using: `ratio = liveMNQ=F price / liveQQQ price` (
 Do NOT use stale seed candle prices for the futures side — the ratio will be wrong (~37×).
 
 ```javascript
-const ETF_PROXY     = { MNQ: 'QQQ', MES: 'SPY', MGC: 'GLD', MCL: 'USO' };
-const FUTURES_YAHOO = { MNQ: 'MNQ=F', MES: 'MES=F', MGC: 'MGC=F', MCL: 'MCL=F' };
+// 7 symbols with options proxy coverage (MHG has no liquid ETF proxy)
+const ETF_PROXY     = { MNQ: 'QQQ', MES: 'SPY', M2K: 'IWM', MYM: 'DIA', MGC: 'GLD', MCL: 'USO', SIL: 'SLV' };
+const FUTURES_YAHOO = { MNQ: 'MNQ=F', MES: 'MES=F', M2K: 'M2K=F', MYM: 'MYM=F', MGC: 'MGC=F', MCL: 'MCL=F', SIL: 'SI=F' };
 ```
+
+### Per-Symbol Spike Thresholds (candle sanitization in `snapshot.js`)
+
+```javascript
+const SPIKE_THRESHOLD = {
+  MNQ: 0.08, MES: 0.08, M2K: 0.08, MYM: 0.08,  // 8% for equity index
+  MGC: 0.08, SIL: 0.08, MHG: 0.10,               // 8-10% for metals
+  MCL: 0.15,                                       // 15% for crude (volatile, overnight gaps)
+};
+```
+
+Only isolated spikes (single-bar deviation that reverts in the next bar) are removed. Sustained multi-bar moves are preserved as real market events.
 
 ### Computed Metrics
 
