@@ -135,21 +135,39 @@ function _normalize(rec) {
 }
 
 /**
- * Check if a price is a spike relative to the last known good price for a symbol.
+ * Check if a price is a spike relative to the rolling median for a symbol.
+ * Uses a 10-tick rolling median as reference instead of a single prior price,
+ * preventing staircase corruption where one bad tick shifts the baseline.
  * Returns true if the price should be REJECTED (i.e. it's a phantom spike).
  */
 function _isSpikePrice(symbol, price) {
-  const prev = _lastGoodPrice[symbol];
-  if (!prev) return false;  // no reference yet — accept
-  const pctDev = Math.abs(price - prev) / prev;
-  return pctDev > SPIKE_MAX_PCT;
+  const median = _getRollingMedian(symbol);
+  if (median === null) {
+    // Buffer warming up — also check against last good price as fallback
+    const prev = _lastGoodPrice[symbol];
+    if (!prev) return false;  // no reference yet — accept
+    const threshold = TICK_SPIKE_THRESHOLD[symbol] || DEFAULT_TICK_THRESHOLD;
+    return Math.abs(price - prev) / prev > threshold;
+  }
+  const threshold = TICK_SPIKE_THRESHOLD[symbol] || DEFAULT_TICK_THRESHOLD;
+  const deviation = Math.abs(price - median) / median;
+  if (deviation > threshold) {
+    console.warn(
+      `[SPIKE-1S] ${symbol} rejected tick ${price} ` +
+      `(median=${median.toFixed(4)}, dev=${(deviation * 100).toFixed(2)}%)`
+    );
+    return true; // is a spike, reject it
+  }
+  return false;
 }
 
 /**
  * Accept a price as the new "last known good" reference for a symbol.
+ * Also updates the rolling price buffer for median computation.
  */
 function _acceptPrice(symbol, price) {
   _lastGoodPrice[symbol] = price;
+  _updatePriceBuffer(symbol, price);
 }
 
 // ---------------------------------------------------------------------------
@@ -387,11 +405,47 @@ let _lastBarTimes   = {};     // internal symbol → Unix seconds of last emitte
 let _lastConnectMs  = null;   // Date.now() at last successful auth
 let _lastTickLog    = {};     // internal symbol → Date.now() of last tick log line
 
-// Spike filter: track last known good price per symbol for outlier rejection.
-// A tick/bar whose price deviates more than SPIKE_MAX_PCT from the last known
-// price is discarded as a bad tick from the exchange feed.
-const _lastGoodPrice = {};    // internal symbol → last accepted close price
-const SPIKE_MAX_PCT  = 0.02;  // 2% — larger than any realistic 1-second move
+// Spike filter: rolling median reference + per-symbol thresholds.
+// A tick/bar whose price deviates more than the per-symbol threshold from the
+// rolling median of the last 10 accepted prices is rejected. The rolling median
+// prevents a single bad tick from shifting the reference baseline (unlike a
+// single prior-price approach which allows staircase corruption).
+const _lastGoodPrice = {};    // internal symbol → last accepted close price (legacy compat)
+
+// Per-symbol spike thresholds for 1s ticks
+const TICK_SPIKE_THRESHOLD = {
+  // Equity index micro futures
+  MNQ: 0.015,   // 1.5% — ~375 pts at 25000, generous for news events
+  MES: 0.015,   // 1.5% — ~102 pts at 6800
+  M2K: 0.015,   // 1.5% — ~39 pts at 2630
+  MYM: 0.015,   // 1.5% — ~720 pts at 48000
+  // Metals
+  MGC: 0.012,   // 1.2% — ~57 pts at 4740
+  SIL: 0.015,   // 1.5% — ~1.1 pts at 74
+  MHG: 0.012,   // 1.2% — ~0.06 pts at 5.17 (copper is tight)
+  // Energy
+  MCL: 0.020,   // 2.0% — crude can move fast on inventory data
+};
+const DEFAULT_TICK_THRESHOLD = 0.015;
+
+// Rolling price buffer per symbol — circular buffer of last 10 accepted tick prices
+const _priceBuffer = {};
+const PRICE_BUFFER_SIZE = 10;
+
+function _updatePriceBuffer(symbol, price) {
+  if (!_priceBuffer[symbol]) _priceBuffer[symbol] = [];
+  _priceBuffer[symbol].push(price);
+  if (_priceBuffer[symbol].length > PRICE_BUFFER_SIZE) {
+    _priceBuffer[symbol].shift();
+  }
+}
+
+function _getRollingMedian(symbol) {
+  const buf = _priceBuffer[symbol];
+  if (!buf || buf.length < 3) return null; // not enough data yet
+  const sorted = [...buf].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+}
 
 // ---------------------------------------------------------------------------
 // CRAM authentication helper
@@ -537,10 +591,9 @@ function _handleStreamRecord(rec) {
     const price = _price(rec.close);
     const time  = _tsToSeconds(rec.hd?.ts_event ?? rec.ts_event);
     if (price > 0 && time > 0) {
-      // Spike filter: reject tick if price deviates > SPIKE_MAX_PCT from last good price
+      // Spike filter: reject tick if price deviates beyond per-symbol threshold from rolling median
       if (_isSpikePrice(internal, price)) {
-        console.warn(`[databento:live] SPIKE REJECTED tick ${internal} ${price.toFixed(2)} (last good: ${_lastGoodPrice[internal]?.toFixed(2)})`);
-        return;
+        return;  // _isSpikePrice already logs [SPIKE-1S] details
       }
       _acceptPrice(internal, price);
       _onTickCb(internal, price, time);
@@ -571,36 +624,46 @@ function _handleStreamRecord(rec) {
     const prev = _lastBarTimes[internal] ?? 0;
     if (candle.time <= prev) return;
 
-    // Spike filter: reject entire 1m bar if close deviates > SPIKE_MAX_PCT from last good price.
-    // Also clamp high/low: if H or L are spikes but O/C are fine, clamp them to bar range.
+    // Spike filter: reject entire 1m bar if close deviates beyond per-symbol threshold
+    // from the rolling median. Uses same _isSpikePrice() as 1s ticks.
     if (_isSpikePrice(internal, candle.close)) {
       console.warn(
         `[databento:live] SPIKE REJECTED 1m bar ${internal} ` +
-        `O=${candle.open.toFixed(2)} H=${candle.high.toFixed(2)} L=${candle.low.toFixed(2)} C=${candle.close.toFixed(2)} ` +
-        `(last good: ${_lastGoodPrice[internal]?.toFixed(2)})`
+        `O=${candle.open.toFixed(2)} H=${candle.high.toFixed(2)} L=${candle.low.toFixed(2)} C=${candle.close.toFixed(2)}`
       );
       return;
     }
-    // Clamp high/low to prevent phantom wicks even when close is valid.
-    // If high or low deviates > SPIKE_MAX_PCT from close, clamp to the bar's O/C range.
-    const barMax = Math.max(candle.open, candle.close);
-    const barMin = Math.min(candle.open, candle.close);
-    if (_lastGoodPrice[internal]) {
-      const ref = _lastGoodPrice[internal];
-      if (Math.abs(candle.high - ref) / ref > SPIKE_MAX_PCT) {
-        console.warn(`[databento:live] CLAMPED high ${internal} ${candle.high.toFixed(2)} → ${barMax.toFixed(2)}`);
-        candle.high = barMax;
+
+    // Wick clamping: limit extreme wicks to max(1.5× body, minWickFloor).
+    // This catches bad 1s ticks that created extreme H/L on the forming bar
+    // even when the bar's O/C (body) is valid.
+    {
+      const body = Math.abs(candle.close - candle.open);
+      const threshold = TICK_SPIKE_THRESHOLD[internal] || DEFAULT_TICK_THRESHOLD;
+      const minWickFloor = candle.close * threshold;
+      const maxWickExtension = Math.max(body * 1.5, minWickFloor);
+      const bodyHigh = Math.max(candle.open, candle.close);
+      const bodyLow  = Math.min(candle.open, candle.close);
+
+      if (candle.high > bodyHigh + maxWickExtension) {
+        console.warn(
+          `[SPIKE-1M-WICK] ${internal} clamped high ` +
+          `${candle.high.toFixed(4)} → ${(bodyHigh + maxWickExtension).toFixed(4)} at ${candle.time}`
+        );
+        candle.high = bodyHigh + maxWickExtension;
       }
-      if (Math.abs(candle.low - ref) / ref > SPIKE_MAX_PCT) {
-        console.warn(`[databento:live] CLAMPED low ${internal} ${candle.low.toFixed(2)} → ${barMin.toFixed(2)}`);
-        candle.low = barMin;
+      if (candle.low < bodyLow - maxWickExtension) {
+        console.warn(
+          `[SPIKE-1M-WICK] ${internal} clamped low ` +
+          `${candle.low.toFixed(4)} → ${(bodyLow - maxWickExtension).toFixed(4)} at ${candle.time}`
+        );
+        candle.low = bodyLow - maxWickExtension;
       }
+
+      // Ensure OHLC consistency after clamping
+      candle.high = Math.max(candle.high, candle.open, candle.close);
+      candle.low  = Math.min(candle.low,  candle.open, candle.close);
     }
-    // Ensure OHLC consistency after clamping
-    if (candle.high < candle.open) candle.high = candle.open;
-    if (candle.high < candle.close) candle.high = candle.close;
-    if (candle.low > candle.open) candle.low = candle.open;
-    if (candle.low > candle.close) candle.low = candle.close;
 
     _acceptPrice(internal, candle.close);
     _lastBarTimes[internal] = candle.time;
@@ -765,4 +828,4 @@ function getLiveFeedStatus() {
 // Exports
 // ---------------------------------------------------------------------------
 
-module.exports = { startLiveFeed, stopLiveFeed, getLiveFeedStatus, fetchHistoricalCandles, fetchETFDailyCloses };
+module.exports = { startLiveFeed, stopLiveFeed, getLiveFeedStatus, fetchHistoricalCandles, fetchETFDailyCloses, TICK_SPIKE_THRESHOLD };

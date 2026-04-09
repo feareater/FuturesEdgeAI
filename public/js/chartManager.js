@@ -18,8 +18,8 @@
   // ── Constants ───────────────────────────────────────────────────────────────
   // Row 1 — Equity Futures (4 cols)
   const EQUITY_ROW = ['MNQ', 'MES', 'M2K', 'MYM'];
-  // Row 2 — Commodities & FX (4 cols)
-  const COMMODITIES_ROW = ['MGC', 'MCL', 'MHG', 'M6E'];
+  // Row 2 — Commodities (4 cols)
+  const COMMODITIES_ROW = ['MGC', 'MCL', 'MHG', 'SIL'];
   // Row 3 — Crypto (3 cols)
   const CRYPTO       = ['BTC', 'ETH', 'XRP'];
   const GRID_SYMBOLS = [...EQUITY_ROW, ...COMMODITIES_ROW, ...CRYPTO];
@@ -27,7 +27,7 @@
   // Decimal places for each symbol's price display
   const PRICE_DEC = {
     MNQ: 2, MES: 2, M2K: 2, MYM: 0,
-    MGC: 1, MCL: 2, MHG: 4, M6E: 4,
+    MGC: 1, MCL: 2, MHG: 4, SIL: 2,
     BTC: 0, ETH: 2, XRP: 4,
   };
 
@@ -91,7 +91,7 @@
     const cryptoHTML     = CRYPTO.map(_cellHTML).join('');
     return `<div class="chart-grid-row chart-grid-label">Equity Futures</div>
 <div class="chart-grid-futures">${equityHTML}</div>
-<div class="chart-grid-row chart-grid-label">Commodities &amp; FX</div>
+<div class="chart-grid-row chart-grid-label">Commodities</div>
 <div class="chart-grid-commodities">${commodHTML}</div>
 <div class="chart-grid-row chart-grid-label">Crypto</div>
 <div class="chart-grid-crypto">${cryptoHTML}</div>`;
@@ -127,7 +127,7 @@
       if (!candleRes.ok) {
         const msg = tf === '1m'
           ? '1m requires live feed'
-          : `Error ${candleRes.status}`;
+          : 'No data available';
         if (loadingEl) { loadingEl.textContent = msg; loadingEl.style.display = 'flex'; }
         if (g) {
           g.candleSeries.setData([]);

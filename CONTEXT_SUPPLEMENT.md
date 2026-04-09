@@ -104,7 +104,7 @@ server/
   data/
     options.js          ← Options chain: OI walls, max pain, GEX, DEX, resilience (OPRA live or CBOE)
     opraLive.js         ← Databento OPRA.PILLAR TCP feed; per-strike OI accumulator
-    barValidator.js     ← validateBar() 5-rule sanity check; rolling ATR spike filter; getValidatorStats()
+    barValidator.js     ← validateBar() 5-rule sanity check; rolling ATR spike filter (4× ATR, per-symbol floor/ceiling bounds); ATR_BOUNDS_1M: MNQ[5,150] MES[0.5,20] M2K[0.2,8] MYM[5,250] MGC[0.5,30] SIL[0.05,2] MHG[0.002,0.08] MCL[0.05,2]; getValidatorStats()
     coinbaseFetch.js    ← Coinbase INTX BTC/ETH/XRP perpetual candles (REST)
     coinbaseWS.js       ← Coinbase INTX WebSocket live price feed
   analysis/

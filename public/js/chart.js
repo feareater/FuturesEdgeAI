@@ -20,6 +20,7 @@
   let _gapRefetchPending = false;  // prevents multiple auto-refetches
   let _gapRetryCount     = 0;     // tracks retry attempts (max 3)
   const _GAP_RETRY_DELAYS = [2000, 5000, 15000];  // backoff delays in ms
+  let _currentFetchController = null;  // AbortController for in-flight candle/indicator fetches
 
   // Chart + base series
   let chart        = null;
@@ -371,27 +372,124 @@
     }, delay);
   }
 
+  // ── Loading overlay ──────────────────────────────────────────────────────
+  function _showChartLoading(symbol) {
+    let el = document.getElementById('chart-loading-overlay');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'chart-loading-overlay';
+      el.style.cssText = [
+        'position:absolute', 'inset:0', 'z-index:10',
+        'background:rgba(0,0,0,0.45)',
+        'display:flex', 'align-items:center', 'justify-content:center',
+        'color:var(--text-dim,#999)', 'font-size:0.9em', 'letter-spacing:0.05em',
+        'pointer-events:none', 'font-family:inherit'
+      ].join(';');
+      const chartEl = document.getElementById('chart');
+      if (chartEl) {
+        chartEl.style.position = 'relative';
+        chartEl.appendChild(el);
+      }
+    }
+    el.textContent = `Loading ${symbol}...`;
+    el.style.display = 'flex';
+  }
+
+  function _hideChartLoading() {
+    const el = document.getElementById('chart-loading-overlay');
+    if (el) el.style.display = 'none';
+  }
+
+  /**
+   * Clear all chart series data and price lines immediately.
+   * Called on symbol/TF switch to prevent stale data from persisting during fetch.
+   */
+  function _clearAllSeriesAndOverlays() {
+    // Clear candlestick data
+    if (candleSeries) candleSeries.setData([]);
+
+    // Clear EMA + VWAP overlay lines
+    if (lineSeries.ema9)  lineSeries.ema9.setData([]);
+    if (lineSeries.ema21) lineSeries.ema21.setData([]);
+    if (lineSeries.ema50) lineSeries.ema50.setData([]);
+    if (lineSeries.vwap)  lineSeries.vwap.setData([]);
+
+    // Clear all price lines (PDH/PDL, IOF, VP, OR, sessions, DD bands, options, HP, gamma)
+    clearPricelines();
+    for (const { line } of iofPriceLines) { try { candleSeries.removePriceLine(line); } catch (_) {} }
+    iofPriceLines = [];
+    for (const { line } of vpPriceLines) { try { candleSeries.removePriceLine(line); } catch (_) {} }
+    vpPriceLines = [];
+    for (const { line } of orPriceLines) { try { candleSeries.removePriceLine(line); } catch (_) {} }
+    orPriceLines = [];
+    for (const { line } of sessionPriceLines) { try { candleSeries.removePriceLine(line); } catch (_) {} }
+    sessionPriceLines = [];
+    for (const line of ddBandLines) { try { candleSeries.removePriceLine(line); } catch (_) {} }
+    ddBandLines = [];
+    for (const { line } of optionsPriceLines) { try { candleSeries.removePriceLine(line); } catch (_) {} }
+    optionsPriceLines = [];
+    for (const { line } of monthlyHPLines) { try { candleSeries.removePriceLine(line); } catch (_) {} }
+    monthlyHPLines = [];
+    for (const line of quarterlyHPLines) { try { candleSeries.removePriceLine(line); } catch (_) {} }
+    quarterlyHPLines = [];
+    for (const line of gammaLines) { try { candleSeries.removePriceLine(line); } catch (_) {} }
+    gammaLines = [];
+
+    // Clear markers
+    if (candleSeries) candleSeries.setMarkers([]);
+
+    // Clear trendline series data
+    for (const key of Object.keys(trendLineSeries)) {
+      if (trendLineSeries[key]) trendLineSeries[key].setData([]);
+    }
+
+    // Clear CVD sub-chart
+    if (cvdHistSeries) cvdHistSeries.setData([]);
+    if (cvdLineSeries) cvdLineSeries.setData([]);
+  }
+
   // ── Data loading ───────────────────────────────────────────────────────────
   async function loadData(symbol, tf) {
     console.log(`[chart] Loading ${symbol} ${tf}`);
+
+    // Cancel any previous in-flight fetch
+    if (_currentFetchController) {
+      _currentFetchController.abort();
+    }
+    _currentFetchController = new AbortController();
+    const signal = _currentFetchController.signal;
+
+    // Clear all series and overlays immediately — prevents stale data from
+    // the previous symbol persisting during the async fetch
+    _clearAllSeriesAndOverlays();
+    _showChartLoading(symbol);
 
     // Clear all symbol-specific state before loading new data — prevents stale
     // markers, overlays, and price lines from the previous symbol persisting.
     alertMarkers     = [];
     alertMarkersData = [];
     _clearSetupOverlay();
+    _liveTickBar = null;
 
     // Clear any previous no-data message
     const noDataEl = document.getElementById('chart-no-data');
     if (noDataEl) noDataEl.style.display = 'none';
 
-    const [candleRes, indRes, tlRes] = await Promise.all([
-      fetch(`/api/candles?symbol=${symbol}&timeframe=${tf}`),
-      fetch(`/api/indicators?symbol=${symbol}&timeframe=${tf}`),
-      fetch(`/api/trendlines?symbol=${symbol}`),
-    ]);
+    let candleRes, indRes, tlRes;
+    try {
+      [candleRes, indRes, tlRes] = await Promise.all([
+        fetch(`/api/candles?symbol=${symbol}&timeframe=${tf}`, { signal }),
+        fetch(`/api/indicators?symbol=${symbol}&timeframe=${tf}`, { signal }),
+        fetch(`/api/trendlines?symbol=${symbol}`, { signal }),
+      ]);
+    } catch (err) {
+      if (err.name === 'AbortError') { return; } // user switched away, ignore
+      _hideChartLoading();
+      throw err;
+    }
 
     if (!candleRes.ok) {
+      _hideChartLoading();
       // 1m seed data doesn't exist for all symbols — show friendly message instead of throwing
       if (tf === '1m') {
         if (noDataEl) {
@@ -402,13 +500,14 @@
       }
       throw new Error(`/api/candles ${candleRes.status}`);
     }
-    if (!indRes.ok)    throw new Error(`/api/indicators ${indRes.status}`);
+    if (!indRes.ok) { _hideChartLoading(); throw new Error(`/api/indicators ${indRes.status}`); }
 
     const { candles } = await candleRes.json();
     const indicators  = await indRes.json();
     const tlData      = tlRes.ok ? await tlRes.json() : {};
 
     if (!candles || candles.length < 2) {
+      _hideChartLoading();
       // Show "Waiting for data" overlay — auto-dismiss on next successful load
       if (noDataEl) {
         noDataEl.textContent = `Waiting for data… (${symbol} ${tf})`;
@@ -425,6 +524,9 @@
       priceFormat: { type: 'price', precision: dec, minMove: dec === 4 ? 0.0001 : 0.01 },
     });
 
+    // Abort guard: if user switched symbols during JSON parsing, bail out
+    if (signal.aborted) return;
+
     candleSeries.setData(candles);
     rawCandles = candles;
     chart.timeScale().scrollToRealTime();
@@ -436,6 +538,8 @@
 
     resetOHLC();
     renderIndicators(indicators, tlData.trendlines || {});
+
+    _hideChartLoading();
 
     if (pendingOverlay) { _drawSetupOverlay(pendingOverlay); pendingOverlay = null; }
 
@@ -1276,10 +1380,13 @@
     updateLivePrice(symbol, price, time) {
       if (symbol !== activeSymbol || !candleSeries || !lastCandle) return;
 
-      // Client-side spike filter: reject ticks that deviate > 2% from the last known close.
-      // The server also filters, but this is a second safety net for the chart.
+      // Client-side spike filter: reject ticks that deviate beyond per-symbol threshold
+      // from the last known close. The server also filters via rolling median, but this
+      // is a second safety net for the chart.
+      const _CLIENT_SPIKE = { MNQ:0.015, MES:0.015, M2K:0.015, MYM:0.015, MGC:0.012, SIL:0.015, MHG:0.012, MCL:0.020 };
+      const spikeThresh = _CLIENT_SPIKE[symbol] || 0.015;
       const refPrice = _liveTickBar ? _liveTickBar.close : lastCandle.close;
-      if (refPrice > 0 && Math.abs(price - refPrice) / refPrice > 0.02) {
+      if (refPrice > 0 && Math.abs(price - refPrice) / refPrice > spikeThresh) {
         console.warn(`[chart] spike filtered: ${price.toFixed(2)} vs ref ${refPrice.toFixed(2)}`);
         return;
       }

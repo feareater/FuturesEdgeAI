@@ -11,9 +11,23 @@ const _state = {};  // symbol → { atrBuf: number[], atrSum: number, rollingATR
 const _stats = {};  // symbol → { total: 0, flagged: 0, rejected: 0 }
 
 const ATR_PERIOD    = 20;
-const SPIKE_ATR_MULT = 5;   // range > 5× ATR = spike
+const SPIKE_ATR_MULT = 4;   // range > 4× ATR = spike (reduced from 5×)
 const CLAMP_ATR_MULT = 1.5; // clamp spikes to open ± 1.5× ATR
 const OPEN_GAP_PCT   = 0.03; // 3% max open-gap from previous close
+
+// Per-symbol ATR sanity bounds for 1m bars (floor, ceiling).
+// Prevents contaminated ATR from disabling the spike clamp.
+// If rolling ATR falls outside these bounds, it's clamped before use.
+const ATR_BOUNDS_1M = {
+  MNQ: [5,    150],   // 5–150 pts per 1m bar
+  MES: [0.5,  20],    // 0.5–20 pts per 1m bar
+  M2K: [0.2,  8],     // 0.2–8 pts per 1m bar
+  MYM: [5,    250],   // 5–250 pts per 1m bar
+  MGC: [0.5,  30],    // 0.5–30 pts per 1m bar
+  SIL: [0.05, 2],     // 0.05–2 pts per 1m bar
+  MHG: [0.002, 0.08], // 0.002–0.08 pts per 1m bar (copper is tight)
+  MCL: [0.05, 2],     // 0.05–2 pts per 1m bar
+};
 
 function _ensureState(symbol) {
   if (!_state[symbol]) {
@@ -122,8 +136,22 @@ function validateBar(symbol, bar, previousBar) {
   const range = corrected.high - corrected.low;
   const s = _state[symbol];
 
-  if (s.rollingATR > 0 && range > SPIKE_ATR_MULT * s.rollingATR) {
-    const atr = s.rollingATR;
+  // Clamp rolling ATR to per-symbol bounds before using it as spike reference
+  let effectiveATR = s.rollingATR;
+  const bounds = ATR_BOUNDS_1M[symbol];
+  if (bounds && effectiveATR > 0) {
+    if (effectiveATR < bounds[0]) {
+      console.warn(`[barValidator] ${symbol} ATR ${effectiveATR.toFixed(4)} below floor ${bounds[0]}, using floor`);
+      effectiveATR = bounds[0];
+    }
+    if (effectiveATR > bounds[1]) {
+      console.warn(`[barValidator] ${symbol} ATR ${effectiveATR.toFixed(4)} above ceiling ${bounds[1]}, using ceiling`);
+      effectiveATR = bounds[1];
+    }
+  }
+
+  if (effectiveATR > 0 && range > SPIKE_ATR_MULT * effectiveATR) {
+    const atr = effectiveATR;
     console.warn(`[barValidator] SPIKE CLAMPED ${symbol} @ ${corrected.time}: range was ${range.toFixed(4)}, ATR=${atr.toFixed(4)}`);
     corrected.high = corrected.open + (CLAMP_ATR_MULT * atr);
     corrected.low  = corrected.open - (CLAMP_ATR_MULT * atr);

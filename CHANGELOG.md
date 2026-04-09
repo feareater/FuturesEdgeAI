@@ -4,6 +4,55 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v14.24] — 2026-04-08 — Spike filtering at source + chart race condition fix
+
+### Fixed: 1s tick spike filter (`_isSpikePrice`) — rolling median + per-symbol thresholds (`server/data/databento.js`)
+- **Root cause**: Flat 2% threshold across all symbols with single prior-price reference. One bad tick could shift the reference baseline, allowing a staircase of bad ticks to each pass individually.
+- **Fix**: Replaced single prior-price reference with 10-tick rolling median buffer per symbol. Added per-symbol `TICK_SPIKE_THRESHOLD` map (MNQ/MES/M2K/MYM 1.5%, MGC/MHG 1.2%, SIL 1.5%, MCL 2.0%). The rolling median prevents any single bad tick from corrupting the reference.
+
+### Fixed: 1m bar wick clamping — body-proportional limits (`server/data/databento.js`)
+- **Root cause**: Extreme wicks from bad 1s ticks within a 1m bar were either flat-clamped to the body (losing all legitimate wick info) or passed through using the same flat 2% threshold.
+- **Fix**: Extreme wicks now clamped to `max(1.5× body, minWickFloor)` where `minWickFloor = close × per-symbol threshold`. OHLC consistency enforced after clamp. Preserves legitimate wicks while bounding phantom spikes.
+
+### Fixed: `validateBar()` ATR bounds — per-symbol floor/ceiling (`server/data/barValidator.js`)
+- **Root cause**: Rolling ATR had no bounds — contaminated ATR from early bad bars could grow too large, effectively disabling the spike clamp.
+- **Fix**: Added `ATR_BOUNDS_1M` per-symbol floor/ceiling map. Rolling ATR is clamped to bounds before use as spike reference. Reduced `SPIKE_ATR_MULT` from 5× to 4×.
+
+### Fixed: Yahoo Finance backfill bars now sanitized before storage (`server/data/gapFill.js`)
+- **Root cause**: `backfillFromYahoo()` wrote Yahoo bars via `injectBars()` with no spike filtering. Bad Yahoo data (e.g., SIL from wrong ticker) entered the candle store unchecked.
+- **Fix**: New `_sanitizeYahooBars(symbol, bars)` filters null/zero bars and close-to-close spikes exceeding 3× the per-symbol tick threshold. Applied to all three Yahoo fetch paths (5m/60d, 1m/7d, and fallback gap fill). Logs `[BACKFILL-SANITIZE] {symbol}: N raw → M clean bars`.
+
+### Fixed: Grid corrected to 8 tradeable futures (`public/js/chartManager.js`)
+- **M6E replaced with SIL** in the commodities grid row. M6E was a reference-only FX symbol removed from dashboard in v14.20, showing "Error 400" in the grid.
+- Section label changed from "Commodities & FX" to "Commodities"
+- Grid error overlay now shows "No data available" instead of "Error {status}" for missing data
+
+### Fixed: Chart symbol-switch race condition (`public/js/chart.js`)
+- **Root cause**: On symbol switch, the previous symbol's chart data persisted during the async fetch for the new symbol. Old indicator overlays (VWAP, EMA, HP levels, DD bands) also persisted.
+- **Fix**: (1) All series data and price lines cleared immediately on symbol switch via `_clearAllSeriesAndOverlays()`. (2) AbortController cancels in-flight fetches on rapid symbol switching. (3) "Loading {symbol}..." overlay shown during fetch, hidden after render completes. (4) Client-side spike filter updated with per-symbol thresholds matching server.
+
+### Files changed
+- `server/data/databento.js` — rolling median buffer, `TICK_SPIKE_THRESHOLD`, rewritten `_isSpikePrice()`, wick clamping, exported `TICK_SPIKE_THRESHOLD`
+- `server/data/barValidator.js` — `ATR_BOUNDS_1M`, ATR clamping before spike check, `SPIKE_ATR_MULT` 5→4
+- `server/data/gapFill.js` — `_sanitizeYahooBars()`, applied to all Yahoo fetch paths
+- `public/js/chartManager.js` — M6E→SIL, "Commodities & FX"→"Commodities", friendlier error overlay
+- `public/js/chart.js` — `_clearAllSeriesAndOverlays()`, `_showChartLoading()`/`_hideChartLoading()`, AbortController, per-symbol client spike filter
+
+---
+
+## [v14.23.2] — 2026-04-09 — SIL historical data coverage fix
+
+### Fixed: SIL low bar count due to stale seed data from prior bad Yahoo ticker (`server/data/gapFill.js`)
+- **Root cause**: v14.23 fixed SIL's Yahoo ticker from `SIL` (silver miners ETF) to `SI=F` (silver futures), but the existing seed files still contained only ~42 days of Yahoo data (2,341 bars on 5m). The gap fill bootstrap only triggered when the candle store was completely empty — SIL's existing (but insufficient) seed data prevented the historical pipeline re-bootstrap.
+- **Fix**: Added low-coverage re-bootstrap check in `fillCandleGaps()`. When `tf === '1m'` and the 5m bar count is below 4,000, the function checks if historical 1m pipeline files on disk have better coverage. If so, seed files are overwritten from historical data (60-day window).
+- SIL bar count: **2,341 → 11,058** on 5m (from Databento historical pipeline files dating back to 2013)
+- Re-bootstrap is a one-time operation — once seed files are overwritten, the coverage check passes on subsequent startups
+
+### Files changed
+- `server/data/gapFill.js` — low-coverage re-bootstrap logic in `fillCandleGaps()`
+
+---
+
 ## [v14.23] — 2026-04-09 — Instrument data audit + options proxy expansion
 
 ### Added: Candle sanitization layer in `getCandles()` (`server/data/snapshot.js`)

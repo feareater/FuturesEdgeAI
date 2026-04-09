@@ -389,8 +389,8 @@ Update at runtime via `POST /api/settings/span` or the SPAN Margins panel in the
 
 ### How it works
 1. `startLiveFeed(symbols, onCandle, onTick)` — connects TCP, authenticates, subscribes
-2. **ohlcv-1s** (rtype=32): spike-filtered via `_isSpikePrice()` (>2% deviation rejected) → `onTick(symbol, price, time)` → `broadcast({ type: 'live_price' })` → `ChartAPI.updateLivePrice()` builds in-progress forming candle (also spike-filtered client-side), updates chart every second
-3. **ohlcv-1m** (rtype=33): spike-filtered (close rejected if >2% deviation; high/low clamped to O/C range if spiked individually) → `onCandle(symbol, candle)` → `validateBar()` (5-rule sanity check: null/zero guard, open continuity, OHLC consistency, ATR spike clamp, volume guard) → `writeLiveCandle()` stores bar + aggregates 5m/15m/30m → `_onLiveCandle()` broadcasts `live_candle` + fires targeted scan
+2. **ohlcv-1s** (rtype=32): spike-filtered via `_isSpikePrice()` (per-symbol threshold from rolling 10-tick median: MNQ/MES/M2K/MYM 1.5%, MGC/MHG 1.2%, SIL 1.5%, MCL 2.0%) → `onTick(symbol, price, time)` → `broadcast({ type: 'live_price' })` → `ChartAPI.updateLivePrice()` builds in-progress forming candle (also spike-filtered client-side with matching thresholds), updates chart every second
+3. **ohlcv-1m** (rtype=33): spike-filtered (close rejected if beyond per-symbol threshold from rolling median; wicks clamped to max(1.5× body, minWickFloor)) → `onCandle(symbol, candle)` → `validateBar()` (5-rule sanity check: null/zero guard, open continuity, OHLC consistency, ATR spike clamp with per-symbol bounds, volume guard) → `writeLiveCandle()` stores bar + aggregates 5m/15m/30m → `_onLiveCandle()` broadcasts `live_candle` + fires targeted scan
 4. `getCandles()` merges seed history + live bars (returns **defensive copies**, not shared references) — chart always shows full history
 5. Completed bars: `ChartAPI.updateLiveCandle()` replaces forming candle, resets `_liveTickBar`
 

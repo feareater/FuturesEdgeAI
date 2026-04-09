@@ -22,7 +22,7 @@ FuturesEdge AI is a browser-based futures trading analysis dashboard that detect
 - Yahoo Finance seed data pipeline (MNQ/MES/MGC/MCL/SIL)
 - Coinbase INTX REST + WebSocket for crypto perpetuals (BTC/ETH/XRP/XLM)
 - Databento historical pipeline: 16 CME symbols, 13-year scale (2018–2026), streaming zip extraction, per-symbol directory layout
-- Databento TCP live feed: CRAM auth, ohlcv-1s ticks + ohlcv-1m bars, spike filtering (>2% rejection), bar validation (5-rule sanity check), defensive copies in getCandles()
+- Databento TCP live feed: CRAM auth, ohlcv-1s ticks + ohlcv-1m bars, spike filtering (per-symbol thresholds + 10-tick rolling median), 1m wick clamping, bar validation (5-rule sanity check + per-symbol ATR bounds), Yahoo backfill sanitization, defensive copies in getCandles()
 - All 8 CME symbols on live feed: MNQ, MES, MGC, MCL, SIL, M2K, MYM, MHG
 - Correct tick/point values and per-symbol fee schedule for all 8 CME symbols; instruments.js as single source of truth; /api/instruments GET+POST; settings UI in backtest2.html (v14.8)
 - OPRA pipeline: ETF daily closes (XNYS.PILLAR), strike/OI parsing, HP computation (~1736 dates/ETF)

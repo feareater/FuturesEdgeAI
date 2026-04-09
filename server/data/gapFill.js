@@ -15,6 +15,7 @@
 const fs   = require('fs');
 const path = require('path');
 const { getCandles, injectBars, aggregateBarsToTF, LIVE_FUTURES } = require('./snapshot');
+const { TICK_SPIKE_THRESHOLD } = require('./databento');
 
 const SEED_DIR = path.join(__dirname, '..', '..', 'data', 'seed');
 
@@ -60,6 +61,56 @@ const YAHOO_BACKFILL_SYMBOLS = {
 
 // Crypto symbols — skip gap fill entirely
 const CRYPTO = new Set(['BTC', 'ETH', 'XRP', 'XLM']);
+
+// ---------------------------------------------------------------------------
+// Yahoo bar sanitization — spike filter before storage
+// ---------------------------------------------------------------------------
+
+/**
+ * Sanitize Yahoo Finance bars before storing. Removes null/zero bars and
+ * bars with close-to-close deviation exceeding 3× the per-symbol tick threshold.
+ * Uses 3× (not 1×) because Yahoo 5m/1m historical bars represent real multi-minute
+ * price ranges with naturally larger close-to-close moves than individual 1s ticks.
+ *
+ * @param {string} symbol   Internal symbol
+ * @param {Array}  bars     Raw Yahoo bars
+ * @returns {Array} Sanitized bar array
+ */
+function _sanitizeYahooBars(symbol, bars) {
+  if (!bars || bars.length === 0) return bars;
+
+  const threshold = (TICK_SPIKE_THRESHOLD[symbol] || 0.02) * 3;
+  const sanitized = [];
+  let prevClose = null;
+
+  for (const bar of bars) {
+    // Basic null/zero guard
+    if (!bar.close || bar.close <= 0 || isNaN(bar.close)) {
+      console.warn(`[BACKFILL-SANITIZE] ${symbol} skipping null/zero bar at ${bar.time}`);
+      continue;
+    }
+    if (!bar.open || bar.open <= 0 || isNaN(bar.open)) {
+      console.warn(`[BACKFILL-SANITIZE] ${symbol} skipping null/zero open at ${bar.time}`);
+      continue;
+    }
+    // Spike check vs prior close
+    if (prevClose !== null) {
+      const deviation = Math.abs(bar.close - prevClose) / prevClose;
+      if (deviation > threshold) {
+        console.warn(
+          `[BACKFILL-SANITIZE] ${symbol} skipping spike bar at ${bar.time}: ` +
+          `close=${bar.close} prev=${prevClose} dev=${(deviation * 100).toFixed(1)}%`
+        );
+        continue;
+      }
+    }
+    sanitized.push(bar);
+    prevClose = bar.close;
+  }
+
+  console.log(`[BACKFILL-SANITIZE] ${symbol}: ${bars.length} raw → ${sanitized.length} clean bars`);
+  return sanitized;
+}
 
 let _schedulerTimers = [];  // array of interval timers (one per TF group)
 
@@ -207,26 +258,56 @@ async function fillCandleGaps(symbol, tf) {
   const nowTs   = Math.floor(Date.now() / 1000);
   const beforeCount = candles ? candles.length : 0;
 
-  if (!candles || candles.length === 0) {
-    // No candles at all — try to bootstrap from historical files on disk.
+  // Bootstrap from historical files: either no candles at all, or low coverage
+  // that indicates a prior bad seed (e.g., SIL had wrong Yahoo ticker).
+  // Threshold: if 5m bar count < 4000, historical 1m files likely have better coverage.
+  const MIN_5M_COVERAGE = 4000;
+  const needsBootstrap = !candles || candles.length === 0;
+  const needsRebootstrap = tf === '1m' && candles && candles.length > 0 && (() => {
+    const candles5m = getCandles(symbol, '5m');
+    return candles5m && candles5m.length < MIN_5M_COVERAGE;
+  })();
+
+  if (needsBootstrap || needsRebootstrap) {
+    // No candles or low coverage — try to bootstrap from historical files on disk.
     // Writes seed-format files so getCandles() picks them up via _fromSeed()
     // without hitting the MAX_LIVE_BARS cap in injectBars().
     if (tf === '1m') {
       const sixtyDaysAgo = nowTs - (60 * 24 * 3600);
       const histBars = _readHistoricalBars(symbol, sixtyDaysAgo, nowTs);
       if (histBars.length > 0) {
-        _writeSeedFile(symbol, '1m', histBars);
-        // Also generate higher-TF seed files from 1m data
-        for (const { tf: htf, seconds } of [{ tf: '5m', seconds: 300 }, { tf: '15m', seconds: 900 }, { tf: '30m', seconds: 1800 }]) {
-          const aggBars = aggregateBarsToTF(histBars, seconds);
-          if (aggBars.length > 0) _writeSeedFile(symbol, htf, aggBars);
+        // Only re-bootstrap if historical data is actually better than what we have
+        if (needsRebootstrap) {
+          const hist5mApprox = Math.floor(histBars.length / 5);
+          const current5m = getCandles(symbol, '5m')?.length ?? 0;
+          if (hist5mApprox <= current5m) {
+            // Historical data isn't better — skip re-bootstrap
+            console.log(`[gapfill] ${symbol}: historical ~${hist5mApprox} 5m bars ≤ current ${current5m} — skipping re-bootstrap`);
+          } else {
+            console.log(`[gapfill] ${symbol}: low coverage detected (${current5m} 5m bars < ${MIN_5M_COVERAGE}), re-bootstrapping from historical (${histBars.length.toLocaleString()} 1m bars → ~${hist5mApprox} 5m)`);
+            _writeSeedFile(symbol, '1m', histBars);
+            for (const { tf: htf, seconds } of [{ tf: '5m', seconds: 300 }, { tf: '15m', seconds: 900 }, { tf: '30m', seconds: 1800 }]) {
+              const aggBars = aggregateBarsToTF(histBars, seconds);
+              if (aggBars.length > 0) _writeSeedFile(symbol, htf, aggBars);
+            }
+            return histBars.length;
+          }
+        } else {
+          _writeSeedFile(symbol, '1m', histBars);
+          // Also generate higher-TF seed files from 1m data
+          for (const { tf: htf, seconds } of [{ tf: '5m', seconds: 300 }, { tf: '15m', seconds: 900 }, { tf: '30m', seconds: 1800 }]) {
+            const aggBars = aggregateBarsToTF(histBars, seconds);
+            if (aggBars.length > 0) _writeSeedFile(symbol, htf, aggBars);
+          }
+          console.log(`[gapfill] ${symbol} 1m: bootstrapped ${histBars.length.toLocaleString()} bars as seed files (${new Date(histBars[0].time * 1000).toISOString().slice(0, 10)} → ${new Date(histBars[histBars.length - 1].time * 1000).toISOString().slice(0, 10)})`);
+          return histBars.length;
         }
-        console.log(`[gapfill] ${symbol} 1m: bootstrapped ${histBars.length.toLocaleString()} bars as seed files (${new Date(histBars[0].time * 1000).toISOString().slice(0, 10)} → ${new Date(histBars[histBars.length - 1].time * 1000).toISOString().slice(0, 10)})`);
-        return histBars.length;
       }
     }
-    console.log(`[gapfill] ${symbol} ${tf}: no candles in store and no historical files — skipping`);
-    return 0;
+    if (needsBootstrap) {
+      console.log(`[gapfill] ${symbol} ${tf}: no candles in store and no historical files — skipping`);
+      return 0;
+    }
   }
 
   // Find the last bar timestamp
@@ -307,7 +388,9 @@ async function _fill1mGap(symbol, fromTs, toTs, internalGaps) {
   // 2. If historical files didn't cover the gap, try Yahoo Finance
   if (bars.length === 0) {
     console.log(`[gapfill] ${symbol} 1m: no historical files — trying Yahoo Finance fallback`);
-    const yahooBars = await _fetchYahooFallback(symbol);
+    const rawYahooBars = await _fetchYahooFallback(symbol);
+    // Sanitize Yahoo bars before storage — spike filter at 3× tick threshold
+    const yahooBars = _sanitizeYahooBars(symbol, rawYahooBars);
     // Filter to only the gap period
     bars = yahooBars.filter(b => b.time > fromTs && b.time <= toTs);
   }
@@ -449,9 +532,12 @@ async function backfillFromYahoo(symbol, yahooTicker) {
       if (result) {
         const timestamps = result.timestamp ?? [];
         const { open, high, low, close, volume } = result.indicators.quote[0];
-        const bars5m = timestamps
+        const rawBars5m = timestamps
           .map((t, i) => ({ time: t, open: open[i], high: high[i], low: low[i], close: close[i], volume: volume[i] ?? 0 }))
           .filter(c => c.open != null && c.high != null && c.low != null && c.close != null);
+
+        // Sanitize Yahoo bars before storage — spike filter at 3× tick threshold
+        const bars5m = _sanitizeYahooBars(symbol, rawBars5m);
 
         const gapBars5m = bars5m.filter(b => b.time > store5mEnd);
         if (gapBars5m.length > 0) {
@@ -495,9 +581,12 @@ async function backfillFromYahoo(symbol, yahooTicker) {
         if (result) {
           const timestamps = result.timestamp ?? [];
           const { open, high, low, close, volume } = result.indicators.quote[0];
-          const bars1m = timestamps
+          const rawBars1m = timestamps
             .map((t, i) => ({ time: t, open: open[i], high: high[i], low: low[i], close: close[i], volume: volume[i] ?? 0 }))
             .filter(c => c.open != null && c.high != null && c.low != null && c.close != null);
+
+          // Sanitize Yahoo bars before storage — spike filter at 3× tick threshold
+          const bars1m = _sanitizeYahooBars(symbol, rawBars1m);
 
           const gapBars1m = bars1m.filter(b => b.time > store1mEnd);
           if (gapBars1m.length > 0) {
