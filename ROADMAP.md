@@ -30,6 +30,7 @@ FuturesEdge AI is a browser-based futures trading analysis dashboard that detect
 - DX futures pipeline (dxy.json, 2251 dates) + realized volatility proxy (vix.json, 1767 dates)
 - Market breadth system: 16-instrument cross-market regime scoring (equityBreadth, bondRegime, copperRegime, dollarRegime, riskAppetite)
 - Breadth cache (4082 dates pre-computed) + TF pre-aggregation (134K files, all 16 symbols)
+- Hourly data refresh: 60-min interval, 95-min lookback, all 16 CME symbols (Databento→Yahoo fallback), HP recompute, OPRA baseline subscription (QQQ/SPY/USO/GLD/IWM/SLV)
 
 ### Analysis Engine
 - Indicators: EMA 9/21/50, VWAP, ATR(14), PDH/PDL, swing H/L, volume profile, opening range, session levels

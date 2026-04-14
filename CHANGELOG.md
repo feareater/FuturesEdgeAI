@@ -4,6 +4,259 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v14.29] — 2026-04-11 — Forward-test simulator: one-trade-per-symbol gate + or_breakout session dedup
+
+### Fixed: Duplicate forward trades from multi-TF scan
+- When the scan engine detected the same setup on 5m/15m/30m simultaneously, each timeframe created a separate trade record in `forward_trades.json` — inflating trade counts and distorting P&L
+- **Gate 1 — One active trade per symbol**: `_openPositions` Map tracks which alert is the active forward-test position per symbol; all other alerts for the same symbol are resolved in the alert cache (outcome updated) but NOT persisted as forward trades
+- **Gate 2 — or_breakout session dedup**: `_orBreakoutSessionKeys` Map prevents re-entry on the same symbol + direction within the same ET calendar date (the OR forms once per session)
+- Both Maps rebuilt from `forward_trades.json` on server startup via `_rebuildState()` — open positions and today's or_breakout keys survive restarts
+- DST-aware `toETDate()` helper (UTC-4 EDT / UTC-5 EST) for session date derivation
+- Clear logging at each decision point: trade opened, trade closed, skip (position open), skip (or_breakout session dedup)
+
+### Files changed
+- `server/trading/simulator.js` — `_openPositions` Map, `_orBreakoutSessionKeys` Map, `toETDate()`, `_rebuildState()`, gate logic in `checkLiveOutcomes()`
+- `CLAUDE.md` — simulator.js description updated
+- `CHANGELOG.md` — this entry
+
+---
+
+## [v14.28.1] — 2026-04-11 — Forward-test export: switch to forward_trades.json source
+
+### Changed: Data source for `GET /api/forward-test/export`
+- Now reads from `data/logs/forward_trades.json` (simulator-resolved trades with dollar P&L) instead of `data/logs/alerts.json`
+- Field mapping updated to match forward_trades.json schema: `entryPrice`→`entry`, `setupType`→`setup`, `timeframe`→`tf`, etc.
+- ET date/time/hour derived from `entryTime` (ISO string) instead of `setup.time` (Unix seconds)
+- Export now includes: `grossPnl`, `sl`, `tp`, `entryTime`, `exitTime`, `vixLevel`, `bondRegime`, `resilienceLabel`, `dexBias`
+- Null-valued market context fields preserved as null (not coerced to `'unknown'`)
+- Trades filtered to require non-null `netPnl` — skips records where P&L wasn't computed
+
+### Files changed
+- `server/analysis/forwardTestExport.js` — rewritten `_mapTrade()` replacing `_flattenAlert()`, `_etFromISO()` helper, updated field mapping
+- `server/index.js` — route handler now calls `loadForwardTrades()` instead of `loadAlertCache()`
+- `CHANGELOG.md` — this entry
+
+---
+
+## [v14.28] — 2026-04-11 — Forward-test export API
+
+### Added: `GET /api/forward-test/export` — analysis-ready JSON export of resolved alerts
+- Reads `data/logs/alerts.json`, filters to resolved trades (outcome !== 'open'), flattens each alert into a flat trade object
+- Optional query params: `start`, `end` (YYYY-MM-DD date range), `setup`, `symbol`, `minConfidence` — defaults to last 30 days
+- Each trade includes: date, time (ET), hour (ET), symbol, setup, tf, direction, confidence, entry, exit, outcome, exitReason, netPnl, vixRegime, dxyDirection, equityBreadth, riskAppetite, ddBandLabel, hpNearest, mtfConfluence
+- Summary stats block: totalTrades, winRate, profitFactor, netPnl, avgWin, avgLoss + breakdowns by symbol, setup, hour, confidence bucket
+- Writes output file to `data/analysis/forward_test_{timestamp}.json` and returns as HTTP response
+- DST-aware ET hour/date derivation (mirrors `_etHour()` from setups.js)
+
+### Files changed
+- `server/analysis/forwardTestExport.js` — new module: `exportForwardTest()`, alert flattening, summary stats, ET time helpers
+- `server/index.js` — import + `GET /api/forward-test/export` route
+- `CLAUDE.md` — added route to API routes table
+- `CHANGELOG.md` — this entry
+
+---
+
+## [v14.27] — 2026-04-10 — RTH opening-bar scaling ratio for ETF→futures HP level translation
+
+### Changed: ETF→futures scaling ratio now computed from RTH opening bar
+- `_getRthOpenRatio()` in `server/data/options.js` — finds the actual session-open 1m bar from the futures candle store, divides by ETF daily open from Yahoo
+- Per-symbol session opens: equity (MNQ/MES/M2K/MYM) 09:30 ET, gold (MGC) 08:20 ET, crude (MCL) 09:00 ET, silver (SIL) 08:25 ET
+- Falls back to Yahoo live price pre-market or if opening bar not found (source: `yahoo_live`)
+- `scalingRatio`, `scalingRatioSource`, `scalingRatioComputedAt` now returned by `getOptionsData()`
+- `_applyRatioOverride()` rescales all strike-level fields (OI walls, max pain, GEX flip, call/put walls, liquidity/hedge/pivot zones) using the RTH ratio
+- Ratio cached per symbol; resets at midnight ET for next session
+- Diagnostic Section 5 shows Ratio and Ratio Source columns per symbol
+
+### Files changed
+- `server/data/options.js` — `_getRthOpenRatio()`, `_applyRatioOverride()`, DST helpers, RTH_OPEN_ET map, ratio cache, `_liveRatio` returns `{ ratio, source, computedAt }`
+- `server/index.js` — `scalingRatio`, `scalingRatioSource`, `scalingRatioComputedAt` added to `/api/opra/health` hpSnapshot
+- `scripts/databentoDiag.js` — Ratio + Ratio Source columns in Section 5 table
+
+---
+
+## [v14.26.3] — 2026-04-10 — OPRA→HP source priority fix + diagnostic 422 handling
+
+### Fixed: OPRA→HP source priority in `server/data/options.js`
+- OPRA live data now takes precedence over CBOE when contracts are present (contractCount > 0 + definition within 2h)
+- Stale CBOE cache is bypassed when OPRA has live contracts, ensuring next scan cycle picks up OPRA once OI flows
+- Source switch logging: `[HP] Source switched to opra for QQQ (N contracts)` and `[HP] Falling back to cboe for QQQ — <reason>`
+
+### Added: HP value to `/api/opra/health` response and Section 5 diagnostic table
+- `hpSnapshot[sym].hp` field: resilience score normalized to 0–1 range (resilience/100)
+- Section 5 table now includes HP column between Last OI Update and GEX; shows `—` when null
+
+### Fixed: Databento 422 `data_start_after_available_end` handling in `scripts/databentoDiag.js`
+- 422 errors with `data_start_after_available_end` now display as clean single-line `⏳ Data not yet indexed by Databento` message instead of full JSON blob
+- Section 4 summary marks these as PENDING status (not ERROR) with explanatory note
+- Final summary reads `⏳ Historical API unavailable (post-midnight lag) — live feed healthy` instead of `❌ No symbols returning data`
+
+### Files changed
+- `server/data/options.js` — OPRA priority check using getOpraDataHealth() contract count, cache bypass, [HP] logging
+- `server/index.js` — hp field added to hpSnapshot in GET /api/opra/health
+- `scripts/databentoDiag.js` — HP column in Section 5 table, PENDING status for 422 in Section 3/4
+
+---
+
+## [v14.26.2] — 2026-04-10 — OPRA data health endpoint + diagnostic Section 5
+
+### Added: `getOpraDataHealth()` in `server/data/opraLive.js`
+- Tracks per-symbol contract count (`_contractCount` Set), last definition timestamp (`_lastDefinitionTs`), last OI timestamp (`_lastOiUpdateTs`)
+- Updates tracking maps in `_processRecord()` on definition (rtype=22) and OI (rtype=24) records
+- Returns snapshot keyed by OPRA_BASELINE_SYMBOLS: `{ strikeCount, lastDefinitionTs, lastOiUpdateTs, contractCount }`
+
+### Added: `GET /api/opra/health` route in `server/index.js`
+- Returns combined OPRA status (`connected`, `subscribedSymbols`) + per-symbol `dataHealth` + `hpSnapshot`
+- HP snapshot calls `getOptionsData()` for each ETF proxy to surface totalGex, dex, resilience, pcRatio, atmIV, dataSource, computedAt
+- Null-safe: missing HP data returns null per symbol, never errors
+
+### Added: Section 5 to `scripts/databentoDiag.js` — OPRA Data Health
+- Calls `GET /api/opra/health` from localhost:3000
+- Formatted table: Symbol, Contracts, Last Definition, Last OI Update, GEX, DEX, Resilience, Source
+- Status classification: ✅ healthy (contractCount > 0 + definition within 2h), ⚠ subscribed but no records
+- Graceful skip if server not running
+
+### Files changed
+- `server/data/opraLive.js` — _lastDefinitionTs, _lastOiUpdateTs, _contractCount tracking; getOpraDataHealth() export
+- `server/index.js` — GET /api/opra/health route
+- `scripts/databentoDiag.js` — section5() OPRA data health table
+
+---
+
+## [v14.26.1] — 2026-04-10 — Fix OPRA baseline subscription + schema verification
+
+### Fixed: OPRA data processing for all 6 baseline ETFs (`server/data/opraLive.js`)
+- **Root cause**: `OPRA_UNDERLYINGS` was `['QQQ', 'SPY']` (2 symbols) while `OPRA_BASELINE_SYMBOLS` subscribed 6 ETFs — USO, GLD, IWM, SLV data was subscribed but silently dropped by three separate filters:
+  1. `_strikeData` Map only initialized for QQQ/SPY — no storage bucket for other 4 ETFs
+  2. `_parseOcc()` OCC parser only recognized option symbols starting with QQQ/SPY
+  3. `_processRecord()` filter `OPRA_UNDERLYINGS.includes()` rejected all non-QQQ/SPY records
+- **Fix**: Removed `OPRA_UNDERLYINGS` constant entirely; unified on `OPRA_BASELINE_SYMBOLS` for strike map initialization, OCC parsing, and record filtering
+- `getOpraStatus().subscribedSymbols` now tracks actual subscription state via `_subscribedSymbols` variable (persists across transient disconnects) instead of conditioning on `_connected` flag
+- Added diagnostic logging: first 5 symbol mapping (definition) records and first 3 OI records logged to confirm data flow after subscription
+- Added `getOpraStatus()` JSON dump immediately after successful subscription for startup verification
+
+### Verified: statistics schema correct for HP/GEX/DEX computation
+- `statistics` schema provides open interest via rtype=24 (stat_type=7) records
+- Symbol mapping (rtype=22) provides strike/expiry/type via OCC symbol parsing — no separate `definition` subscription needed
+- `getOpraRawChain()` returns CBOE-compatible format consumed by `options.js → _computeMetrics()` for HP/GEX/DEX
+
+### Verified: `/api/datastatus` OPRA field reads live state
+- Route calls `opraLive.getOpraStatus()` on every request (not cached at startup)
+- `subscribedSymbols` array now reflects persistent subscription state
+
+### Files changed
+- `server/data/opraLive.js` — removed OPRA_UNDERLYINGS, unified on OPRA_BASELINE_SYMBOLS, _subscribedSymbols tracking, diagnostic logging
+
+---
+
+## [v14.26] — 2026-04-10 — Hourly refresh, OPRA baseline subscription, expanded diagnostic
+
+### Changed: Hourly data refresh replacing midnight-only refresh (`server/data/dailyRefresh.js`)
+- **Schedule**: runs every 60 minutes via `setInterval` (was: nightly at 05:00 UTC / midnight ET)
+- **Lookback**: 95 minutes (90 min of bars + 5 min buffer) instead of 48 hours — lighter API usage per cycle
+- **Symbols**: all 16 CME symbols from `instruments.js` (was: 8 tradeable only) — now includes reference symbols M6E, M6B, MBT, ZT, ZF, ZN, ZB, UB
+- **Skip guard**: if previous refresh still running when next interval fires, logs `[HOURLY-REFRESH] Skipping` and waits
+- **Yahoo fallback**: gracefully skips symbols without Yahoo ticker (bonds, FX, crypto CME) with warning log
+- **Log prefix**: `[HOURLY-REFRESH]` throughout (was: `[DAILY-REFRESH]`)
+- **Export**: `scheduleHourlyRefresh` replaces `scheduleNightlyRefresh`
+
+### Added: OPRA baseline subscription (`server/data/opraLive.js`)
+- After OPRA TCP connects and authenticates, immediately subscribes QQQ, SPY, USO, GLD, IWM, SLV
+- These are the ETF proxies for all tradeable futures (MNQ, MES, MCL, MGC, M2K, SIL) — ensures HP/GEX/DEX/resilience scores stay current even when dashboard isn't viewing options
+- `getOpraStatus()` now returns `subscribedSymbols` array
+- `/api/datastatus` response includes `opra.subscribedSymbols` list
+
+### Changed: Diagnostic expanded to all 16 symbols (`scripts/databentoDiag.js`)
+- **Section 3**: fetches last 90min of 1m bars for all 16 CME symbols (was: MNQ, MES, MGC, MCL only)
+- **Section 2**: displays actual OPRA subscribed symbols from `/api/datastatus` (was: N/A)
+- **Section 4**: groups symbols as Tradeable (8) and Reference (8); prints OPRA baseline status line
+
+### Files changed
+- `server/data/dailyRefresh.js` — hourly scheduler, 95-min lookback, all 16 symbols, updated log prefixes
+- `server/data/opraLive.js` — OPRA_BASELINE_SYMBOLS, baseline subscription on auth, subscribedSymbols in status
+- `server/index.js` — `scheduleHourlyRefresh` call, `opra.subscribedSymbols` in `/api/datastatus`
+- `scripts/databentoDiag.js` — 16-symbol DIAG_SYMBOLS array, grouped summary, OPRA baseline line
+
+---
+
+## [v14.25.2] — 2026-04-10 — Databento diagnostic script
+
+### Added: `scripts/databentoDiag.js` — standalone Databento connection & data health check
+- **Section 1 (Connection):** Tests API auth against GLBX.MDP3 and OPRA.PILLAR, lists available schemas
+- **Section 2 (Live Feed):** Queries `GET /api/datastatus` on localhost:3000 for live feed health (gracefully skips if server not running)
+- **Section 3 (Historical OHLCV):** Fetches last 90min of ohlcv-1m bars for MNQ.c.0, MES.c.0, GC.c.0, MCL.c.0 via Databento REST API; decodes fixed-point prices (÷1e9) and nanosecond timestamps
+- **Section 4 (Summary):** Prints table of symbol | bars | latest price | latest bar time | status
+- Fully standalone — no server required, uses only Node.js built-in https/http + dotenv
+- Run with: `node scripts/databentoDiag.js`
+
+### Files changed
+- `scripts/databentoDiag.js` — **new** — diagnostic script
+
+---
+
+## [v14.25.1] — 2026-04-09 — Active Setups panel (live P&L)
+
+### Added: Active Setups panel in dashboard right panel (`public/index.html`, `public/js/alerts.js`, `public/css/dashboard.css`)
+- New collapsible "Active Setups" section at the top of the right panel, above Scan Predictions
+- Shows ALL open alerts across all symbols (not just the currently selected symbol) where `outcome === 'open'` and entry/SL/TP are defined
+- Each card displays: symbol, direction, setup type, confidence %, timeframe, age
+- **Live P&L**: updates every second via `live_price` WebSocket events — dollar amount calculated from `(currentPrice - entry) × pointValue × contracts`
+- **Progress bar**: visual 0–100% indicator of price movement from entry toward TP
+- SL/TP levels with red/green color coding
+- Count badge on the section header shows total active setup count
+- Clicking a card switches the chart to that symbol and highlights the setup
+- Cards auto-remove when outcomes resolve (listens for `outcome_update` WS event)
+
+### Performance: tick-level updates without DOM rebuild
+- `_updateActiveSetupPrices(symbol, price)` is called on every `live_price` tick — only updates text content and styles on existing DOM nodes (price, P&L, progress, bar width)
+- Full re-render (`_renderActiveSetups()`) only triggers on alert fetch cycles (new setup, data refresh, outcome resolution)
+
+### Files changed
+- `public/index.html` — new `#active-setups-section` div in right panel
+- `public/js/alerts.js` — `_renderActiveSetups()`, `_buildActiveSetupCard()`, `_updateActiveSetupPrices()`, `_livePrices` map, `outcome_update` WS handler, `POINT_VALUE` map
+- `public/css/dashboard.css` — `.as-card`, `.as-row-*`, `.as-pnl`, `.as-bar`, `.as-bar-fill` styles
+
+---
+
+## [v14.25] — 2026-04-09 — Daily 24-hour data refresh system + tightened spike thresholds
+
+### Added: Daily data refresh system (`server/data/dailyRefresh.js`)
+- **Nightly auto-run** at 05:00 UTC (midnight ET) refreshes the last 48h of 1m OHLCV data for all 8 CME futures symbols
+- **Databento REST API** as primary data source (POST `hist.databento.com/v0/timeseries.get_range`, ohlcv-1m, GLBX.MDP3, parent stype)
+- **Yahoo Finance fallback** if Databento fails — fetches 7d of 1m bars, filters to last 48h
+- **Per-symbol refresh**: `refreshSymbol(symbol)` fetches, writes 1m date files, aggregates 5m/15m/30m, updates `futures_agg/` directory, purges in-memory candle store
+- **Options HP recompute**: `refreshOptions()` re-runs `computeHP()` for the last 2 trading dates across all 7 OPRA ETF proxies (QQQ, SPY, IWM, DIA, GLD, USO, SLV)
+- **Concurrency**: `refreshAll()` runs all symbols via `Promise.allSettled`, then refreshes options
+- **Duplicate prevention**: per-symbol `_runningSymbols` Set prevents double-runs from rapid clicks
+- **Logging prefixes**: `[DAILY-REFRESH]`, `[DAILY-REFRESH-SCHED]`, `[DAILY-REFRESH-DB]`, `[DAILY-REFRESH-YF]`, `[DAILY-REFRESH-HP]`
+
+### Added: Manual refresh API routes (`server/index.js`)
+- `POST /api/refresh/symbol/:symbol` — trigger single-symbol 24h refresh (returns immediately, runs async)
+- `POST /api/refresh/all` — trigger full refresh for all CME symbols (409 if already running)
+- `GET /api/refresh/status` — returns `{ lastRun, status, results }` of last refresh run
+
+### Added: Dashboard "Refresh Data" button (`public/index.html`)
+- New "↻ Data" button in the TF row, next to the existing chart refresh button
+- Dropdown popover with "Refresh Current Symbol", "Refresh All Symbols", and last-refresh status
+- Spinner while refresh is running; auto-reloads chart data on completion via WS event
+
+### Changed: Tightened close-to-close spike threshold in `_sanitizeCandles()` (`server/data/snapshot.js`)
+- New `CLOSE_SPIKE_THRESHOLD` map: MNQ/MES/M2K/MYM/MHG = 5%, MGC/MCL/SIL = 8%, DEFAULT = 6%
+- Previously all symbols used the general `SPIKE_THRESHOLD` (8–15%) for close-to-close deviation in Pass 2
+- Non-volatile equity index symbols now catch more bad ticks that were slipping through at 8%
+
+### Changed: Tightened Yahoo bar sanitization in `_sanitizeYahooBars()` (`server/data/gapFill.js`)
+- Spike threshold lowered from 3× to 2× per-symbol tick threshold
+- Added range sanity check: bars where `high - low` exceeds 10× the median range of the prior 10 bars are discarded (10× threshold avoids false positives during legitimate high-volatility events like tariff announcements)
+
+### Files changed
+- `server/data/dailyRefresh.js` — **new** — daily refresh module
+- `server/data/snapshot.js` — added `CLOSE_SPIKE_THRESHOLD` map, updated Pass 2 to use it
+- `server/data/gapFill.js` — tightened `_sanitizeYahooBars()` thresholds + range check
+- `server/index.js` — imported dailyRefresh, added 3 API routes, called `scheduleNightlyRefresh()` at startup
+- `public/index.html` — "↻ Data" button + dropdown + JS handlers
+
+---
+
 ## [v14.24.1] — 2026-04-09 — Chart race condition fix (gap retry) + wick-based spike purge
 
 ### Fixed: Gap retry timer overwrites new symbol's chart data (`public/js/chart.js`)

@@ -3336,3 +3336,71 @@ html, body {
     gap: 2px;
   }
 }
+
+/* ── Active Setups panel (v14.25) ────────────────────────────────────────── */
+.as-card {
+  background: var(--card-bg, #1a1a2e);
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  transition: border-color 0.15s;
+}
+.as-card:hover { border-color: var(--accent-h, #666); }
+.as-card.bull { border-left: 3px solid var(--bull, #26a69a); }
+.as-card.bear { border-left: 3px solid var(--bear, #ef5350); }
+
+.as-row-1 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 3px;
+}
+.as-sym   { font-weight: 700; color: var(--text, #e0e0e0); font-size: 13px; }
+.as-dir   { font-weight: 700; font-size: 13px; }
+.as-dir.bull { color: var(--bull, #26a69a); }
+.as-dir.bear { color: var(--bear, #ef5350); }
+.as-type  { font-size: 10px; color: var(--text-dim, #888); }
+.as-conf  { font-size: 11px; color: var(--accent, #4fc3f7); font-weight: 600; }
+.as-tf    { font-size: 10px; color: var(--text-dim, #888); background: var(--border, #333); border-radius: 3px; padding: 1px 4px; }
+.as-age   { font-size: 10px; color: var(--text-dim, #888); margin-left: auto; }
+
+.as-row-2 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+.as-entry { font-size: 11px; color: var(--text-dim, #888); }
+.as-price { font-size: 12px; color: var(--text, #e0e0e0); font-weight: 600; font-family: monospace; }
+.as-pnl   { font-size: 13px; font-weight: 700; font-family: monospace; }
+.as-pnl.as-pos { color: var(--bull, #26a69a); }
+.as-pnl.as-neg { color: var(--bear, #ef5350); }
+
+.as-row-3 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--text-dim, #888);
+  margin-bottom: 3px;
+}
+.as-sl { color: var(--bear, #ef5350); }
+.as-tp { color: var(--bull, #26a69a); }
+.as-progress { font-weight: 600; color: var(--text, #e0e0e0); }
+
+.as-bar {
+  height: 3px;
+  background: var(--border, #333);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.as-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+.as-bar-fill.bull { background: var(--bull, #26a69a); }
+.as-bar-fill.bear { background: var(--bear, #ef5350); }

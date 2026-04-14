@@ -40,7 +40,9 @@ const opraLive              = require('./data/opraLive');
 const { buildMarketContext } = require('./analysis/marketContext');
 const { computeSetupReadiness, computeDirectionalBias } = require('./analysis/bias');
 const { isDuplicate, applyStaleness, pruneExpired } = require('./analysis/alertDedup');
+const { exportForwardTest } = require('./analysis/forwardTestExport');
 const pushManager = require('./push/pushManager');
+const dailyRefresh          = require('./data/dailyRefresh');
 const settings              = require('../config/settings.json');
 const fs                    = require('fs');
 
@@ -1090,6 +1092,41 @@ app.post('/api/refresh', async (_req, res) => {
   }
 });
 
+// POST /api/refresh/symbol/:symbol — trigger 24h data refresh for a single symbol
+app.post('/api/refresh/symbol/:symbol', (req, res) => {
+  const symbol = req.params.symbol?.toUpperCase();
+  if (!dailyRefresh.CME_REFRESH_SYMBOLS.includes(symbol)) {
+    return res.status(400).json({ error: `Unknown or non-CME symbol: ${symbol}` });
+  }
+  res.json({ status: 'started', symbol });
+  dailyRefresh.refreshSymbol(symbol).then(result => {
+    broadcast({ type: 'daily_refresh_complete', symbol, result });
+  }).catch(err => {
+    console.error(`[api] /refresh/symbol/${symbol} error:`, err.message);
+    broadcast({ type: 'daily_refresh_error', symbol, error: err.message });
+  });
+});
+
+// POST /api/refresh/all — trigger full 24h data refresh for all CME symbols
+app.post('/api/refresh/all', (_req, res) => {
+  const status = dailyRefresh.getRefreshStatus();
+  if (status.status === 'running') {
+    return res.status(409).json({ status: 'already_running', lastRun: status.lastRun });
+  }
+  res.json({ status: 'started' });
+  dailyRefresh.refreshAll().then(summary => {
+    broadcast({ type: 'daily_refresh_complete', summary });
+  }).catch(err => {
+    console.error('[api] /refresh/all error:', err.message);
+    broadcast({ type: 'daily_refresh_error', error: err.message });
+  });
+});
+
+// GET /api/refresh/status — status of the last daily refresh run
+app.get('/api/refresh/status', (_req, res) => {
+  res.json(dailyRefresh.getRefreshStatus());
+});
+
 // GET /api/scan  — manually trigger a full re-scan (useful for seed mode refresh)
 app.get('/api/scan', async (_req, res) => {
   try {
@@ -1576,6 +1613,7 @@ app.get('/api/datastatus', (_req, res) => {
     lastUpdateTime: opraSt.lastUpdateTime,
     strikeCount:    opraSt.strikeCount,
     totalRecords:   opraSt.totalRecords,
+    subscribedSymbols: opraSt.subscribedSymbols || [],
   };
 
   if (!liveMode) {
@@ -1598,6 +1636,54 @@ app.get('/api/datastatus', (_req, res) => {
     symbols:     st.symbols,
     opra:        opraStatus,
   });
+});
+
+// GET /api/opra/health — OPRA data health + HP snapshot for end-to-end verification
+app.get('/api/opra/health', async (_req, res) => {
+  try {
+    const opraSt     = opraLive.getOpraStatus();
+    const dataHealth = opraLive.getOpraDataHealth();
+
+    // Build HP snapshot per ETF symbol by calling getOptionsData for each proxy
+    const ETF_TO_FUTURES = { QQQ: 'MNQ', SPY: 'MES', USO: 'MCL', GLD: 'MGC', IWM: 'M2K', SLV: 'SIL' };
+    const hpSnapshot = {};
+    for (const etfSym of opraSt.subscribedSymbols || []) {
+      const futSym = ETF_TO_FUTURES[etfSym];
+      if (!futSym) { hpSnapshot[etfSym] = null; continue; }
+      try {
+        const optData = await getOptionsData(futSym);
+        if (optData) {
+          hpSnapshot[etfSym] = {
+            hp:              optData.resilience != null ? +(optData.resilience / 100).toFixed(2) : null,
+            totalGex:        optData.totalGex ?? null,
+            dex:             optData.dex ?? null,
+            resilience:      optData.resilienceLabel ?? null,
+            pcRatio:         optData.pcRatio ?? null,
+            atmIV:           optData.atmIV ?? null,
+            dataSource:      optData.dataSource ?? null,
+            scalingRatio:           optData.scalingRatio ?? null,
+            scalingRatioSource:     optData.scalingRatioSource ?? null,
+            scalingRatioComputedAt: optData.scalingRatioComputedAt ?? null,
+            computedAt:      optData.lastFetchedAt ? new Date(optData.lastFetchedAt).toISOString() : null,
+          };
+        } else {
+          hpSnapshot[etfSym] = null;
+        }
+      } catch {
+        hpSnapshot[etfSym] = null;
+      }
+    }
+
+    res.json({
+      connected:         opraSt.connected,
+      subscribedSymbols: opraSt.subscribedSymbols || [],
+      dataHealth,
+      hpSnapshot,
+    });
+  } catch (e) {
+    console.error('[api] /opra/health error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // GET /api/barvalidator/stats — per-symbol bar validation statistics
@@ -1732,6 +1818,19 @@ app.post('/api/forwardtest/export', (req, res) => {
     fs.writeFileSync(filePath, prompt, 'utf8');
     res.json({ saved: true, path: `data/analysis/${safeName}` });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/forward-test/export — export resolved forward-test trades as flat analysis-ready JSON
+// Query params: start, end (YYYY-MM-DD), setup, symbol, minConfidence (all optional)
+app.get('/api/forward-test/export', (req, res) => {
+  try {
+    const trades = loadForwardTrades();
+    const { result, filePath } = exportForwardTest(trades, req.query);
+    res.json(result);
+  } catch (err) {
+    console.error('[FORWARD-TEST-EXPORT] Error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -3338,6 +3437,9 @@ async function start() {
         // checkOpraSchemas is non-fatal; still start the feed if flag is set
         if (settings.features?.liveOpra === true) opraLive.startOpraFeed();
       });
+
+    // Hourly data refresh scheduler — every 60 minutes, all 16 CME symbols
+    dailyRefresh.scheduleHourlyRefresh();
 
     // Real-time crypto prices — Coinbase Exchange WebSocket (free, no auth)
     coinbaseWS.start();

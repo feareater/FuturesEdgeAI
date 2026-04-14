@@ -28,14 +28,130 @@ const settings = require('../../config/settings.json');
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour (CBOE data is 15-min delayed)
 const DAILY_TTL_MS = 30 * 60 * 1000; // 30 min for daily OHLC cache
 
+// Lazy-require snapshot to avoid circular deps at startup.
+let _snapshot = null;
+function _getSnapshot() {
+  if (!_snapshot) _snapshot = require('./snapshot');
+  return _snapshot;
+}
+
 // ETF proxies for each futures symbol (MHG has no options proxy — copper has no liquid ETF)
 const ETF_PROXY     = { MNQ: 'QQQ', MES: 'SPY', M2K: 'IWM', MYM: 'DIA', MGC: 'GLD', MCL: 'USO', SIL: 'SLV' };
 // Corresponding micro futures tickers on Yahoo Finance — used to get the live
 // futures price from the same source/time as the ETF price for accurate scaling.
 const FUTURES_YAHOO = { MNQ: 'MNQ=F', MES: 'MES=F', M2K: 'M2K=F', MYM: 'MYM=F', MGC: 'MGC=F', MCL: 'MCL=F', SIL: 'SI=F' };
 
+// RTH session open times per symbol group (ET hours + minutes).
+// Equity index opens at 09:30, metals/energy at their respective Comex/Nymex opens.
+const RTH_OPEN_ET = {
+  MNQ: { h: 9,  m: 30 },  MES: { h: 9,  m: 30 },  M2K: { h: 9,  m: 30 },  MYM: { h: 9,  m: 30 },
+  MGC: { h: 8,  m: 20 },  // Comex gold open
+  MCL: { h: 9,  m: 0  },  // Nymex crude open
+  SIL: { h: 8,  m: 25 },  // Comex silver open
+};
+
 const _cache      = new Map(); // symbol → { data, timestamp }
 const _dailyCache = new Map(); // etfTicker → { data, timestamp }
+const _ratioCache = new Map(); // futuresSymbol → { ratio, etfOpen, futuresOpen, source, computedAt, dateStr }
+
+// ── DST helpers (same logic as setups.js _isDST / _etHour) ──────────────────
+
+function _nthSunday(year, month, n) {
+  const d = new Date(Date.UTC(year, month, 1));
+  const dayOfWeek = d.getUTCDay();
+  const firstSunday = dayOfWeek === 0 ? 1 : 8 - dayOfWeek;
+  const day = firstSunday + (n - 1) * 7;
+  return Date.UTC(year, month, day) / 1000;
+}
+
+function _isDST(tsSeconds) {
+  const d = new Date(tsSeconds * 1000);
+  const y = d.getUTCFullYear();
+  const dstStart = _nthSunday(y, 2, 2) + 7 * 3600;   // 2nd Sunday March, 7am UTC
+  const dstEnd   = _nthSunday(y, 10, 1) + 6 * 3600;   // 1st Sunday November, 6am UTC
+  return tsSeconds >= dstStart && tsSeconds < dstEnd;
+}
+
+// Returns today's date string in ET (YYYY-MM-DD)
+function _todayET() {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const offset = _isDST(nowSec) ? 4 : 5;
+  const etMs = Date.now() - offset * 3600000;
+  return new Date(etMs).toISOString().slice(0, 10);
+}
+
+// ── RTH opening-bar ratio ───────────────────────────────────────────────────
+// Computes futures/ETF ratio from the actual session-open bar in the candle store.
+// Falls back to Yahoo live prices if the open bar isn't available yet (pre-market).
+
+function _getRthOpenRatio(futuresSymbol, etfDailyOpen) {
+  const dateStr = _todayET();
+
+  // Check cache — once we have the RTH open ratio for today, keep it
+  const cached = _ratioCache.get(futuresSymbol);
+  if (cached && cached.dateStr === dateStr && cached.source === 'rth_open') {
+    return cached;
+  }
+
+  // Determine the UTC timestamp of this symbol's RTH open for today
+  const rthET = RTH_OPEN_ET[futuresSymbol];
+  if (!rthET) return null;
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  const offset = _isDST(nowSec) ? 4 : 5;  // ET→UTC offset in hours
+  const rthUtcHour   = rthET.h + offset;
+  const rthUtcMinute = rthET.m;
+
+  // Build target timestamp: today's date (UTC-adjusted) at the RTH open UTC time
+  // We need the actual calendar date in ET, then compute the UTC timestamp
+  const etDate = new Date(`${dateStr}T00:00:00Z`);
+  const targetMs = etDate.getTime() + rthUtcHour * 3600000 + rthUtcMinute * 60000;
+
+  // If we haven't reached RTH open yet, return null (caller falls back to Yahoo)
+  if (Date.now() < targetMs) return null;
+
+  // Look up the 1m candle store for this futures symbol
+  try {
+    const candles = _getSnapshot().getCandles(futuresSymbol, '1m');
+    if (!candles || candles.length === 0) return null;
+
+    // Find the bar whose timestamp matches the RTH open (within 60s tolerance)
+    const targetSec = Math.floor(targetMs / 1000);
+    const openBar = candles.find(c => Math.abs(c.time - targetSec) < 60);
+
+    if (!openBar || !openBar.open || openBar.open <= 0) return null;
+
+    // We have the futures open price; now compute ratio
+    if (!etfDailyOpen || etfDailyOpen <= 0) return null;
+
+    const ratio = openBar.open / etfDailyOpen;
+    const result = {
+      ratio,
+      etfOpen: etfDailyOpen,
+      futuresOpen: openBar.open,
+      source: 'rth_open',
+      computedAt: new Date(targetMs).toISOString(),
+      dateStr,
+    };
+
+    _ratioCache.set(futuresSymbol, result);
+    console.log(`[OPTIONS] Scaling ratio set from RTH open: ${futuresSymbol}/${ETF_PROXY[futuresSymbol]} = ${ratio.toFixed(3)} (futures open: ${openBar.open}, ETF open: ${etfDailyOpen})`);
+    return result;
+  } catch (err) {
+    // getCandles may throw if symbol not in store — graceful fallback
+    return null;
+  }
+}
+
+// Reset ratio cache at midnight ET (called from getOptionsData on each invocation)
+let _lastRatioResetDate = '';
+function _maybeResetRatioCache() {
+  const today = _todayET();
+  if (today !== _lastRatioResetDate) {
+    _ratioCache.clear();
+    _lastRatioResetDate = today;
+  }
+}
 
 // ── Parse CBOE option ticker ─────────────────────────────────────────────────
 // Format: {UNDERLYING}{YYMMDD}{C|P}{8-digit-strike-×-1000}
@@ -566,6 +682,44 @@ function _computeExpiryBucketHP(raw, scalingRatio) {
   return { weeklyMonthlyHP, quarterlyHP };
 }
 
+// ── Apply RTH ratio override to a metrics result ────────────────────────────
+// Rescales all strike-level fields from _computeMetrics using the RTH open ratio
+// instead of the live mid-session ratio that _computeMetrics computed internally.
+
+function _applyRatioOverride(result, ratioInfo) {
+  const r = ratioInfo.ratio;
+  if (!r || r <= 0) return;
+
+  result.scalingRatio          = r;
+  result.scalingRatioSource    = ratioInfo.source;
+  result.scalingRatioComputedAt = ratioInfo.computedAt;
+
+  // Rescale all scaled fields
+  if (result.oiWalls)    result.scaledOiWalls  = result.oiWalls.map(s => Math.round(s * r));
+  if (result.maxPain != null)   result.scaledMaxPain  = Math.round(result.maxPain * r);
+  if (result.gexFlip != null)   result.scaledGexFlip  = Math.round(result.gexFlip * r);
+  if (result.callWall != null)  result.scaledCallWall = Math.round(result.callWall * r);
+  if (result.putWall != null)   result.scaledPutWall  = Math.round(result.putWall * r);
+  if (result.liquidityZones) {
+    result.scaledLiquidityZones = result.liquidityZones.map(z => ({
+      ...z,
+      low:    Math.round(z.low    * r),
+      high:   Math.round(z.high   * r),
+      center: Math.round(z.center * r),
+    }));
+  }
+  if (result.hedgePressureZones) {
+    result.scaledHedgePressureZones = result.hedgePressureZones.map(z => ({
+      ...z, strike: Math.round(z.strike * r),
+    }));
+  }
+  if (result.pivotCandidates) {
+    result.scaledPivotCandidates = result.pivotCandidates.map(z => ({
+      ...z, strike: Math.round(z.strike * r),
+    }));
+  }
+}
+
 // ── Scale daily ETF levels to futures price space ────────────────────────────
 
 function _scaleDailyLevels(daily, ratio) {
@@ -596,27 +750,48 @@ async function getOptionsData(symbol, futuresPrice) {
   const etf      = ETF_PROXY[symbol];
   if (!etf) return null;
 
-  // Helper: build the live ratio, preferring same-source Yahoo prices over the
-  // passed futuresPrice (which comes from stale seed candles and may be minutes old).
+  // Reset ratio cache at midnight ET
+  _maybeResetRatioCache();
+
+  // Helper: build the scaling ratio with RTH open priority.
+  // Priority: (1) RTH open-bar ratio, (2) Yahoo live prices, (3) seed candle fallback
   function _liveRatio(d, fp) {
-    if (d?.daily?.liveFuturesPrice && d?.daily?.liveEtfPrice && d.daily.liveEtfPrice > 0) {
-      return d.daily.liveFuturesPrice / d.daily.liveEtfPrice;
+    // Try RTH open-bar ratio first (stable, anchored to session open)
+    const etfDailyOpen = d?.daily?.curDayOpen ?? null;
+    const rthRatio = _getRthOpenRatio(symbol, etfDailyOpen);
+    if (rthRatio) {
+      return { ratio: rthRatio.ratio, source: rthRatio.source, computedAt: rthRatio.computedAt };
     }
-    // Fallback: use futuresPrice from seed candles (caller-supplied)
-    if (fp != null && d?.etfPrice > 0) return fp / d.etfPrice;
+    // Fallback: Yahoo live prices (same-source, same-time)
+    if (d?.daily?.liveFuturesPrice && d?.daily?.liveEtfPrice && d.daily.liveEtfPrice > 0) {
+      console.log(`[OPTIONS] RTH open bar not yet available for ${symbol} — using Yahoo live price ratio (pre-market)`);
+      return { ratio: d.daily.liveFuturesPrice / d.daily.liveEtfPrice, source: 'yahoo_live', computedAt: new Date().toISOString() };
+    }
+    // Last resort: seed candle price
+    if (fp != null && d?.etfPrice > 0) {
+      return { ratio: fp / d.etfPrice, source: 'yahoo_live', computedAt: new Date().toISOString() };
+    }
     return null;
   }
 
   // ── Check OPRA live source ────────────────────────────────────────────────
-  // Use Databento OPRA data when:
-  //   a) features.liveOpra is true (hot-toggle safe — settings is a mutable reference)
-  //   b) opraLive has accumulated OI data for this ETF (hasData=true)
-  //   c) OPRA data is only available for QQQ/SPY proxies (same as CBOE primary targets)
+  // OPRA live data takes precedence over CBOE when OPRA has contract data.
+  // Priority: OPRA (contractCount > 0 + definition within 2h) → CBOE fallback.
   const liveOpraEnabled = settings.features?.liveOpra === true;
+  let _opraHasContracts = false;  // track whether OPRA has definitions (used to skip stale CBOE cache)
   if (liveOpraEnabled) {
     try {
       const opraLive = _getOpraLive();
-      const chain    = opraLive.getOpraRawChain(etf);
+
+      // Check contract count from data health (definitions received, even if OI not yet flowing)
+      const healthSnap = opraLive.getOpraDataHealth();
+      const etfHealth  = healthSnap?.[etf];
+      const contractCount    = etfHealth?.contractCount ?? 0;
+      const lastDefTs        = etfHealth?.lastDefinitionTs ? new Date(etfHealth.lastDefinitionTs).getTime() : 0;
+      const defWithin2h      = lastDefTs > Date.now() - 2 * 60 * 60 * 1000;
+      _opraHasContracts      = contractCount > 0 && defWithin2h;
+
+      const chain = opraLive.getOpraRawChain(etf);
       if (chain?.hasData) {
         // Re-use existing daily levels fetch (Yahoo) for spot price and scaling ratio.
         // This ensures consistent daily levels (prevDayOpen/Close/curDayOpen) regardless
@@ -649,6 +824,11 @@ async function getOptionsData(symbol, futuresPrice) {
               daily:      daily ?? null,
               lastFetchedAt: Date.now(),
             };
+            // Override scaling ratio with RTH open-bar ratio if available
+            const ratioInfo = _liveRatio({ daily, etfPrice: liveEtf }, futuresPrice);
+            if (ratioInfo) {
+              _applyRatioOverride(result, ratioInfo);
+            }
             // Cache with shorter TTL for live data (5 min) to pick up OI updates
             _cache.set(symbol, { data: result, timestamp: Date.now() - (CACHE_TTL_MS - 5 * 60 * 1000) });
             if (result.scalingRatio != null) {
@@ -664,9 +844,9 @@ async function getOptionsData(symbol, futuresPrice) {
             const dl      = result.scaledDaily;
             const st      = opraLive.getOpraStatus();
             console.log(
-              `[options] ${symbol} via OPRA live (${etf}): ` +
+              `[HP] Source switched to opra for ${etf} (${contractCount} contracts) — ` +
               `maxPain=${maxStr} gexFlip=${flipStr} pc=${result.pcRatio} atmIV=${result.atmIV} ` +
-              `ratio=${result.scalingRatio?.toFixed(3) ?? '—'} ` +
+              `ratio=${result.scalingRatio?.toFixed(3) ?? '—'} (${result.scalingRatioSource ?? 'unknown'}) ` +
               `pdO=${dl?.prevDayOpen} pdC=${dl?.prevDayClose} cdO=${dl?.curDayOpen} ` +
               `strikes=${st.strikeCount}` +
               ` mHP=${bucketHP.weeklyMonthlyHP?.zones?.length ?? 0} qHP=${bucketHP.quarterlyHP?.zones?.length ?? 0}`
@@ -675,29 +855,38 @@ async function getOptionsData(symbol, futuresPrice) {
           }
         }
         // If metrics computation failed (e.g. no near-term options), fall through to CBOE
-        console.warn(`[options] ${symbol} OPRA chain has data but _computeMetrics failed — falling back to CBOE`);
+        console.warn(`[HP] Falling back to cboe for ${etf} — OPRA chain has data but _computeMetrics failed`);
+      } else if (_opraHasContracts) {
+        // Definitions received but no OI data yet — log and fall through to CBOE
+        console.warn(`[HP] Falling back to cboe for ${etf} — ${contractCount} contracts defined but no OI data yet`);
+      } else {
+        console.warn(`[HP] Falling back to cboe for ${etf} — no live OPRA data`);
       }
     } catch (err) {
-      console.warn(`[options] ${symbol} OPRA live error: ${err.message} — falling back to CBOE`);
+      console.warn(`[HP] Falling back to cboe for ${etf} — OPRA error: ${err.message}`);
     }
   }
 
-  // ── CBOE delayed quotes (existing path — unchanged) ───────────────────────
-
+  // ── CBOE delayed quotes (fallback when OPRA unavailable) ──────────────────
+  // Skip stale CBOE cache when OPRA has live contracts — force fresh fetch so
+  // the next scan cycle can pick up OPRA once OI starts flowing.
   const cached = _cache.get(symbol);
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS && !_opraHasContracts) {
     const d = cached.data;
-    const ratio = _liveRatio(d, futuresPrice);
-    if (d && ratio != null) {
+    const ratioInfo = _liveRatio(d, futuresPrice);
+    if (d && ratioInfo != null) {
+      const r = ratioInfo.ratio;
       return {
         ...d,
-        scalingRatio:   ratio,
-        scaledOiWalls:  d.oiWalls.map(s => Math.round(s * ratio)),
-        scaledMaxPain:  d.maxPain  != null ? Math.round(d.maxPain  * ratio) : null,
-        scaledGexFlip:  d.gexFlip  != null ? Math.round(d.gexFlip  * ratio) : null,
-        scaledCallWall: d.callWall != null ? Math.round(d.callWall * ratio) : null,
-        scaledPutWall:  d.putWall  != null ? Math.round(d.putWall  * ratio) : null,
-        scaledDaily:    _scaleDailyLevels(d.daily, ratio),
+        scalingRatio:   r,
+        scalingRatioSource: ratioInfo.source,
+        scalingRatioComputedAt: ratioInfo.computedAt,
+        scaledOiWalls:  d.oiWalls.map(s => Math.round(s * r)),
+        scaledMaxPain:  d.maxPain  != null ? Math.round(d.maxPain  * r) : null,
+        scaledGexFlip:  d.gexFlip  != null ? Math.round(d.gexFlip  * r) : null,
+        scaledCallWall: d.callWall != null ? Math.round(d.callWall * r) : null,
+        scaledPutWall:  d.putWall  != null ? Math.round(d.putWall  * r) : null,
+        scaledDaily:    _scaleDailyLevels(d.daily, r),
       };
     }
     return d;
@@ -719,6 +908,13 @@ async function getOptionsData(symbol, futuresPrice) {
   if (!metrics) { _cache.set(symbol, { data: null, timestamp: Date.now() }); return null; }
 
   const result = { ...metrics, source: etf, dataSource: 'cboe', daily: daily ?? null, lastFetchedAt: Date.now() };
+
+  // Override scaling ratio with RTH open-bar ratio if available
+  const ratioInfo = _liveRatio({ daily, etfPrice: raw.current_price }, futuresPrice);
+  if (ratioInfo) {
+    _applyRatioOverride(result, ratioInfo);
+  }
+
   _cache.set(symbol, { data: result, timestamp: Date.now() });
 
   // Scale daily levels with the same ratio used for options strikes
@@ -735,7 +931,7 @@ async function getOptionsData(symbol, futuresPrice) {
     const maxStr  = result.scaledMaxPain ?? result.maxPain;
     const flipStr = result.scaledGexFlip ?? result.gexFlip;
     const dl      = result.scaledDaily;
-    const src     = liveFut ? 'live Yahoo' : 'seed candle';
+    const src     = result.scalingRatioSource ?? (liveFut ? 'live Yahoo' : 'seed candle');
     console.log(`[options] ${symbol} via ${etf}: maxPain=${maxStr} gexFlip=${flipStr} pc=${result.pcRatio} atmIV=${result.atmIV} ratio=${result.scalingRatio?.toFixed(3) ?? '—'} (${src}) pdO=${dl?.prevDayOpen} pdC=${dl?.prevDayClose} cdO=${dl?.curDayOpen} mHP=${bucketHP.weeklyMonthlyHP?.zones?.length ?? 0} qHP=${bucketHP.quarterlyHP?.zones?.length ?? 0}`);
   } else {
     console.warn(`[options] ${symbol} via ${etf}: fetch OK but no near-term options found`);

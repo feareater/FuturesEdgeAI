@@ -69,8 +69,9 @@ FuturesEdgeAI/
 │   │   └── tradovate.js       ← OAuth + session token management
 │   ├── data/
 │   │   ├── instruments.js     ← Single source of truth: all 16 CME symbols + 6 OPRA underlyings (pointValue, dbRoot, optionsProxy, etc.)
-│   │   ├── snapshot.js        ← OHLCV fetch + candle normalization (source-agnostic); _sanitizeCandles has 3-pass filter (null/zero, close spikes, wick spikes); purgeAllInvalidBars rebuilds higher TFs from clean 1m
+│   │   ├── snapshot.js        ← OHLCV fetch + candle normalization (source-agnostic); _sanitizeCandles has 3-pass filter (null/zero, close spikes via CLOSE_SPIKE_THRESHOLD, wick spikes); purgeAllInvalidBars rebuilds higher TFs from clean 1m
 │   │   ├── seedFetch.js       ← Yahoo Finance seed data fetch (MNQ/MGC/MES/MCL/SIL/M2K/MYM)
+│   │   ├── dailyRefresh.js    ← Hourly data refresh: Databento→Yahoo fallback, 60-min interval, all 16 CME symbols, HP recompute
 │   │   ├── gapFill.js         ← Automatic candle gap detection + backfill (startup + 15min scheduler)
 │   │   ├── historicalPipeline.js ← Databento historical data pipeline (phases 1a–1f)
 │   │   └── calendar.js        ← ForexFactory economic calendar (1h cache)
@@ -94,7 +95,7 @@ FuturesEdgeAI/
 │   │   └── commentary.js      ← Claude API prompt builder + caller
 │   ├── trading/
 │   │   ├── autotrader.js      ← Kill-switch state machine for paper trading
-│   │   └── simulator.js       ← Virtual position tracker; checkLiveOutcomes() for forward-test
+│   │   └── simulator.js       ← Virtual position tracker; checkLiveOutcomes() for forward-test; one-trade-per-symbol gate + or_breakout session dedup
 │   ├── push/
 │   │   └── pushManager.js     ← VAPID push manager; subscriptions in data/push/subscriptions.json
 │   └── storage/
@@ -113,7 +114,7 @@ FuturesEdgeAI/
 │   │   ├── chart.js           ← TradingView chart renderer + all indicator overlays; loadData() clears all series before fetching, AbortController cancels in-flight, gap retry timer cancelled on symbol switch
 │   │   ├── chartManager.js    ← Multi-symbol grid mode (7 charts); mode toggle; single/grid switching
 │   │   ├── layers.js          ← Layer toggles + feature toggle panel
-│   │   ├── alerts.js          ← Alert feed, WS, RS widget, calendar badge, sound alerts
+│   │   ├── alerts.js          ← Alert feed, WS, RS widget, calendar badge, sound alerts, Active Setups panel (live P&L via live_price ticks)
 │   │   ├── performance.js     ← Performance analytics renderer
 │   │   └── backtest.js        ← Alert replay logic + P&L tracker
 │   ├── manifest.json          ← PWA manifest
@@ -273,6 +274,18 @@ Alerts are persisted to `data/logs/alerts.json`. Each alert object has this shap
 
 ---
 
+## Dashboard — Active Setups Panel (v14.25.1)
+
+The right panel has an "Active Setups" section (above Scan Predictions) showing all open alerts across all symbols with live P&L:
+
+- Filters `allAlerts` for `outcome === 'open'` with valid entry/SL/TP, not older than 8 hours
+- Each card: symbol, direction, setup type, confidence, TF, age, live price, unrealized P&L, progress bar (0–100% toward TP)
+- **Live updates every second** via `live_price` WS events — `_updateActiveSetupPrices()` patches DOM text only (no re-render)
+- Full re-render on alert fetch cycles (new setup, data refresh, `outcome_update`, `sim_fill`)
+- P&L calculation: `(currentPrice - entry) × POINT_VALUE[symbol] × contracts` (bullish); reversed for bearish
+- Click a card → switches chart to that symbol + highlights the setup
+- `_livePrices` map (in `alerts.js`) tracks latest price per symbol from 1s ticks
+
 ## Dashboard — Layer Toggles
 
 The chart has individual toggles for every layer. States persist in `config/settings.json`.
@@ -358,6 +371,10 @@ Update at runtime via `POST /api/settings/span` or the SPAN Margins panel in the
 | `GET /api/bias?symbol=MNQ&mode=auto` | Macro context gates + directional bias score (30s cache, mode: auto/manual) |
 | `POST /api/settings/span` | Update SPAN margin values (body: `{ MNQ: 1400, ... }`) |
 | `POST /api/backtest/analyze` | SSE streaming backtest analysis via Claude API |
+| `POST /api/refresh/symbol/:symbol` | Trigger 24h data refresh for a single CME symbol (async, returns immediately) |
+| `POST /api/refresh/all` | Trigger full 24h refresh for all 8 CME symbols + options HP (409 if already running) |
+| `GET /api/refresh/status` | Status of last daily refresh run (`{ lastRun, status, results }`) |
+| `GET /api/forward-test/export` | Export resolved alerts as flat analysis-ready JSON (query: start, end, setup, symbol, minConfidence) |
 
 ---
 
@@ -532,6 +549,7 @@ Standard backtest window going forward: last 12–24 months (approx 2024-01-01 t
 
 ### Diagnostic scripts
 - `node scripts/auditInstruments.js` — candle store health check for all 8 tradeable futures. Reports bar count, price range, bad bars, spikes, staleness. PASS/WARN/FAIL per symbol.
+- `node scripts/databentoDiag.js` — standalone Databento connection & data health check. Tests API auth (GLBX.MDP3 + OPRA.PILLAR schemas), queries server live feed status + OPRA subscribed symbols, fetches last 90min of 1m bars for all 16 CME symbols, prints grouped summary table (tradeable + reference). No server required.
 
 ### Backtest UI (`public/backtest2.html`, `backtest2.js`, `backtest2.css`)
 - Config: date range, symbols, timeframes, setup types, min confidence, starting balance, HP toggle, max hold, fee/RT, contracts, trading hours filter

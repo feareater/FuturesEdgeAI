@@ -13,7 +13,7 @@
  */
 
 const { POINT_VALUE, INSTRUMENTS } = require('../data/instruments');
-const { appendForwardTrade } = require('../storage/log');
+const { appendForwardTrade, loadForwardTrades } = require('../storage/log');
 
 // ---------------------------------------------------------------------------
 // In-memory position store (session-scoped; not persisted)
@@ -21,6 +21,16 @@ const { appendForwardTrade } = require('../storage/log');
 
 const positions = [];   // all virtual positions: open + closed
 let   _nextId   = 1;
+
+// ---------------------------------------------------------------------------
+// Forward-test dedup state (rebuilt from disk on startup)
+// ---------------------------------------------------------------------------
+
+// symbol -> alertKey string (the currently tracked open forward-test alert)
+const _openPositions = new Map();
+
+// symbol -> Set of 'YYYY-MM-DD:direction' strings (or_breakout session dedup)
+const _orBreakoutSessionKeys = new Map();
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -43,6 +53,55 @@ function _close(pos, closePrice, reason) {
   );
   return pos;
 }
+
+// ---------------------------------------------------------------------------
+// ET date helper (DST-aware)
+// ---------------------------------------------------------------------------
+
+function toETDate(isoString) {
+  const dt = new Date(isoString);
+  // EDT = UTC-4 (Mar second Sun to Nov first Sun), EST = UTC-5 otherwise
+  const month = dt.getUTCMonth() + 1;
+  const offsetHours = (month >= 3 && month <= 11) ? 4 : 5;
+  const et = new Date(dt.getTime() - offsetHours * 3600000);
+  return et.toISOString().slice(0, 10);
+}
+
+// ---------------------------------------------------------------------------
+// Rebuild forward-test dedup state from disk (survives restarts)
+// ---------------------------------------------------------------------------
+
+function _rebuildState() {
+  try {
+    const trades = loadForwardTrades();
+    // Rebuild open positions: trades with no exitTime
+    for (const t of trades) {
+      if (!t.exitTime && t.symbol) {
+        _openPositions.set(t.symbol, t.alertKey);
+        console.log(`[SIMULATOR] Rebuilt open position: ${t.symbol} (${t.alertKey})`);
+      }
+    }
+    // Rebuild or_breakout session keys for today's ET date
+    const todayET = toETDate(new Date().toISOString());
+    for (const t of trades) {
+      if (t.setupType === 'or_breakout' && t.entryTime) {
+        const tradeET = toETDate(t.entryTime);
+        if (tradeET === todayET) {
+          const seen = _orBreakoutSessionKeys.get(t.symbol) || new Set();
+          seen.add(`${tradeET}:${t.direction}`);
+          _orBreakoutSessionKeys.set(t.symbol, seen);
+        }
+      }
+    }
+    if (_orBreakoutSessionKeys.size > 0) {
+      console.log(`[SIMULATOR] Rebuilt or_breakout session keys for ${todayET}: ${[..._orBreakoutSessionKeys.keys()].join(', ')}`);
+    }
+  } catch (e) {
+    // File may not exist yet on first run — that's fine
+  }
+}
+
+_rebuildState();
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -262,6 +321,42 @@ async function checkLiveOutcomes(symbol, candle1m) {
     !a.setup?.userOverride
   );
 
+  // ── Gate: claim one active position per symbol ──────────────────────────
+  // If no position is currently tracked for this symbol, try to claim the
+  // first eligible open alert.  All other alerts for the same symbol are
+  // resolved in the alert cache (outcome updated) but NOT persisted as
+  // forward trades — only the claimed alert produces a trade record.
+  if (!_openPositions.has(symbol) && openAlerts.length > 0) {
+    for (const candidate of openAlerts) {
+      const s = candidate.setup || {};
+      if (s.entry == null || s.sl == null || s.tp == null || !s.direction) continue;
+
+      const candidateKey = `${candidate.symbol}:${candidate.timeframe}:${s.type}:${s.time}`;
+
+      // Gate 2: or_breakout session dedup
+      if (s.type === 'or_breakout') {
+        const etDate = toETDate(new Date(s.time * 1000).toISOString());
+        const sessionKey = `${etDate}:${s.direction}`;
+        const seen = _orBreakoutSessionKeys.get(symbol) || new Set();
+        if (seen.has(sessionKey)) {
+          console.log(`[SIMULATOR] Skip ${symbol} or_breakout ${s.direction} — already fired this session (${etDate})`);
+          continue;   // try next candidate (different setup type may be eligible)
+        }
+        seen.add(sessionKey);
+        _orBreakoutSessionKeys.set(symbol, seen);
+      }
+
+      _openPositions.set(symbol, candidateKey);
+      console.log(
+        `[SIMULATOR] New trade opened: ${symbol} ${s.type} ${s.direction}` +
+        ` ${candidate.timeframe} conf=${s.confidence}`
+      );
+      break;  // claimed — stop looking
+    }
+  }
+
+  const trackedKey = _openPositions.get(symbol);
+
   const isTimeout = _isPastSessionClose(candle1m.time);
 
   for (const alert of openAlerts) {
@@ -300,13 +395,26 @@ async function checkLiveOutcomes(symbol, candle1m) {
     }
 
     if (outcome) {
+      // Always update the alert cache outcome (keeps alert state consistent)
       updateAlertOutcome(key, outcome, exitPrice, candle1m.time);
-      _persistForwardTrade(alert, outcome, exitPrice, candle1m.time);
+
+      // Only persist the forward trade for the ONE tracked position per symbol
+      if (key === trackedKey) {
+        _persistForwardTrade(alert, outcome, exitPrice, candle1m.time);
+        _openPositions.delete(symbol);
+        console.log(
+          `[SIMULATOR] Trade closed: ${symbol} ${outcome}` +
+          ` exitReason=${outcome === 'won' ? 'tp' : outcome === 'lost' ? 'sl' : 'timeout'}` +
+          ` (entry ${entry}, SL ${sl}, TP ${tp})`
+        );
+      } else {
+        console.log(
+          `[SIMULATOR] Skip ${symbol} — position already open` +
+          ` (tracked=${trackedKey}, skipped=${key})`
+        );
+      }
+
       resolved.push({ key, outcome, exitPrice, outcomeTime: candle1m.time });
-      console.log(
-        `[Simulator] ${symbol} alert resolved: ${outcome} at ${exitPrice}` +
-        ` (entry ${entry}, SL ${sl}, TP ${tp})`
-      );
     }
   }
 

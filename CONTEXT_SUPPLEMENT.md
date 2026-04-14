@@ -56,6 +56,61 @@
 
 ---
 
+## Active Setups Panel (v14.25.1)
+
+### What it shows
+- All open alerts (`outcome === 'open'`) across ALL symbols — not filtered to active symbol
+- Each card: symbol, direction, setup type, confidence, TF, age, live price, unrealized dollar P&L, progress bar toward TP
+- Cards sorted by confidence descending; stale setups (>8h old) excluded
+
+### Live P&L updates
+- `_livePrices` map in `alerts.js` receives every `live_price` WS event (1s ticks from Databento for 8 CME futures, Coinbase for crypto)
+- `_updateActiveSetupPrices(symbol, price)` runs on each tick — patches only text/style on existing DOM nodes, no full re-render
+- P&L formula: `(price - entry) × POINT_VALUE[symbol] × contracts` (bullish); `(entry - price) × ...` (bearish)
+- Contracts per symbol from `cfg` settings (same as `_calcRisk`)
+
+### Interaction
+- Click card → switches chart to that symbol + highlights the setup via `ChartAPI.highlightSetup()`
+- Cards auto-removed when `outcome_update` WS event fires (SL/TP/timeout hit)
+
+---
+
+## Hourly Refresh System (v14.26)
+
+### How it works
+- Every 60 minutes (via `setInterval`), `refreshAll()` pulls the last 95 minutes (90 min + 5 min buffer) of 1m OHLCV data for all 16 CME symbols
+- Primary source: Databento REST API (`POST hist.databento.com/v0/timeseries.get_range`, ohlcv-1m schema, GLBX.MDP3 dataset, `stype_in=parent`)
+- Fallback: Yahoo Finance 7-day 1m bars (filtered to last 95 min) — triggers automatically if Databento fails; symbols without Yahoo ticker (bonds, FX, crypto CME) are skipped with warning
+- For each date returned, 1m bars are written to `data/historical/futures/{SYMBOL}/1m/{YYYY-MM-DD}.json` (replaces existing file)
+- Higher TFs (5m/15m/30m) are re-aggregated from the refreshed 1m data and written to both `futures/{SYMBOL}/{tf}/` and `futures_agg/{SYMBOL}/{tf}/`
+- After all symbols refresh, `purgeAllInvalidBars()` sanitizes in-memory candle store and rebuilds higher-TF bars
+- Options HP is recomputed for the last 2 trading dates across all 7 OPRA ETF proxies using existing `computeHP()` from `hpCompute.js`
+- If a refresh is still running when the next interval fires, the cycle is skipped with a log
+
+### Symbols covered
+- All 16 CME symbols from `instruments.js` with a `dbRoot`: MNQ, MES, M2K, MYM, MGC, SIL, MHG, MCL (tradeable) + M6E, M6B, MBT, ZT, ZF, ZN, ZB, UB (reference)
+
+### OPRA baseline subscription
+- After OPRA TCP connects and authenticates, QQQ, SPY, USO, GLD, IWM, SLV are always subscribed
+- These are the ETF proxies for all tradeable futures, ensuring HP/GEX/DEX/resilience scores stay current
+- `/api/datastatus` returns `opra.subscribedSymbols` array
+
+### Manual trigger
+- Dashboard: "↻ Data" button in the TF row opens dropdown with per-symbol and full-refresh options
+- API: `POST /api/refresh/symbol/:symbol` (single), `POST /api/refresh/all` (all), `GET /api/refresh/status`
+- Duplicate prevention: per-symbol `_runningSymbols` Set + 409 response if full refresh already running
+
+### Why this exists
+- Live Databento WebSocket feed accumulates data quality issues: bad ticks that slip through spike filtering, gaps from reconnects, partial bars at session boundaries
+- The hourly refresh replaces those dirty bars with clean historical data from Databento's REST API (which is post-processed and validated)
+- Yahoo fallback ensures bars are refreshed even when Databento API key has exhausted its quota
+
+### Tightened spike thresholds (v14.25)
+- `CLOSE_SPIKE_THRESHOLD` in snapshot.js: MNQ/MES/M2K/MYM/MHG = 5%, MGC/MCL/SIL = 8%, DEFAULT = 6%
+- `_sanitizeYahooBars()` in gapFill.js: spike threshold lowered from 3× to 2× tick threshold; added 10× median range sanity check
+
+---
+
 ## Instruments
 
 ### Tradeable (full setup scanning + alerts)
@@ -121,6 +176,8 @@ public/
   docs.html             ← Setup guide + QQQ options level definitions
 config/
   settings.json         ← risk block + features block (hot-toggle)
+scripts/
+  databentoDiag.js      ← Standalone Databento connection & data health check (no server required)
 ```
 
 ---
@@ -168,10 +225,13 @@ config/
 
 ### Scaling: ETF → Futures Price Space
 The ETF (QQQ at ~$470) and futures (MNQ at ~$19,700) trade at different price levels.
-All option strikes are scaled using: `ratio = liveMNQ=F price / liveQQQ price` (~41.9×).
+Ratio computed from RTH opening bar of futures candle store vs ETF daily open from Yahoo.
+Accurate as of session open. Falls back to Yahoo live price pre-market.
 
-**Critical**: Both prices are fetched simultaneously from Yahoo Finance in `_fetchDailyLevels()`.
-Do NOT use stale seed candle prices for the futures side — the ratio will be wrong (~37×).
+Per-symbol session opens: equity (MNQ/MES/M2K/MYM) 09:30 ET, gold (MGC) 08:20 ET,
+crude (MCL) 09:00 ET, silver (SIL) 08:25 ET. `scalingRatioSource` = `'rth_open'` or `'yahoo_live'`.
+
+**Critical**: Do NOT use stale seed candle prices for the futures side — the ratio will be wrong (~37×).
 
 ```javascript
 // 7 symbols with options proxy coverage (MHG has no liquid ETF proxy)

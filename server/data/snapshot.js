@@ -30,6 +30,15 @@ const SPIKE_THRESHOLD = {
   MCL: 0.15,                                       // 15% for crude (volatile, overnight gaps)
 };
 
+// Per-symbol close-to-close spike threshold for Pass 2 sanitization (v14.25).
+// Tighter than SPIKE_THRESHOLD for non-volatile equity index symbols;
+// volatile commodities (MGC, MCL, SIL) retain higher thresholds.
+const CLOSE_SPIKE_THRESHOLD = {
+  MNQ: 0.05, MES: 0.05, M2K: 0.05, MYM: 0.05, MHG: 0.05,
+  MGC: 0.08, MCL: 0.08, SIL: 0.08,
+  DEFAULT: 0.06,
+};
+
 const VALID_SYMBOLS    = [
   // Tradeable futures
   'MNQ', 'MGC', 'MES', 'MCL', 'SIL', 'M2K', 'MYM', 'MHG',
@@ -96,7 +105,7 @@ function _isLiveMode() {
 function _sanitizeCandles(symbol, candles) {
   if (!candles || candles.length === 0) return candles;
 
-  const threshold = SPIKE_THRESHOLD[symbol] ?? 0.10;
+  const threshold = CLOSE_SPIKE_THRESHOLD[symbol] ?? CLOSE_SPIKE_THRESHOLD.DEFAULT;
   let removed = 0;
 
   // Pass 1: remove null/zero/NaN bars
@@ -539,4 +548,5 @@ module.exports = {
   sanitizeCandles: _sanitizeCandles,
   VALID_SYMBOLS, VALID_TIMEFRAMES, CRYPTO_SYMBOLS, MACRO_SYMBOLS, LIVE_FUTURES,
   SPIKE_THRESHOLD,
+  CLOSE_SPIKE_THRESHOLD,
 };

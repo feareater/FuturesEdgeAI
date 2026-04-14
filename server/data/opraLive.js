@@ -33,8 +33,10 @@ const OPRA_LIVE_HOST = process.env.DATABENTO_OPRA_HOST || 'opra-pillar.lsg.datab
 const OPRA_LIVE_PORT = parseInt(process.env.DATABENTO_OPRA_PORT || '13000', 10);
 const OPRA_DATASET   = 'OPRA.PILLAR';
 
-// ETF underlyings to subscribe to.  GLD/USO deferred — add here when subscription allows.
-const OPRA_UNDERLYINGS = ['QQQ', 'SPY'];
+// Baseline OPRA symbols — always subscribed after connect for autotrader HP/GEX/DEX coverage.
+// These are the ETF proxies for all tradeable futures that could be active in the autotrader.
+// Used for both subscription AND data processing (strike maps, OCC parsing, record filtering).
+const OPRA_BASELINE_SYMBOLS = ['QQQ', 'SPY', 'USO', 'GLD', 'IWM', 'SLV'];
 
 // Options chain window: next 30 calendar days, ±30% of spot.
 // We use a wide strike window here (spot is unknown at subscription time; filtering
@@ -55,7 +57,7 @@ const STAT_TYPE_OPEN_INTEREST = 7;  // per-contract open interest
 // Per-ETF strike maps: etfSymbol → Map<strike, StrikeEntry>
 // StrikeEntry = { callOI, putOI, callDelta, putDelta, callGamma, putGamma, expiry }
 const _strikeData = new Map();
-for (const sym of OPRA_UNDERLYINGS) _strikeData.set(sym, new Map());
+for (const sym of OPRA_BASELINE_SYMBOLS) _strikeData.set(sym, new Map());
 
 // instrument_id → { underlying, expiry, type, strike }  (from symbol mapping records)
 const _instrumentMap = new Map();
@@ -70,6 +72,13 @@ let _phase           = 'version';
 let _lastUpdateTime  = null;   // Date.now() of last OI record processed
 let _lastConnectMs   = null;
 let _totalRecords    = 0;      // total stats records processed since connect
+let _subscribedSymbols = [];   // symbols successfully subscribed (persists across reconnects)
+
+// Per-symbol health tracking for getOpraDataHealth()
+const _lastDefinitionTs = new Map();  // symbol → ISO timestamp of last definition record
+const _lastOiUpdateTs   = new Map();  // symbol → ISO timestamp of last OI/statistics record
+const _contractCount    = new Map();  // symbol → Set of unique contract IDs seen
+for (const sym of OPRA_BASELINE_SYMBOLS) _contractCount.set(sym, new Set());
 
 // ---------------------------------------------------------------------------
 // CRAM auth helper (identical to databento.js)
@@ -95,7 +104,7 @@ function _parseOcc(symbol) {
   if (!symbol) return null;
   // Strip all whitespace — Databento OPRA uses padded format: "QQQ   261218P00239780"
   const sym = symbol.replace(/\s+/g, '');
-  for (const und of OPRA_UNDERLYINGS) {
+  for (const und of OPRA_BASELINE_SYMBOLS) {
     if (!sym.startsWith(und)) continue;
     const body = sym.slice(und.length);
     if (body.length < 15) continue;           // YYMMDD + C/P + 8 digits = 15 chars minimum
@@ -145,6 +154,17 @@ function _processRecord(rec) {
     const parsed = _parseOcc(String(rawSym));
     if (parsed) {
       _instrumentMap.set(id, parsed);
+      // Track definition timestamp + unique contract count
+      _lastDefinitionTs.set(parsed.underlying, new Date().toISOString());
+      const contracts = _contractCount.get(parsed.underlying);
+      if (contracts) contracts.add(id);
+      // Log first few definition records per underlying to confirm data flow
+      const mapCount = _instrumentMap.size;
+      if (mapCount <= 5) {
+        console.log(`[OPRA] Received definition record: ${parsed.underlying} strike=${parsed.strike} exp=${parsed.expiry} type=${parsed.type}`);
+      } else if (mapCount === 6) {
+        console.log(`[OPRA] Symbol mapping active — suppressing further definition logs`);
+      }
     }
     return;
   }
@@ -184,7 +204,7 @@ function _processRecord(rec) {
   if (!parsed) return;
 
   const { underlying, expiry, type, strike } = parsed;
-  if (!OPRA_UNDERLYINGS.includes(underlying)) return;
+  if (!OPRA_BASELINE_SYMBOLS.includes(underlying)) return;
 
   // Expiry filter: skip expired and beyond 30-day window
   const now     = Date.now();
@@ -220,6 +240,14 @@ function _processRecord(rec) {
   strikeMap.set(strike, entry);
   _lastUpdateTime = now;
   _totalRecords++;
+  _lastOiUpdateTs.set(underlying, new Date(now).toISOString());
+
+  // Log first few OI records to confirm data flowing
+  if (_totalRecords <= 3) {
+    console.log(`[OPRA] OI record #${_totalRecords}: ${underlying} strike=${strike} exp=${expiry} ${type} OI=${oi}`);
+  } else if (_totalRecords === 4) {
+    console.log(`[OPRA] OI data flowing — suppressing further OI logs`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -253,15 +281,17 @@ function _handleLine(line, apiKey) {
   if (_phase === 'auth') {
     if (line.includes('success=1')) {
       console.log('[opra:live] Authenticated successfully');
-      // Subscribe to statistics schema for QQQ + SPY using underlying stype
-      const syms = OPRA_UNDERLYINGS.map(s => `${s}.OPT`).join(',');
-      _socket.write(`schema=statistics|stype_in=parent|symbols=${syms}\n`);
+      // Subscribe to statistics schema for baseline symbols (all ETF proxies for autotrader coverage)
+      const baselineSyms = OPRA_BASELINE_SYMBOLS.map(s => `${s}.OPT`).join(',');
+      _socket.write(`schema=statistics|stype_in=parent|symbols=${baselineSyms}\n`);
       _socket.write(`start_session=1\n`);
       _phase         = 'data';
       _connected     = true;
       _lastConnectMs = Date.now();
       _reconnectDelay = RECONNECT_BASE_MS;
-      console.log(`[opra:live] Subscribed to statistics for ${syms}`);
+      _subscribedSymbols = [...OPRA_BASELINE_SYMBOLS];
+      console.log(`[OPRA] Subscribed baseline symbols: ${OPRA_BASELINE_SYMBOLS.join(', ')}`);
+      console.log('[OPRA] getOpraStatus():', JSON.stringify(getOpraStatus()));
     } else {
       console.error(`[opra:live] Auth failed: ${line.slice(0, 120)}`);
       _socket?.destroy();
@@ -433,7 +463,7 @@ function stopOpraFeed() {
 /**
  * Returns the accumulated options chain for an ETF in CBOE-compatible format.
  *
- * @param {string} etfSymbol  'QQQ' | 'SPY'
+ * @param {string} etfSymbol  'QQQ' | 'SPY' | 'USO' | 'GLD' | 'IWM' | 'SLV'
  * @returns {{ options: Array, hasData: boolean } | null}
  *
  * Each entry in `options` has the same shape as a CBOE raw options record:
@@ -478,6 +508,25 @@ function getOpraRawChain(etfSymbol) {
 }
 
 /**
+ * Returns per-symbol data health snapshot for verifying end-to-end data flow.
+ * @returns {Object} keyed by symbol → { strikeCount, lastDefinitionTs, lastOiUpdateTs, contractCount }
+ */
+function getOpraDataHealth() {
+  const health = {};
+  for (const sym of OPRA_BASELINE_SYMBOLS) {
+    const bucket = _strikeData.get(sym);
+    const contracts = _contractCount.get(sym);
+    health[sym] = {
+      strikeCount:      bucket ? bucket.size : 0,
+      lastDefinitionTs: _lastDefinitionTs.get(sym) || null,
+      lastOiUpdateTs:   _lastOiUpdateTs.get(sym) || null,
+      contractCount:    contracts ? contracts.size : 0,
+    };
+  }
+  return health;
+}
+
+/**
  * Returns current OPRA feed health state.
  * @returns {{ connected: boolean, lastUpdateTime: number|null, strikeCount: number, totalRecords: number }}
  */
@@ -489,6 +538,7 @@ function getOpraStatus() {
     lastUpdateTime: _lastUpdateTime,
     strikeCount,
     totalRecords:   _totalRecords,
+    subscribedSymbols: [..._subscribedSymbols],
   };
 }
 
@@ -497,5 +547,6 @@ module.exports = {
   stopOpraFeed,
   getOpraRawChain,
   getOpraStatus,
+  getOpraDataHealth,
   checkOpraSchemas,
 };

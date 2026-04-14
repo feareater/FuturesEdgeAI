@@ -121,6 +121,15 @@
           <button class="tf-btn"        data-tf="4h">4h</button>
         </div>
         <button id="chart-refresh-btn" class="chart-refresh-btn" title="Refresh chart data">&#x27F3;</button>
+        <div class="data-refresh-wrapper" style="position:relative;display:inline-block;margin-left:8px">
+          <button id="data-refresh-btn" class="chart-refresh-btn" title="Refresh 24h data from Databento/Yahoo">&#x21BB; Data</button>
+          <div id="data-refresh-dropdown" style="display:none;position:absolute;right:0;top:100%;z-index:1000;background:#1e1e2e;border:1px solid #444;border-radius:6px;padding:8px;min-width:200px;box-shadow:0 4px 12px rgba(0,0,0,0.5)">
+            <button id="dr-current" style="display:block;width:100%;padding:6px 10px;margin-bottom:4px;background:#2a2a3e;color:#e0e0e0;border:1px solid #555;border-radius:4px;cursor:pointer;text-align:left;font-size:12px">Refresh Current Symbol</button>
+            <button id="dr-all" style="display:block;width:100%;padding:6px 10px;margin-bottom:6px;background:#2a2a3e;color:#e0e0e0;border:1px solid #555;border-radius:4px;cursor:pointer;text-align:left;font-size:12px">Refresh All Symbols</button>
+            <div id="dr-status" style="font-size:11px;color:#888;padding:2px 4px">Last refresh: never</div>
+            <div id="dr-spinner" style="display:none;font-size:11px;color:#4fc3f7;padding:2px 4px">&#x23F3; Refreshing...</div>
+          </div>
+        </div>
       </div>
 
       <!-- Row 4: Correlation heatmap -->
@@ -314,6 +323,19 @@
         <div id="prediction-section" style="display:none">
           <span id="pred-symbol-label" class="pred-symbol-label"></span>
           <div id="prediction-widget" class="prediction-widget"></div>
+        </div>
+
+        <!-- ── Active Setups (live P&L) ─────────────────────────────────── -->
+        <div class="panel-section" id="active-setups-section">
+          <div class="panel-header collapsible-header" data-section="active-setups">
+            Active Setups <span id="active-setups-count" class="pred-count-badge"></span>
+            <span class="section-chevron">▾</span>
+          </div>
+          <div class="section-body">
+            <div id="active-setups-feed">
+              <p class="placeholder">No active setups.</p>
+            </div>
+          </div>
         </div>
 
         <!-- ── Scan Predictions ────────────────────────────────────────── -->
@@ -594,6 +616,81 @@
     }
     fetchPaperTrading();
     setInterval(fetchPaperTrading, PT_INTERVAL);
+  })();
+
+  // ── Data Refresh Controls (v14.25) ──────────────────────────────────────────
+  (function() {
+    const btn      = document.getElementById('data-refresh-btn');
+    const dropdown = document.getElementById('data-refresh-dropdown');
+    const drCurrent = document.getElementById('dr-current');
+    const drAll     = document.getElementById('dr-all');
+    const drStatus  = document.getElementById('dr-status');
+    const drSpinner = document.getElementById('dr-spinner');
+    if (!btn || !dropdown) return;
+
+    // Toggle dropdown
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const vis = dropdown.style.display === 'none';
+      dropdown.style.display = vis ? 'block' : 'none';
+      if (vis) _fetchRefreshStatus();
+    });
+    document.addEventListener('click', () => { dropdown.style.display = 'none'; });
+    dropdown.addEventListener('click', (e) => e.stopPropagation());
+
+    function _fetchRefreshStatus() {
+      fetch('/api/refresh/status').then(r => r.json()).then(s => {
+        if (s.lastRun) {
+          const d = new Date(s.lastRun);
+          drStatus.textContent = 'Last refresh: ' + d.toLocaleString() + ' (' + s.status + ')';
+        } else {
+          drStatus.textContent = 'Last refresh: never';
+        }
+        drSpinner.style.display = s.status === 'running' ? 'block' : 'none';
+      }).catch(() => {});
+    }
+
+    function _doRefresh(url) {
+      drSpinner.style.display = 'block';
+      drCurrent.disabled = true;
+      drAll.disabled = true;
+      fetch(url, { method: 'POST' }).then(r => r.json()).then(() => {
+        drStatus.textContent = 'Refresh started...';
+      }).catch(err => {
+        drStatus.textContent = 'Error: ' + err.message;
+        drSpinner.style.display = 'none';
+      }).finally(() => {
+        drCurrent.disabled = false;
+        drAll.disabled = false;
+      });
+    }
+
+    drCurrent.addEventListener('click', () => {
+      const sym = window._activeSymbol || 'MNQ';
+      _doRefresh('/api/refresh/symbol/' + sym);
+    });
+    drAll.addEventListener('click', () => {
+      _doRefresh('/api/refresh/all');
+    });
+
+    // Listen for WS completion events to update status
+    if (window._dashWs) {
+      const origHandler = window._dashWs.onmessage;
+      window._dashWs.addEventListener('message', (evt) => {
+        try {
+          const msg = JSON.parse(evt.data);
+          if (msg.type === 'daily_refresh_complete') {
+            drSpinner.style.display = 'none';
+            _fetchRefreshStatus();
+            // Reload chart data for current symbol
+            if (typeof window.loadData === 'function') window.loadData();
+          } else if (msg.type === 'daily_refresh_error') {
+            drSpinner.style.display = 'none';
+            drStatus.textContent = 'Error: ' + (msg.error || 'unknown');
+          }
+        } catch (_) {}
+      });
+    }
   })();
   </script>
 </body>

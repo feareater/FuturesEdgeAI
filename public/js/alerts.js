@@ -1201,6 +1201,7 @@
         if (takenOpenChanged) _saveTakenOpen();
         _renderFeed();
         _renderPredictions();
+        _renderActiveSetups();
         _updateStats();
         _syncChartMarkers();
         console.log(`[alerts] ${alerts.length} alerts  sym=${activeSymbol}  minConf=${minConf}`);
@@ -1355,6 +1356,181 @@
     }
 
     _prevAlertKeys = new Set(openSetups.map(_alertKey));
+  }
+
+  // ── Active Setups panel — live P&L tracking across all symbols ─────────────
+  // Shows every open alert (outcome === 'open') with live price + unrealized P&L.
+  // Updates every second via live_price WS events.
+
+  const _livePrices = {};  // symbol → latest price from 1s ticks
+
+  // Point value per contract (for dollar P&L calculation)
+  const POINT_VALUE = {
+    MNQ: 2,  MES: 5,   MGC: 10,  MCL: 100,
+    SIL: 200, M2K: 5,  MYM: 0.50, MHG: 2500,
+    BTC: 1,  ETH: 0.01, XRP: 0.0001, XLM: 0.0001,
+  };
+
+  function _getContracts(symbol) {
+    return symbol === 'MNQ' ? cfg.mnqContracts
+         : symbol === 'MGC' ? cfg.mgcContracts
+         : symbol === 'MES' ? cfg.mesContracts
+         : symbol === 'MCL' ? cfg.mclContracts
+         : symbol === 'M2K' ? cfg.m2kContracts
+         : symbol === 'MYM' ? cfg.mymContracts
+         : symbol === 'MHG' ? cfg.mhgContracts
+         : symbol === 'SIL' ? cfg.silContracts
+         : 1;
+  }
+
+  function _renderActiveSetups() {
+    const feed = document.getElementById('active-setups-feed');
+    const badge = document.getElementById('active-setups-count');
+    if (!feed) return;
+
+    // Collect all open setups across ALL symbols (not just active)
+    const openSetups = allAlerts.filter(a => {
+      if (!a.setup) return false;
+      if (a.setup.outcome && a.setup.outcome !== 'open') return false;
+      // Must have entry, SL, TP defined
+      if (a.setup.entry == null && a.setup.price == null) return false;
+      if (a.setup.sl == null || a.setup.tp == null) return false;
+      // Staleness check: discard setups older than 8 hours
+      const ageSec = (Date.now() / 1000) - (a.setup.time || 0);
+      if (ageSec > 8 * 3600) return false;
+      return true;
+    });
+
+    if (badge) badge.textContent = openSetups.length > 0 ? String(openSetups.length) : '';
+
+    if (openSetups.length === 0) {
+      feed.innerHTML = '<p class="placeholder">No active setups.</p>';
+      return;
+    }
+
+    // Sort by confidence descending, then by symbol
+    openSetups.sort((a, b) => (b.setup.confidence || 0) - (a.setup.confidence || 0));
+
+    feed.innerHTML = '';
+    for (const alert of openSetups) {
+      feed.appendChild(_buildActiveSetupCard(alert));
+    }
+  }
+
+  function _buildActiveSetupCard(alert) {
+    const { symbol, timeframe, setup } = alert;
+    const dir    = setup.direction;
+    const cls    = dir === 'bullish' ? 'bull' : 'bear';
+    const arrow  = dir === 'bullish' ? '\u25B2' : '\u25BC';
+    const entry  = setup.entry ?? setup.price;
+    const fmtP   = n => _fmtP(symbol, n);
+    const price  = _livePrices[symbol];
+    const pv     = POINT_VALUE[symbol] || 1;
+    const qty    = _getContracts(symbol);
+
+    // Unrealized P&L
+    let pnlText = '—';
+    let pnlClass = '';
+    let progressPct = 0;
+    if (price != null && entry != null) {
+      const raw = dir === 'bullish' ? (price - entry) : (entry - price);
+      const dollars = raw * pv * qty;
+      pnlText = (dollars >= 0 ? '+' : '') + '$' + Math.abs(dollars).toFixed(0);
+      pnlClass = dollars >= 0 ? 'as-pos' : 'as-neg';
+
+      // Progress toward TP (0% = at entry, 100% = at TP, negative = toward SL)
+      const totalRange = dir === 'bullish' ? (setup.tp - entry) : (entry - setup.tp);
+      if (totalRange > 0) {
+        progressPct = Math.round((raw / totalRange) * 100);
+      }
+    }
+
+    // Age
+    const ageMins = Math.round((Date.now() - (setup.time || 0) * 1000) / 60000);
+    const ageText = ageMins < 2 ? 'now' : ageMins < 60 ? `${ageMins}m` : `${Math.floor(ageMins / 60)}h${ageMins % 60}m`;
+
+    const card = document.createElement('div');
+    card.className = `as-card ${cls}`;
+    card.dataset.symbol = symbol;
+    card.dataset.entry = entry;
+    card.dataset.direction = dir;
+    card.dataset.sl = setup.sl;
+    card.dataset.tp = setup.tp;
+
+    // TP/SL distance text
+    const tpDist = dir === 'bullish' ? setup.tp - entry : entry - setup.tp;
+    const slDist = dir === 'bullish' ? entry - setup.sl : setup.sl - entry;
+
+    card.innerHTML = `
+      <div class="as-row-1">
+        <span class="as-sym">${symbol}</span>
+        <span class="as-dir ${cls}">${arrow}</span>
+        <span class="as-type">${_fmtType(setup.type)}</span>
+        <span class="as-conf">${setup.confidence}%</span>
+        <span class="as-tf">${timeframe}</span>
+        <span class="as-age">${ageText}</span>
+      </div>
+      <div class="as-row-2">
+        <span class="as-entry">E ${fmtP(entry)}</span>
+        <span class="as-price" title="Live price">${price != null ? fmtP(price) : '—'}</span>
+        <span class="as-pnl ${pnlClass}">${pnlText}</span>
+      </div>
+      <div class="as-row-3">
+        <span class="as-sl">SL ${fmtP(setup.sl)}</span>
+        <span class="as-progress">${progressPct}%</span>
+        <span class="as-tp">TP ${fmtP(setup.tp)}</span>
+      </div>
+      <div class="as-bar">
+        <div class="as-bar-fill ${cls}" style="width:${Math.max(0, Math.min(100, progressPct))}%"></div>
+      </div>`;
+
+    // Click to switch chart to this symbol
+    card.style.cursor = 'pointer';
+    card.addEventListener('click', () => {
+      window.ChartAPI?.highlightSetup(alert);
+      // Switch to this symbol if not already active
+      if (activeSymbol !== symbol) {
+        document.querySelector(`.sym-btn[data-sym="${symbol}"]`)?.click();
+      }
+    });
+
+    return card;
+  }
+
+  // Update just the live P&L values in existing cards (called every tick, no full re-render)
+  function _updateActiveSetupPrices(symbol, price) {
+    _livePrices[symbol] = price;
+    const cards = document.querySelectorAll(`.as-card[data-symbol="${symbol}"]`);
+    if (cards.length === 0) return;
+
+    const pv  = POINT_VALUE[symbol] || 1;
+    const qty = _getContracts(symbol);
+
+    for (const card of cards) {
+      const entry = parseFloat(card.dataset.entry);
+      const dir   = card.dataset.direction;
+      const sl    = parseFloat(card.dataset.sl);
+      const tp    = parseFloat(card.dataset.tp);
+      if (!entry || !dir) continue;
+
+      const raw     = dir === 'bullish' ? (price - entry) : (entry - price);
+      const dollars = raw * pv * qty;
+      const pnlText = (dollars >= 0 ? '+' : '') + '$' + Math.abs(dollars).toFixed(0);
+      const pnlClass = dollars >= 0 ? 'as-pos' : 'as-neg';
+
+      const totalRange = dir === 'bullish' ? (tp - entry) : (entry - tp);
+      const progressPct = totalRange > 0 ? Math.round((raw / totalRange) * 100) : 0;
+
+      const priceEl = card.querySelector('.as-price');
+      const pnlEl   = card.querySelector('.as-pnl');
+      const progEl  = card.querySelector('.as-progress');
+      const barEl   = card.querySelector('.as-bar-fill');
+
+      if (priceEl) priceEl.textContent = _fmtP(symbol, price);
+      if (pnlEl)   { pnlEl.textContent = pnlText; pnlEl.className = `as-pnl ${pnlClass}`; }
+      if (progEl)  progEl.textContent = `${progressPct}%`;
+      if (barEl)   barEl.style.width = `${Math.max(0, Math.min(100, progressPct))}%`;
+    }
   }
 
   // ── Monitoring card (mode='monitor') — auto-watches TP/SL ──────────────────
@@ -1736,6 +1912,7 @@
         _saveTakenOpen();
         _renderFeed();
         _renderPredictions();
+        _renderActiveSetups();
         _updateStats();
         monitorBtn.textContent = '● Monitoring';
         monitorBtn.disabled = true;
@@ -2677,11 +2854,16 @@
           _pollAutotrader();
           fetchAndRender();
         }
+        if (msg.type === 'outcome_update') {
+          // Server resolved an outcome (SL/TP/timeout) — re-render active setups
+          fetchAndRender();
+        }
         if (msg.type === 'live_price') {
           // Real-time tick from Coinbase WS (crypto) or Databento 1s bar (futures)
           window.ChartAPI?.updateLivePrice?.(msg.symbol, msg.price, msg.time);
           _updateDataAgeBadge(msg.symbol, msg.time);
           _checkMonitoredTrades(msg.symbol, msg.price);
+          _updateActiveSetupPrices(msg.symbol, msg.price);
           // Broadcast for grid mode price displays
           document.dispatchEvent(new CustomEvent('livePriceTick', { detail: { symbol: msg.symbol, price: msg.price } }));
         }

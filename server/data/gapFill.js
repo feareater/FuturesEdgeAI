@@ -79,11 +79,12 @@ const CRYPTO = new Set(['BTC', 'ETH', 'XRP', 'XLM']);
 function _sanitizeYahooBars(symbol, bars) {
   if (!bars || bars.length === 0) return bars;
 
-  const threshold = (TICK_SPIKE_THRESHOLD[symbol] || 0.02) * 3;
+  const threshold = (TICK_SPIKE_THRESHOLD[symbol] || 0.02) * 2;  // 2× tick threshold (tightened from 3× in v14.25)
   const sanitized = [];
   let prevClose = null;
 
-  for (const bar of bars) {
+  for (let i = 0; i < bars.length; i++) {
+    const bar = bars[i];
     // Basic null/zero guard
     if (!bar.close || bar.close <= 0 || isNaN(bar.close)) {
       console.warn(`[BACKFILL-SANITIZE] ${symbol} skipping null/zero bar at ${bar.time}`);
@@ -102,6 +103,28 @@ function _sanitizeYahooBars(symbol, bars) {
           `close=${bar.close} prev=${prevClose} dev=${(deviation * 100).toFixed(1)}%`
         );
         continue;
+      }
+    }
+    // Range sanity check: discard bar if high-low range > 10× recent median range
+    // Uses 10× (not 5×) because 1m bars during high-volatility events (e.g. tariff
+    // announcements, FOMC) legitimately have 5-8× normal range.
+    const barRange = bar.high - bar.low;
+    if (barRange > 0 && sanitized.length >= 3) {
+      const recentRanges = [];
+      for (let j = Math.max(0, sanitized.length - 10); j < sanitized.length; j++) {
+        const r = sanitized[j].high - sanitized[j].low;
+        if (r > 0) recentRanges.push(r);
+      }
+      if (recentRanges.length >= 3) {
+        recentRanges.sort((a, b) => a - b);
+        const medianRange = recentRanges[Math.floor(recentRanges.length / 2)];
+        if (medianRange > 0 && barRange > medianRange * 10) {
+          console.warn(
+            `[BACKFILL-SANITIZE] ${symbol} skipping wide-range bar at ${bar.time}: ` +
+            `range=${barRange.toFixed(2)} median=${medianRange.toFixed(2)} (${(barRange / medianRange).toFixed(1)}×)`
+          );
+          continue;
+        }
       }
     }
     sanitized.push(bar);
