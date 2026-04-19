@@ -198,6 +198,60 @@ scripts/
 
 ---
 
+## Data Quality Detection System (v14.30)
+
+### What's detected (4 categories)
+1. **Price spikes / unrealistic wicks** — surfaced from `barValidator.js` (null/zero/NaN, open-gap, ATR spike clamp) and `_sanitizeCandles()` in snapshot.js (isolated spikes, extreme wicks)
+2. **Gaps / missing bars** — intra-session gap > 2× TF interval during CME Globex market hours
+3. **Stale / frozen bars** — no new bar in > 2× TF interval during market hours (stale > 5 min → bad)
+4. **OHLC broker-mismatch** — Yahoo Finance 1m cross-check: 0.3% threshold for equity (MNQ/MES/M2K/MYM), 0.5% for commodities (MGC/MCL/SIL/MHG); flagged only if ≥3 consecutive bars diverge
+
+### Status tiers and transition rules
+- **ok** — no issues in last 15 min, suspiciousBarCount === 0
+- **warning** — 1 issue in last 15 min OR suspiciousBarCount between 1 and 2
+- **bad** — 2+ issues in last 15 min OR suspiciousBarCount >= 3 OR stale > 5 min during market hours OR broker mismatch confirmed
+
+### Auto-refresh flow
+- When status transitions from non-bad → bad: `dataQuality.triggerAutoRefresh(symbol)` calls `dailyRefresh.refreshSymbol(symbol)` directly (in-process, not HTTP)
+- **5-min debounce**: skip if last auto-refresh < 5 minutes ago
+- **30-min backoff**: after refresh completes, if status is still bad, set backoff window — no retry for 30 minutes
+- After successful refresh: re-evaluates status; logs whether status recovered or backoff was set
+
+### UI surface
+- **Single chart badge**: 12px colored dot in top-right corner of `#chart-wrap` (green=ok, yellow=warning, red=bad with pulsing animation)
+- **Grid mode badge**: 8px inline dot in each mini-chart cell header
+- **Tooltip (hover)**: shows last 5 issues with type + timestamp
+- **Popover (click)**: shows issue count + "Refresh Now" button that calls `POST /api/refresh/symbol/:symbol`
+- State updates in real-time via `data_quality_update` WS events; initial load from `GET /api/data-quality`
+
+### Yahoo cross-validation scope
+- Runs every 5 minutes during RTH (13:30–21:00 UTC Mon–Fri) for all 8 tradeable CME futures
+- **Skipped symbols**: bonds (ZT/ZF/ZN/ZB/UB), FX (M6E/M6B), CME Bitcoin (MBT), crypto (BTC/ETH/XRP/XLM)
+- Uses Yahoo Finance v8 chart API with 1m interval, compares last 15 bars' closes
+
+### Market hours
+- CME Globex: Sun 18:00 ET → Fri 17:00 ET; daily 17:00–18:00 ET maintenance break
+- Stale/gap detection skipped during maintenance window and weekends
+- Gap detection: gaps spanning the maintenance window are excluded (expected behavior)
+
+### API routes
+| Route | Purpose |
+|---|---|
+| GET /api/data-quality | Full status map for all symbols/TFs |
+| GET /api/data-quality/:symbol | Status for one symbol (all TFs) |
+| POST /api/data-quality/check/:symbol | Manual full check (gap + stale + Yahoo) |
+
+### Files
+- `server/data/dataQuality.js` — core module: state management, detection functions, scheduler, auto-refresh
+- `server/data/barValidator.js` — emits `recordSuspiciousBar()` on reject/clamp events
+- `server/data/snapshot.js` — emits `recordSuspiciousBar()` in `_sanitizeCandles()` + `checkGap()` in `writeLiveCandle()`
+- `public/js/chart.js` — `_renderDQBadge()`, `ChartAPI.setDataQualityBadge()`
+- `public/js/chartManager.js` — grid mode badge rendering via `dataQualityInit`/`dataQualityUpdate` events
+- `public/js/alerts.js` — WS handler for `data_quality_update`, initial fetch, event dispatch
+- `public/css/dashboard.css` — badge/tooltip/popover styles
+
+---
+
 ## Options Data — server/data/options.js
 
 ### Data Source (v14.0 — dual-source)

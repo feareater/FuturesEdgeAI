@@ -4,6 +4,50 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v14.30] — 2026-04-18 — Data quality detection & auto-refresh
+
+### Added: Data quality detection layer
+- **NEW: `server/data/dataQuality.js`** — core detection module with four classes of bad data detection:
+  - **Price spikes / unrealistic wicks** — surfaces hits from barValidator + _sanitizeCandles instead of silently clamping
+  - **Gaps / missing bars** — intra-session gap > 2× TF interval during market hours
+  - **Stale / frozen bars** — no new bar in > 2× TF interval during market hours
+  - **OHLC broker-mismatch** — cross-check against Yahoo Finance secondary source (0.3% equity / 0.5% commodities threshold, ≥3 consecutive divergent bars)
+- **Per-symbol per-TF status tiers**: `ok` / `warning` / `bad` with automatic evaluation on every event
+- **Auto-refresh trigger**: when status transitions to `bad`, calls `dailyRefresh.refreshSymbol(symbol)` internally with 5-min debounce + 30-min backoff if refresh doesn't fix the issue
+- **Yahoo cross-validation**: runs every 5 min during RTH (13:30–21:00 UTC Mon–Fri); skips bonds, FX, CME Bitcoin, and crypto symbols
+- **Periodic scheduler**: stale check every 60s, gap check every 60s, Yahoo validation every 5 min; respects CME Globex hours (skips 17:00–18:00 ET maintenance + weekends)
+- **WS broadcast**: `data_quality_update` event on every status transition (symbol, tf, status, issues)
+- **3 new API routes**:
+  - `GET /api/data-quality` — full status map for all symbols/TFs
+  - `GET /api/data-quality/:symbol` — status for one symbol (all TFs)
+  - `POST /api/data-quality/check/:symbol` — manually trigger a full check (gap + stale + Yahoo)
+
+### Added: Per-chart data quality badge UI
+- **Single chart mode**: green/yellow/red dot badge in top-right corner of chart-wrap (12px, absolute positioned)
+  - Green ● = ok, Yellow ● = warning, Red ● = bad (pulsing animation)
+  - Hover tooltip: issue list with type + timestamp
+  - Click popover: "Refresh Now" button that calls `POST /api/refresh/symbol/:symbol`
+- **Grid mode**: smaller (8px) inline badge in each mini-chart cell header
+- Badges update in real-time via `data_quality_update` WS events
+- Initial state loaded from `GET /api/data-quality` on page load
+
+### Changed: barValidator.js + snapshot.js now emit suspicious-bar events
+- `barValidator.js` — calls `dataQuality.recordSuspiciousBar()` on null/zero reject, open-gap clamp, and ATR spike clamp
+- `snapshot.js` — calls `dataQuality.recordSuspiciousBar()` on bad bar removal (null/zero, isolated spike, extreme wick) in `_sanitizeCandles()`; calls `dataQuality.checkGap()` in `writeLiveCandle()` after each 1m bar append
+
+### Files changed
+- `server/data/dataQuality.js` — **NEW** — core detection module
+- `server/data/barValidator.js` — import dataQuality, emit suspicious-bar events on reject/clamp
+- `server/data/snapshot.js` — import dataQuality, emit events in _sanitizeCandles + writeLiveCandle
+- `server/index.js` — import dataQuality, wire scheduler + status change → broadcast + auto-refresh, add 3 API routes
+- `public/js/alerts.js` — WS handler for data_quality_update, initial fetch from /api/data-quality, dispatch events for grid mode
+- `public/js/chart.js` — _renderDQBadge(), setDataQualityBadge() in ChartAPI
+- `public/js/chartManager.js` — per-grid-cell badge, dataQualityInit/Update event listeners
+- `public/css/dashboard.css` — .dq-badge, .dq-tooltip, .dq-popover, @keyframes dq-pulse styles
+- `CHANGELOG.md`, `CLAUDE.md`, `CONTEXT_SUPPLEMENT.md`, `ROADMAP.md` — documentation updates
+
+---
+
 ## [v14.29] — 2026-04-11 — Forward-test simulator: one-trade-per-symbol gate + or_breakout session dedup
 
 ### Fixed: Duplicate forward trades from multi-TF scan

@@ -50,6 +50,27 @@
     }
   };
 
+  // ── Data quality state — per-symbol status from server ──────────────────────
+  const _dataQualityState = new Map(); // symbol → { status, issues, tf }
+
+  // Fetch initial data quality state on load
+  fetch('/api/data-quality').then(r => r.json()).then(data => {
+    for (const [sym, tfs] of Object.entries(data)) {
+      // Use worst status across TFs for badge display
+      let worstStatus = 'ok';
+      let allIssues = [];
+      for (const [tf, state] of Object.entries(tfs)) {
+        if (state.status === 'bad') worstStatus = 'bad';
+        else if (state.status === 'warning' && worstStatus !== 'bad') worstStatus = 'warning';
+        if (state.issues) allIssues = allIssues.concat(state.issues);
+      }
+      _dataQualityState.set(sym, { status: worstStatus, issues: allIssues });
+      window.ChartAPI?.setDataQualityBadge?.(sym, worstStatus, allIssues);
+    }
+    // Broadcast for grid mode
+    document.dispatchEvent(new CustomEvent('dataQualityInit', { detail: Object.fromEntries(_dataQualityState) }));
+  }).catch(() => {});
+
   // ── Active chart view — synced from chart.js via chartViewChange event ──────
   let activeSymbol = 'MNQ';
   let activeTf     = '5m';
@@ -2892,6 +2913,25 @@
           if (refreshIntervalEl && msg.intervalMins) {
             refreshIntervalEl.value = msg.intervalMins;
           }
+        }
+        if (msg.type === 'data_quality_update') {
+          // Data quality status changed for a symbol/TF
+          const prev = _dataQualityState.get(msg.symbol) || { status: 'ok', issues: [] };
+          // Merge: keep worst status across all TFs
+          const newIssues = msg.issues || [];
+          const mergedIssues = [...(prev.issues || []).slice(-10), ...newIssues].slice(-15);
+          const newStatus = msg.status === 'bad' ? 'bad'
+            : (msg.status === 'warning' && prev.status !== 'bad') ? 'warning'
+            : (msg.status === 'ok' && prev.status === 'ok') ? 'ok'
+            : prev.status; // keep worse status unless explicitly ok
+          // If status is ok and no remaining issues, reset
+          const finalStatus = msg.status === 'ok' ? 'ok' : newStatus;
+          _dataQualityState.set(msg.symbol, { status: finalStatus, issues: mergedIssues });
+          window.ChartAPI?.setDataQualityBadge?.(msg.symbol, finalStatus, mergedIssues);
+          // Broadcast for grid mode
+          document.dispatchEvent(new CustomEvent('dataQualityUpdate', {
+            detail: { symbol: msg.symbol, status: finalStatus, issues: mergedIssues }
+          }));
         }
       } catch (_) {}
     };

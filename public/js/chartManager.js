@@ -76,6 +76,7 @@
   <div class="chart-grid-cell-header">
     <span class="chart-grid-symbol">${sym}</span>
     <span class="chart-grid-price" id="grid-price-${sym}">—</span>
+    <div class="dq-badge ok" id="grid-dq-${sym}" title="Data quality: ok"></div>
     <span class="chart-grid-expand" title="Expand to single chart">&#8599;</span>
   </div>
   <div class="chart-grid-tf-selector">${tfBtns}</div>
@@ -370,6 +371,29 @@
         _loadGridData(sym, gridCharts[sym].tf || gridTf);
       }
     }
+  });
+
+  // ── Data quality badge updates (grid mode) ──────────────────────────────────
+  function _updateGridDQBadge(sym, status) {
+    const el = document.getElementById(`grid-dq-${sym}`);
+    if (!el) return;
+    el.className = `dq-badge ${status}`;
+    el.title = `Data quality: ${status}`;
+  }
+
+  document.addEventListener('dataQualityInit', (e) => {
+    if (mode !== 'grid') return;
+    const state = e.detail;
+    if (!state) return;
+    for (const [sym, info] of Object.entries(state)) {
+      _updateGridDQBadge(sym, info.status || 'ok');
+    }
+  });
+
+  document.addEventListener('dataQualityUpdate', (e) => {
+    if (mode !== 'grid') return;
+    const { symbol, status } = e.detail || {};
+    if (symbol && status) _updateGridDQBadge(symbol, status);
   });
 
   // ── Window resize — resize all grid charts ──────────────────────────────────

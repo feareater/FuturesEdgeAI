@@ -43,6 +43,7 @@ const { isDuplicate, applyStaleness, pruneExpired } = require('./analysis/alertD
 const { exportForwardTest } = require('./analysis/forwardTestExport');
 const pushManager = require('./push/pushManager');
 const dailyRefresh          = require('./data/dailyRefresh');
+const dataQuality           = require('./data/dataQuality');
 const settings              = require('../config/settings.json');
 const fs                    = require('fs');
 
@@ -1125,6 +1126,44 @@ app.post('/api/refresh/all', (_req, res) => {
 // GET /api/refresh/status — status of the last daily refresh run
 app.get('/api/refresh/status', (_req, res) => {
   res.json(dailyRefresh.getRefreshStatus());
+});
+
+// ---------------------------------------------------------------------------
+// Data Quality API routes (v14.30)
+// ---------------------------------------------------------------------------
+
+// GET /api/data-quality — full status map for all symbols/TFs
+app.get('/api/data-quality', (_req, res) => {
+  res.json(dataQuality.getAllStatus());
+});
+
+// GET /api/data-quality/:symbol — status for one symbol (all TFs)
+app.get('/api/data-quality/:symbol', (req, res) => {
+  const symbol = req.params.symbol?.toUpperCase();
+  res.json(dataQuality.getStatus(symbol));
+});
+
+// POST /api/data-quality/check/:symbol — manually trigger a full check
+app.post('/api/data-quality/check/:symbol', async (req, res) => {
+  const symbol = req.params.symbol?.toUpperCase();
+  const results = { symbol, checks: {} };
+
+  // Gap check across all TFs
+  for (const tf of ['1m', '5m', '15m', '30m']) {
+    try {
+      const bars = getCandles(symbol, tf);
+      const gap = dataQuality.checkGap(symbol, tf, bars);
+      const stale = dataQuality.checkStale(symbol, tf, bars?.length ? bars[bars.length - 1].time : 0);
+      results.checks[tf] = { gap: gap || null, stale: stale || null };
+    } catch { results.checks[tf] = { error: 'no data' }; }
+  }
+
+  // Yahoo cross-validation
+  try {
+    results.checks.yahoo = await dataQuality.crossValidateYahoo(symbol) || null;
+  } catch (err) { results.checks.yahoo = { error: err.message }; }
+
+  res.json(results);
 });
 
 // GET /api/scan  — manually trigger a full re-scan (useful for seed mode refresh)
@@ -3448,6 +3487,20 @@ async function start() {
     });
     console.log('[startup] Coinbase WebSocket starting for BTC/ETH/XRP live prices');
     }
+
+    // Data quality detection layer — periodic stale/gap/Yahoo cross-validation checks
+    // Runs in both seed and live modes: surfaces bad bars from sanitization + periodic checks
+    dataQuality.setGetCandlesFn(getCandles);
+    dataQuality.setRefreshFn(async (symbol) => {
+      await dailyRefresh.refreshSymbol(symbol);
+    });
+    dataQuality.onStatusChange(async (symbol, tf, oldStatus, newStatus, issues) => {
+      broadcast({ type: 'data_quality_update', symbol, tf, status: newStatus, issues });
+      if (newStatus === 'bad' && oldStatus !== 'bad') {
+        await dataQuality.triggerAutoRefresh(symbol);
+      }
+    });
+    dataQuality.startScheduler();
 
     // Data source summary — printed once after all init so it's easy to spot in logs
     const liveMode = settings.features?.liveData === true;

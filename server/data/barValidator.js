@@ -3,6 +3,8 @@
 // Catches out-of-range ticks, intra-bar inconsistencies, and spike artifacts
 // BEFORE bars reach the chart, disk, or aggregator.
 
+const dataQuality = require('./dataQuality');
+
 // ---------------------------------------------------------------------------
 // Per-symbol rolling ATR and stats
 // ---------------------------------------------------------------------------
@@ -73,6 +75,7 @@ function validateBar(symbol, bar, previousBar) {
       !_isFinitePositive(bar.low)  || !_isFinitePositive(bar.close)) {
     console.warn(`[barValidator] REJECTED ${symbol} @ ${bar.time}: null/zero/NaN in OHLC — o=${bar.open} h=${bar.high} l=${bar.low} c=${bar.close}`);
     stats.rejected++;
+    dataQuality.recordSuspiciousBar(symbol, '1m', { type: 'spike', ts: bar.time, details: { rule: 'null_zero_nan', value: `o=${bar.open} h=${bar.high} l=${bar.low} c=${bar.close}` } });
     return null;
   }
 
@@ -84,6 +87,7 @@ function validateBar(symbol, bar, previousBar) {
     const deviation = Math.abs(corrected.open - previousBar.close) / previousBar.close;
     if (deviation > OPEN_GAP_PCT) {
       console.warn(`[barValidator] OPEN GAP ${symbol} @ ${corrected.time}: open=${corrected.open}, prevClose=${previousBar.close}, dev=${(deviation * 100).toFixed(2)}% — clamping`);
+      dataQuality.recordSuspiciousBar(symbol, '1m', { type: 'spike', ts: corrected.time, details: { rule: 'open_gap', original: corrected.open, clamped: previousBar.close } });
       corrected.open = previousBar.close;
       corrected.validated = false;
       corrected.reason = 'open_gap';
@@ -153,6 +157,7 @@ function validateBar(symbol, bar, previousBar) {
   if (effectiveATR > 0 && range > SPIKE_ATR_MULT * effectiveATR) {
     const atr = effectiveATR;
     console.warn(`[barValidator] SPIKE CLAMPED ${symbol} @ ${corrected.time}: range was ${range.toFixed(4)}, ATR=${atr.toFixed(4)}`);
+    dataQuality.recordSuspiciousBar(symbol, '1m', { type: 'spike', ts: corrected.time, details: { rule: 'atr_spike', original: range, clamped: CLAMP_ATR_MULT * atr } });
     corrected.high = corrected.open + (CLAMP_ATR_MULT * atr);
     corrected.low  = corrected.open - (CLAMP_ATR_MULT * atr);
     // Re-apply consistency after clamping

@@ -72,6 +72,7 @@ FuturesEdgeAI/
 │   │   ├── snapshot.js        ← OHLCV fetch + candle normalization (source-agnostic); _sanitizeCandles has 3-pass filter (null/zero, close spikes via CLOSE_SPIKE_THRESHOLD, wick spikes); purgeAllInvalidBars rebuilds higher TFs from clean 1m
 │   │   ├── seedFetch.js       ← Yahoo Finance seed data fetch (MNQ/MGC/MES/MCL/SIL/M2K/MYM)
 │   │   ├── dailyRefresh.js    ← Hourly data refresh: Databento→Yahoo fallback, 60-min interval, all 16 CME symbols, HP recompute
+│   │   ├── dataQuality.js    ← Data quality detection: spike/gap/stale/broker-mismatch detection, per-symbol status (ok/warning/bad), auto-refresh trigger, Yahoo cross-validation
 │   │   ├── gapFill.js         ← Automatic candle gap detection + backfill (startup + 15min scheduler)
 │   │   ├── historicalPipeline.js ← Databento historical data pipeline (phases 1a–1f)
 │   │   └── calendar.js        ← ForexFactory economic calendar (1h cache)
@@ -375,6 +376,9 @@ Update at runtime via `POST /api/settings/span` or the SPAN Margins panel in the
 | `POST /api/refresh/all` | Trigger full 24h refresh for all 8 CME symbols + options HP (409 if already running) |
 | `GET /api/refresh/status` | Status of last daily refresh run (`{ lastRun, status, results }`) |
 | `GET /api/forward-test/export` | Export resolved alerts as flat analysis-ready JSON (query: start, end, setup, symbol, minConfidence) |
+| `GET /api/data-quality` | Full data quality status map for all symbols/TFs (ok/warning/bad + issues) |
+| `GET /api/data-quality/:symbol` | Data quality status for one symbol (all TFs) |
+| `POST /api/data-quality/check/:symbol` | Manually trigger full data quality check (gap + stale + Yahoo cross-validate) |
 
 ---
 

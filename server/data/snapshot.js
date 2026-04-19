@@ -15,6 +15,7 @@
 
 const fs   = require('fs');
 const path = require('path');
+const dataQuality = require('./dataQuality');
 
 const DATA_SOURCE  = process.env.DATA_SOURCE ?? 'seed';
 const SEED_DIR     = path.join(__dirname, '..', '..', 'data', 'seed');
@@ -108,12 +109,17 @@ function _sanitizeCandles(symbol, candles) {
   const threshold = CLOSE_SPIKE_THRESHOLD[symbol] ?? CLOSE_SPIKE_THRESHOLD.DEFAULT;
   let removed = 0;
 
+  // Only fire DQ events for recent bars (last 30 min) — avoids flooding DQ system
+  // with historical data cleanup events at startup
+  const _dqRecencyCutoff = Math.floor(Date.now() / 1000) - 1800;
+
   // Pass 1: remove null/zero/NaN bars
   const valid = [];
   for (const c of candles) {
     if (c.close == null || !isFinite(c.close) || c.close <= 0 ||
         c.open == null  || !isFinite(c.open)  || c.open <= 0) {
       console.warn(`[SANITIZE] Removed bad bar for ${symbol} @ ${c.time}: close=${c.close}, open=${c.open}`);
+      if (c.time > _dqRecencyCutoff) dataQuality.recordSuspiciousBar(symbol, '1m', { type: 'spike', ts: c.time, details: { rule: 'null_zero', original: c.close, clamped: null } });
       removed++;
       continue;
     }
@@ -134,6 +140,7 @@ function _sanitizeCandles(symbol, candles) {
       if (moveNext < threshold * 0.5) {
         // Isolated spike — next bar is back near previous level
         console.warn(`[SANITIZE] Removed isolated spike for ${symbol} @ ${curr.time}: close=${curr.close}, prevClose=${prev.close}, nextClose=${next.close}`);
+        if (curr.time > _dqRecencyCutoff) dataQuality.recordSuspiciousBar(symbol, '1m', { type: 'spike', ts: curr.time, details: { rule: 'isolated_spike', original: curr.close, clamped: null } });
         spikeIndices.add(i);
         removed++;
       }
@@ -170,6 +177,7 @@ function _sanitizeCandles(symbol, candles) {
 
     if (maxWick > medianRange * WICK_RANGE_MULT && medianRange > 0) {
       console.warn(`[SANITIZE] Removed extreme-wick bar for ${symbol} @ ${c.time}: H=${c.high} L=${c.low} C=${c.close} wick=${maxWick.toFixed(2)} medianRange=${medianRange.toFixed(2)}`);
+      if (c.time > _dqRecencyCutoff) dataQuality.recordSuspiciousBar(symbol, '1m', { type: 'spike', ts: c.time, details: { rule: 'extreme_wick', original: maxWick, clamped: null } });
       spikeIndices.add(i);
       removed++;
     }
@@ -430,6 +438,12 @@ function writeLiveCandle(symbol, candle) {
   if (bars.length > MAX_LIVE_BARS) bars.splice(0, bars.length - MAX_LIVE_BARS);
 
   liveCandles.set(key1m, bars);
+
+  // Check for gaps in recent 1m bars after appending
+  const gapIssue = dataQuality.checkGap(symbol, '1m', bars);
+  if (gapIssue) {
+    dataQuality.recordSuspiciousBar(symbol, '1m', { type: 'gap', ts: candle.time, details: gapIssue.details });
+  }
 
   // Aggregate into higher TFs — emit a bar when its window just closed
   const completed = [];

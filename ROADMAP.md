@@ -4,7 +4,7 @@
 > Read alongside CLAUDE.md and AI_ROADMAP.md.
 > Updated after every completed phase or significant decision.
 
-**Current version:** v14.10
+**Current version:** v14.30
 **Last updated:** 2026-04-07
 
 ---
@@ -31,6 +31,7 @@ FuturesEdge AI is a browser-based futures trading analysis dashboard that detect
 - Market breadth system: 16-instrument cross-market regime scoring (equityBreadth, bondRegime, copperRegime, dollarRegime, riskAppetite)
 - Breadth cache (4082 dates pre-computed) + TF pre-aggregation (134K files, all 16 symbols)
 - Hourly data refresh: 60-min interval, 95-min lookback, all 16 CME symbols (Databento→Yahoo fallback), HP recompute, OPRA baseline subscription (QQQ/SPY/USO/GLD/IWM/SLV)
+- Data quality detection layer: real-time spike/gap/stale/broker-mismatch detection with per-chart badge and auto-refresh trigger (v14.30)
 
 ### Analysis Engine
 - Indicators: EMA 9/21/50, VWAP, ATR(14), PDH/PDL, swing H/L, volume profile, opening range, session levels

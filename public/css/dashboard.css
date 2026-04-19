@@ -3404,3 +3404,109 @@ html, body {
 }
 .as-bar-fill.bull { background: var(--bull, #26a69a); }
 .as-bar-fill.bear { background: var(--bear, #ef5350); }
+
+/* ── Data Quality Badge (v14.30) ─────────────────────────────────────────── */
+
+.dq-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  z-index: 10;
+  cursor: pointer;
+  border: 1px solid rgba(255,255,255,0.15);
+  transition: opacity 0.2s;
+}
+.dq-badge.ok      { background: #22c55e; }
+.dq-badge.warning  { background: #eab308; }
+.dq-badge.bad      { background: #ef4444; animation: dq-pulse 1.5s infinite; }
+
+@keyframes dq-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.4; }
+}
+
+/* Grid mode: smaller badge, positioned relative to cell header */
+.chart-grid-cell-header .dq-badge {
+  position: relative;
+  top: auto;
+  right: auto;
+  width: 8px;
+  height: 8px;
+  display: inline-block;
+  vertical-align: middle;
+  margin-left: 4px;
+}
+
+/* Tooltip (hover) */
+.dq-tooltip {
+  position: absolute;
+  top: 26px;
+  right: 8px;
+  width: 260px;
+  background: rgba(20, 20, 28, 0.95);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 6px;
+  padding: 8px 10px;
+  z-index: 20;
+  font-size: 11px;
+  color: #ccc;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+  pointer-events: none;
+}
+.dq-tooltip-title {
+  font-weight: 600;
+  color: #fff;
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+.dq-tooltip-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.dq-tooltip-row:last-child { border-bottom: none; }
+.dq-tt-type { text-transform: capitalize; }
+.dq-tt-time { color: #888; font-size: 10px; }
+
+/* Popover (click) */
+.dq-popover {
+  position: absolute;
+  top: 26px;
+  right: 8px;
+  width: 220px;
+  background: rgba(25, 25, 35, 0.97);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 8px;
+  padding: 12px;
+  z-index: 25;
+  font-size: 12px;
+  color: #ccc;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.6);
+}
+.dq-popover-title {
+  font-weight: 600;
+  color: #fff;
+  margin-bottom: 6px;
+}
+.dq-popover-info {
+  margin-bottom: 10px;
+  color: #999;
+  font-size: 11px;
+}
+.dq-popover-btn {
+  width: 100%;
+  padding: 6px 0;
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 4px;
+  background: rgba(255,255,255,0.08);
+  color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.15s;
+}
+.dq-popover-btn:hover { background: rgba(255,255,255,0.15); }
+.dq-popover-btn:disabled { opacity: 0.5; cursor: default; }

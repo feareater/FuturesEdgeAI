@@ -1374,6 +1374,73 @@
     }
   }
 
+  // ── Data Quality Badge ─────────────────────────────────────────────────────
+  let _dqBadge = null;
+  let _dqTooltip = null;
+  let _dqPopover = null;
+
+  function _renderDQBadge(status, issues) {
+    const wrap = document.getElementById('chart-wrap');
+    if (!wrap) return;
+
+    // Create badge if it doesn't exist
+    if (!_dqBadge) {
+      _dqBadge = document.createElement('div');
+      _dqBadge.className = 'dq-badge';
+      wrap.appendChild(_dqBadge);
+
+      // Tooltip (hover)
+      _dqTooltip = document.createElement('div');
+      _dqTooltip.className = 'dq-tooltip';
+      _dqTooltip.style.display = 'none';
+      wrap.appendChild(_dqTooltip);
+
+      // Popover (click)
+      _dqPopover = document.createElement('div');
+      _dqPopover.className = 'dq-popover';
+      _dqPopover.style.display = 'none';
+      wrap.appendChild(_dqPopover);
+
+      _dqBadge.addEventListener('mouseenter', () => {
+        if (_dqTooltip.innerHTML) _dqTooltip.style.display = 'block';
+      });
+      _dqBadge.addEventListener('mouseleave', () => {
+        _dqTooltip.style.display = 'none';
+      });
+      _dqBadge.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const isVisible = _dqPopover.style.display !== 'none';
+        _dqPopover.style.display = isVisible ? 'none' : 'block';
+      });
+      document.addEventListener('click', () => {
+        if (_dqPopover) _dqPopover.style.display = 'none';
+      });
+    }
+
+    // Update badge class
+    _dqBadge.className = `dq-badge ${status}`;
+    _dqBadge.title = `Data quality: ${status}`;
+
+    // Update tooltip content
+    if (issues && issues.length > 0) {
+      const rows = issues.slice(-5).map(iss => {
+        const time = iss.detectedAt ? new Date(iss.detectedAt).toLocaleTimeString() : '—';
+        const type = (iss.type || 'unknown').replace(/_/g, ' ');
+        return `<div class="dq-tooltip-row"><span class="dq-tt-type">${type}</span><span class="dq-tt-time">${time}</span></div>`;
+      }).join('');
+      _dqTooltip.innerHTML = `<div class="dq-tooltip-title">Data Quality: ${status.toUpperCase()}</div>${rows}`;
+    } else {
+      _dqTooltip.innerHTML = `<div class="dq-tooltip-title">Data Quality: OK</div><div class="dq-tooltip-row">No issues detected</div>`;
+    }
+
+    // Update popover content
+    _dqPopover.innerHTML = `
+      <div class="dq-popover-title">Data Quality: ${status.toUpperCase()}</div>
+      <div class="dq-popover-info">${issues?.length || 0} issue(s) detected</div>
+      <button class="dq-popover-btn" onclick="(async()=>{this.textContent='Refreshing…';this.disabled=true;try{await fetch('/api/refresh/symbol/${activeSymbol}',{method:'POST'});this.textContent='Refreshed';}catch(e){this.textContent='Failed';}setTimeout(()=>{this.textContent='Refresh Now';this.disabled=false;},3000);})()">Refresh Now</button>
+    `;
+  }
+
   // ── Public API (consumed by layers.js + alerts.js) ─────────────────────────
   window.ChartAPI = {
     setLayerVisible(key, visible) {
@@ -1481,6 +1548,13 @@
       lastGammaData = data;
       clearGammaLines();
       if (vis.optionsLevels && data) _drawGammaLevels(data);
+    },
+
+    // Data quality badge — renders a colored dot in the top-right of the chart container.
+    // Called by alerts.js on data_quality_update WS events and on initial load.
+    setDataQualityBadge(symbol, status, issues) {
+      if (symbol !== activeSymbol) return;
+      _renderDQBadge(status, issues);
     },
 
     // Plot colored alert arrows on the chart for the current symbol + TF.
