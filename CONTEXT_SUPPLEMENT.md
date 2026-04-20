@@ -489,7 +489,15 @@ Diagnostic: `GET /api/bias/debug?symbol=MNQ` — [server/index.js:1562-1641](ser
 Updates on: page load, symbol switch, WS setup/data_refresh messages.
 Collapse state persisted in localStorage (`biasPanelOpen`).
 
-### v14.27.1 diagnostic — known bias panel issues
+### v14.28 — bias panel UI clarity + macro-readiness-aware conviction
+
+Implements P0 and the two P1 UI-clarity items from the v14.27.1 diagnostic ([data/analysis/2026-04-20_bias_macro_reconciliation.md](data/analysis/2026-04-20_bias_macro_reconciliation.md) §8). Client JS + CSS only.
+
+- **P0** — `_computeConviction()` at [public/js/alerts.js:3448](public/js/alerts.js#L3448) now signature `(setupScore, macroScore, readinessStatus, blockedGateIds)`. `readinessStatus==='blocked'` hard-gates to `STAND ASIDE — Macro BLOCKED — <gate ids>`. `readinessStatus==='caution'` demotes the computed tier by one step (HIGH CONVICTION → GOOD SETUP → MODERATE SETUP → MARGINAL → STAND ASIDE) with a `macro CAUTION (demoted from X)` sublabel tag. `fetchAndRenderBias()` caches `window._lastReadinessStatus` + `window._lastBlockedGateIds` so `_renderConviction()` can thread them in.
+- **P1 gates** — gate rows render `g.detail` (live state string) as primary text, with the static gate name + id as the hover tooltip. Prevents users reading the gate name as a present-state claim. Falls back to `g.label` if `g.detail` is empty.
+- **P1 signals** — ✓/➖/✗ icons indicate *alignment with overall `b.direction`*: ✓ when `sign(contribution)` matches, ✗ when opposed, ➖ on 0 contribution or neutral overall direction. Legend row ("✓ aligned  ➖ neutral  ✗ against") rendered once at the top of the signal list.
+
+### v14.27.1 diagnostic — known bias panel issues (now partially resolved by v14.28)
 
 See [data/analysis/2026-04-20_bias_macro_reconciliation.md](data/analysis/2026-04-20_bias_macro_reconciliation.md) for full field-source tables and live capture.
 

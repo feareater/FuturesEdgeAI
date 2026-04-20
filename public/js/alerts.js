@@ -3184,10 +3184,17 @@
         _showInitializing();
         return;
       }
-      if (data.readiness) _renderReadiness(data.readiness);
+      if (data.readiness) {
+        _renderReadiness(data.readiness);
+        window._lastReadinessStatus = data.readiness.overallStatus ?? null;
+        window._lastBlockedGateIds = (data.readiness.gates || [])
+          .filter(g => g.status === 'blocked')
+          .map(g => g.id);
+      }
       if (data.bias) {
         _renderDirectionalBias(data.bias);
         window._lastMacroScore = data.bias.score;
+        window._lastBiasDirection = data.bias.direction ?? 'neutral';
       }
       _renderSetupScore();
       _renderConviction();
@@ -3231,13 +3238,13 @@
       badge.textContent = txt;
     }
 
-    // Gate list
+    // Gate list — render live state (g.detail) as primary text, static gate name as tooltip
     const gateEl = document.getElementById('bias-gate-list');
     if (gateEl) {
       // Build gate rows if count changed, otherwise update in-place
       if (gateEl.children.length !== r.gates.length) {
-        gateEl.innerHTML = r.gates.map(g =>
-          `<div class="bias-gate-row" data-gate="${g.id}" title="${g.detail}">` +
+        gateEl.innerHTML = r.gates.map(() =>
+          `<div class="bias-gate-row">` +
             `<span class="bias-gate-icon"></span>` +
             `<span class="bias-gate-label"></span>` +
           `</div>`
@@ -3246,7 +3253,9 @@
       r.gates.forEach((g, i) => {
         const row = gateEl.children[i];
         if (!row) return;
-        row.title = g.detail;
+        row.dataset.gate = g.id;
+        // Tooltip: static gate name + id, so users can still see the gate identity on hover
+        row.title = g.label + ' (' + g.id + ')';
         const icon  = row.querySelector('.bias-gate-icon');
         const label = row.querySelector('.bias-gate-label');
         if (icon) {
@@ -3254,7 +3263,8 @@
           icon.className = 'bias-gate-icon ' +
             (g.status === 'pass' ? 'gate-pass' : g.status === 'caution' ? 'gate-caution' : 'gate-blocked');
         }
-        if (label) label.textContent = g.label;
+        // Primary text = live state (g.detail). Fall back to gate name if detail is missing/empty.
+        if (label) label.textContent = (g.detail && g.detail.trim()) ? g.detail : g.label;
       });
     }
     _biasBuilt = true;
@@ -3321,11 +3331,23 @@
       lblEl.textContent = (b.score >= 0 ? '+' : '') + b.score + ' / ' + b.scoreMax;
     }
 
-    // Signal list
+    // Signal list — icons indicate alignment with overall bias direction:
+    //   \u2713 (aligned) when sign(contribution) matches b.direction
+    //   \u2796 (neutral) when contribution === 0, or when b.direction is neutral
+    //   \u2717 (against) when sign(contribution) opposes b.direction
     const listEl = document.getElementById('bias-signal-list');
     if (listEl) {
-      if (listEl.children.length !== b.signals.length) {
-        listEl.innerHTML = b.signals.map(() =>
+      const legendHTML =
+        '<div class="bias-signal-legend">' +
+          '<span class="sig-check">\u2713</span> aligned' +
+          '<span class="bias-legend-sep">&nbsp;&nbsp;</span>' +
+          '<span class="sig-neutral">\u2796</span> neutral' +
+          '<span class="bias-legend-sep">&nbsp;&nbsp;</span>' +
+          '<span class="sig-x">\u2717</span> against' +
+        '</div>';
+      const expectedChildren = b.signals.length + 1; // +1 for the legend row
+      if (listEl.children.length !== expectedChildren) {
+        listEl.innerHTML = legendHTML + b.signals.map(() =>
           '<div class="bias-signal-row">' +
             '<span class="bias-sig-label"></span>' +
             '<span class="bias-sig-value"></span>' +
@@ -3333,8 +3355,9 @@
           '</div>'
         ).join('');
       }
+      const overall = b.direction || 'neutral'; // 'bullish' | 'bearish' | 'neutral'
       b.signals.forEach((s, i) => {
-        const row = listEl.children[i];
+        const row = listEl.children[i + 1]; // skip legend at index 0
         if (!row) return;
         const label  = row.querySelector('.bias-sig-label');
         const value  = row.querySelector('.bias-sig-value');
@@ -3342,13 +3365,17 @@
         if (label) label.textContent = s.label;
         if (value) value.textContent = s.value;
         if (status) {
-          if (s.contribution !== 0) {
-            status.textContent = '\u2713';
-            status.className = 'bias-sig-status sig-check';
+          const c = s.contribution || 0;
+          let glyph, cls;
+          if (c === 0 || overall === 'neutral') {
+            glyph = '\u2796'; cls = 'sig-neutral';
+          } else if ((c > 0 && overall === 'bullish') || (c < 0 && overall === 'bearish')) {
+            glyph = '\u2713'; cls = 'sig-check';
           } else {
-            status.textContent = '\u2717';
-            status.className = 'bias-sig-status sig-x';
+            glyph = '\u2717'; cls = 'sig-x';
           }
+          status.textContent = glyph;
+          status.className = 'bias-sig-status ' + cls;
         }
       });
     }
@@ -3434,9 +3461,34 @@
   }
 
   // ── Conviction Row ─────────────────────────────────────────────────────────
-  function _computeConviction(setupScore, macroScore) {
+  // Demotion ladder for `caution` readiness — soft-demote the computed tier by one step.
+  const _CONVICTION_DEMOTE = {
+    'HIGH CONVICTION':     'GOOD SETUP',
+    'GOOD SETUP':          'MODERATE SETUP',
+    'TECHNICALLY DRIVEN':  'MODERATE SETUP',
+    'MODERATE SETUP':      'MARGINAL',
+    'MACRO TAILWIND':      'MARGINAL',
+    'MARGINAL':            'STAND ASIDE',
+    'COUNTER-MACRO':       'STAND ASIDE',
+    'CAUTION':             'STAND ASIDE',
+  };
+
+  function _computeConviction(setupScore, macroScore, readinessStatus, blockedGateIds) {
     // setupScore: negative = short signal, positive = long signal (range roughly -100 to +100)
     // macroScore: negative = bearish macro, positive = bullish macro (range -18 to +18)
+
+    // Macro BLOCKED overrides everything — hard gate.
+    if (readinessStatus === 'blocked') {
+      const gateList = Array.isArray(blockedGateIds) && blockedGateIds.length
+        ? ' \u2014 ' + blockedGateIds.join(', ')
+        : '';
+      return {
+        label: 'STAND ASIDE',
+        sublabel: 'Macro BLOCKED' + gateList,
+        color: 'conviction-red',
+      };
+    }
+
     const setupMag = Math.abs(setupScore);
     const macroMag = Math.abs(macroScore);
     const setupDir = setupScore < -15 ? 'short' : setupScore > 15 ? 'long' : 'neutral';
@@ -3451,48 +3503,62 @@
     // Soft agreement: both lean same direction even if macro below threshold
     const sameSign = (setupScore > 0 && macroScore > 0) || (setupScore < 0 && macroScore < 0);
 
-    // STAND ASIDE: strong conflict with strong macro — most severe, check first
-    if (conflict && setupMag >= 35 && macroMag >= 8)
-      return { label: 'STAND ASIDE', sublabel: 'Setup and macro in direct opposition \u2014 do not trade', color: 'conviction-red' };
+    // Compute the base tier first; caution demotion is applied once at the end.
+    let result;
+    if (conflict && setupMag >= 35 && macroMag >= 8) {
+      // STAND ASIDE: strong conflict with strong macro — most severe
+      result = { label: 'STAND ASIDE', sublabel: 'Setup and macro in direct opposition \u2014 do not trade', color: 'conviction-red' };
+    } else if (conflict && setupMag >= 35 && macroMag >= 5) {
+      // COUNTER-MACRO: setup conflicts with macro direction (meaningful both sides)
+      result = { label: 'COUNTER-MACRO', sublabel: 'Setup direction conflicts with macro bias \u2014 reduced confidence', color: 'conviction-amber' };
+    } else if (conflict && setupMag >= 50) {
+      // CAUTION: strong setup conflicts with weaker macro signal
+      result = { label: 'CAUTION', sublabel: 'Setup strongly conflicts with macro \u2014 high risk', color: 'conviction-red' };
+    } else if (conflict) {
+      // MARGINAL: weak conflict or weak signals
+      result = { label: 'MARGINAL', sublabel: 'Weak or conflicting signals', color: 'conviction-amber' };
+    } else if (agree && setupMag >= 50 && macroMag >= 8) {
+      // HIGH CONVICTION: strong setup + macro agree
+      result = { label: 'HIGH CONVICTION', sublabel: 'Strong setup with broad macro confirmation', color: 'conviction-bright-green' };
+    } else if (agree && setupMag >= 35 && macroMag >= 5) {
+      // GOOD SETUP: setup + macro agree, setup strong
+      result = { label: 'GOOD SETUP', sublabel: 'Setup and macro aligned', color: 'conviction-green' };
+    } else if (!conflict && setupMag >= 50 && noMacro) {
+      // TECHNICALLY DRIVEN: strong setup, macro neutral
+      result = { label: 'TECHNICALLY DRIVEN', sublabel: 'Strong setup, macro neutral \u2014 watch for confirmation', color: 'conviction-green' };
+    } else if (!conflict && !noMacro && macroMag >= 8 && noSetup) {
+      // MACRO TAILWIND: macro strong but setup weak/neutral
+      result = { label: 'MACRO TAILWIND', sublabel: 'Macro favorable but no setup yet \u2014 wait for entry', color: 'conviction-amber' };
+    } else if ((agree || sameSign) && setupMag >= 20 && macroMag >= 3) {
+      // MODERATE SETUP: both lean same direction (agree or soft sameSign)
+      result = { label: 'MODERATE SETUP', sublabel: 'Moderate alignment \u2014 size down', color: 'conviction-amber' };
+    } else if (!noMacro && noSetup && !conflict) {
+      // MACRO TAILWIND NO SETUP: macro present, setup neutral/absent
+      result = { label: 'MACRO TAILWIND', sublabel: 'No active setup \u2014 wait', color: 'conviction-gray' };
+    } else {
+      // Default
+      result = { label: 'STAND ASIDE', sublabel: 'Insufficient signal clarity', color: 'conviction-gray' };
+    }
+    return _applyCautionDemotion(result, readinessStatus);
+  }
 
-    // COUNTER-MACRO: setup conflicts with macro direction (meaningful both sides)
-    if (conflict && setupMag >= 35 && macroMag >= 5)
-      return { label: 'COUNTER-MACRO', sublabel: 'Setup direction conflicts with macro bias \u2014 reduced confidence', color: 'conviction-amber' };
-
-    // CAUTION: strong setup conflicts with weaker macro signal
-    if (conflict && setupMag >= 50)
-      return { label: 'CAUTION', sublabel: 'Setup strongly conflicts with macro \u2014 high risk', color: 'conviction-red' };
-
-    // MARGINAL: weak conflict or weak signals
-    if (conflict)
-      return { label: 'MARGINAL', sublabel: 'Weak or conflicting signals', color: 'conviction-amber' };
-
-    // HIGH CONVICTION: strong setup + macro agree
-    if (agree && setupMag >= 50 && macroMag >= 8)
-      return { label: 'HIGH CONVICTION', sublabel: 'Strong setup with broad macro confirmation', color: 'conviction-bright-green' };
-
-    // GOOD SETUP: setup + macro agree, setup strong
-    if (agree && setupMag >= 35 && macroMag >= 5)
-      return { label: 'GOOD SETUP', sublabel: 'Setup and macro aligned', color: 'conviction-green' };
-
-    // TECHNICALLY DRIVEN: strong setup, macro neutral
-    if (!conflict && setupMag >= 50 && noMacro)
-      return { label: 'TECHNICALLY DRIVEN', sublabel: 'Strong setup, macro neutral \u2014 watch for confirmation', color: 'conviction-green' };
-
-    // MACRO TAILWIND: macro strong but setup weak/neutral
-    if (!conflict && !noMacro && macroMag >= 8 && noSetup)
-      return { label: 'MACRO TAILWIND', sublabel: 'Macro favorable but no setup yet \u2014 wait for entry', color: 'conviction-amber' };
-
-    // MODERATE SETUP: both lean same direction (agree or soft sameSign)
-    if ((agree || sameSign) && setupMag >= 20 && macroMag >= 3)
-      return { label: 'MODERATE SETUP', sublabel: 'Moderate alignment \u2014 size down', color: 'conviction-amber' };
-
-    // MACRO TAILWIND NO SETUP: macro present, setup neutral/absent
-    if (!noMacro && noSetup && !conflict)
-      return { label: 'MACRO TAILWIND', sublabel: 'No active setup \u2014 wait', color: 'conviction-gray' };
-
-    // Default
-    return { label: 'STAND ASIDE', sublabel: 'Insufficient signal clarity', color: 'conviction-gray' };
+  // Demote the computed conviction tier by one step when macro readiness is `caution`.
+  // Applied as a post-compute step so the existing tier-matching logic stays intact.
+  function _applyCautionDemotion(result, readinessStatus) {
+    if (readinessStatus !== 'caution' || !result) return result;
+    const demoted = _CONVICTION_DEMOTE[result.label];
+    if (!demoted || demoted === result.label) return result;
+    const colorByLabel = {
+      'GOOD SETUP':     'conviction-green',
+      'MODERATE SETUP': 'conviction-amber',
+      'MARGINAL':       'conviction-amber',
+      'STAND ASIDE':    'conviction-red',
+    };
+    return {
+      label: demoted,
+      sublabel: (result.sublabel || '') + ' \u2014 macro CAUTION (demoted from ' + result.label + ')',
+      color: colorByLabel[demoted] || result.color,
+    };
   }
 
   function _renderConviction() {
@@ -3500,8 +3566,10 @@
     const detailEl = document.getElementById('conviction-detail');
     if (!labelEl || !detailEl) return;
 
-    const setupData  = window._lastSetupData;
-    const macroScore = window._lastMacroScore;
+    const setupData        = window._lastSetupData;
+    const macroScore       = window._lastMacroScore;
+    const readinessStatus  = window._lastReadinessStatus ?? null;
+    const blockedGateIds   = window._lastBlockedGateIds ?? [];
 
     // Default fallback
     if (!setupData || macroScore == null) {
@@ -3513,9 +3581,9 @@
 
     // Use signed setup score for directional agreement check
     const setupScore = setupData.score ?? 0;
-    const result = _computeConviction(setupScore, macroScore);
+    const result = _computeConviction(setupScore, macroScore, readinessStatus, blockedGateIds);
 
-    console.log('conviction:', { setupScore, macroScore,
+    console.log('conviction:', { setupScore, macroScore, readinessStatus, blockedGateIds,
       setupDir: setupScore < -15 ? 'short' : setupScore > 15 ? 'long' : 'neutral',
       macroDir: macroScore < -4 ? 'bearish' : macroScore > 4 ? 'bullish' : 'neutral',
       agree: (setupScore < -15 && macroScore < -4) || (setupScore > 15 && macroScore > 4),

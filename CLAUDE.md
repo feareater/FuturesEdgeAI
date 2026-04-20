@@ -339,6 +339,7 @@ Default view (Reset to Default): all layers ON.
 | AB (v13.4) | Databento TCP live feed — CRAM auth, ohlcv-1s ticks (1s chart updates via `_liveTickBar`), ohlcv-1m bars, seed+live merge in `getCandles()`, `live_candle` WS handler, `updateLiveCandle()` in chart.js | ✅ Complete |
 | AC (v14.3) | Bar validation layer (barValidator.js) + all 8 CME symbols on live feed (MNQ/MES/MGC/MCL/SIL/M2K/MYM/MHG) | ✅ Complete |
 | v14.27.1 (diagnostic) | Bias panel ↔ macro context reconciliation — field sources documented, live capture, prioritized fix list (P0: macro readiness → conviction; P1: fragile resilience sign; gate/signal UI semantics). See [data/analysis/2026-04-20_bias_macro_reconciliation.md](data/analysis/2026-04-20_bias_macro_reconciliation.md) | ✅ Complete (diagnostic only; fixes pending) |
+| v14.28 | Conviction sees macro readiness + bias panel UI clarity — P0 (`_computeConviction()` hard-gates STAND ASIDE on `readiness.overallStatus==='blocked'` with blocking-gate sublabel; `caution` demotes one tier), P1 gate rows render `g.detail` (live state) with static label as tooltip, P1 signal icons become ✓ aligned / ➖ neutral / ✗ against with a legend row. Client JS + CSS only, no server restart. Remaining: P1 resilience sign, P2 forward-test stamping, P2 `deriveMarketSnapshot` helper. | ✅ Complete |
 
 ---
 

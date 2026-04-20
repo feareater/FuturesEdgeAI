@@ -3148,8 +3148,30 @@ html, body {
   flex-shrink: 0;
 }
 
-.sig-check { color: var(--bull); }
-.sig-x     { color: var(--bear); }
+.sig-check   { color: var(--bull); }
+.sig-x       { color: var(--bear); }
+.sig-neutral { color: var(--text-dim); }
+
+/* Signal list legend — shown once above the 11 signal rows */
+.bias-signal-legend {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 9px;
+  color: var(--text-dim);
+  padding: 2px 0 4px 0;
+  margin-bottom: 2px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  white-space: nowrap;
+}
+.bias-signal-legend .sig-check,
+.bias-signal-legend .sig-neutral,
+.bias-signal-legend .sig-x {
+  font-size: 11px;
+  font-weight: 700;
+  margin-right: 2px;
+}
+.bias-legend-sep { width: 10px; display: inline-block; }
 
 /* ── Setup Score section (3rd column) ──────────────────────────────────── */
 

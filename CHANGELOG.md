@@ -4,6 +4,41 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v14.28] — 2026-04-20 — Conviction sees macro readiness + bias panel UI clarity
+
+Implements P0 and the two P1 UI-clarity items from the v14.27.1 diagnostic ([data/analysis/2026-04-20_bias_macro_reconciliation.md](data/analysis/2026-04-20_bias_macro_reconciliation.md) §8). The P1 resilience-sign fix and the P2 items (forward-test stamping, `deriveMarketSnapshot` helper) remain deferred to their own sessions so each change's effect is observable in isolation.
+
+### Fixed — Macro BLOCKED now forces STAND ASIDE conviction (P0)
+- `_computeConviction()` at [public/js/alerts.js:3448](public/js/alerts.js#L3448) now takes `(setupScore, macroScore, readinessStatus, blockedGateIds)` and short-circuits to **STAND ASIDE** when `readinessStatus === 'blocked'`. The sublabel names the blocking gate IDs (`STAND ASIDE — Macro BLOCKED — dex-neutral`), directly fixing the screenshot regression where a BLOCKED macro + bullish bias was still producing MODERATE SETUP.
+- When `readinessStatus === 'caution'`, the computed tier is demoted one step via a post-compute ladder (`HIGH CONVICTION → GOOD SETUP → MODERATE SETUP → MARGINAL → STAND ASIDE`). Sublabel is tagged `macro CAUTION (demoted from X)` so the override is visible, not silent.
+- `fetchAndRenderBias()` at [public/js/alerts.js:3187-3199](public/js/alerts.js#L3187) now caches `window._lastReadinessStatus` and `window._lastBlockedGateIds` alongside `_lastMacroScore`; `_renderConviction()` at [public/js/alerts.js:3562-3572](public/js/alerts.js#L3562) passes them to `_computeConviction()`.
+
+### Changed — Macro gate rows render live state, not static gate names (P1)
+- [public/js/alerts.js:3234-3262](public/js/alerts.js#L3234) — gate rows now show `g.detail` (e.g. "DXY flat, hour 19 — no late-session block", "DEX neutral — options flow has no directional conviction") as primary text. The static gate label and id become the hover tooltip (`row.title`), so users can still identify the gate but can no longer misread the name as a state claim. Falls back to `g.label` if `g.detail` is empty.
+
+### Changed — Signal ✓/➖/✗ icons now indicate alignment with overall bias (P1)
+- [public/js/alerts.js:3336-3380](public/js/alerts.js#L3336) — three-state icon scheme driven by `sign(signal.contribution)` vs `b.direction`:
+  - **✓ aligned** — non-zero contribution with sign matching overall bias direction
+  - **➖ neutral** — contribution === 0, or overall bias is neutral (no direction to align with)
+  - **✗ against** — non-zero contribution with sign opposing overall bias direction
+- Small legend row rendered once at the top of the signal list: "✓ aligned  ➖ neutral  ✗ against". Existing green/red colors preserved; new `.sig-neutral { color: var(--text-dim); }` added in [public/css/dashboard.css](public/css/dashboard.css).
+- No longer mutates `listEl.innerHTML` on every tick when count is stable — expected child count is `signals.length + 1` (legend row).
+
+### Files changed
+- `public/js/alerts.js` — the three changes above
+- `public/css/dashboard.css` — `.sig-neutral`, `.bias-signal-legend`, `.bias-legend-sep`
+- `data/analysis/2026-04-20_bias_ui_fix_verification.png` — post-change dashboard screenshot (MNQ, readiness blocked by `dex-neutral`)
+- `CHANGELOG.md`, `CLAUDE.md`, `CONTEXT_SUPPLEMENT.md`, `AI_ROADMAP.md`, `ROADMAP.md` — version tick + cross-references
+
+### Remaining work from the v14.27.1 diagnostic (not done this session)
+- **P1 resilience sign fix** ([server/analysis/bias.js:187-189](server/analysis/bias.js#L187-L189)) — landed separately so its effect on bias-score numerics is observable in isolation.
+- **P2 forward-test trade record stamping** — `dxyDirection='flat'` / null `equityBreadth` / null `riskAppetite` on resolved trade records, bug is in the write path (simulator.js or scan-engine), not in bias read path.
+- **P2 `deriveMarketSnapshot(mktCtx)` helper** in bias.js — code hygiene consolidation, no behavior change.
+
+No server restart needed — client JS / CSS only. Dashboard picks up changes on hard refresh (Ctrl+Shift+R).
+
+---
+
 ## [v14.27.1] — 2026-04-20 — Bias panel ↔ macro context reconciliation (diagnostic)
 
 ### Diagnostic only — no logic changed
