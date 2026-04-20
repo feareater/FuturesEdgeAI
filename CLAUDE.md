@@ -338,6 +338,7 @@ Default view (Reset to Default): all layers ON.
 | AA (v13.3) | Multi-symbol chart grid + 1m timeframe — chartManager.js (7 simultaneous mini charts, mode toggle, per-symbol TF, live prices), 1m TF button added to UI, graceful no-data overlay for missing seed files | ✅ Complete |
 | AB (v13.4) | Databento TCP live feed — CRAM auth, ohlcv-1s ticks (1s chart updates via `_liveTickBar`), ohlcv-1m bars, seed+live merge in `getCandles()`, `live_candle` WS handler, `updateLiveCandle()` in chart.js | ✅ Complete |
 | AC (v14.3) | Bar validation layer (barValidator.js) + all 8 CME symbols on live feed (MNQ/MES/MGC/MCL/SIL/M2K/MYM/MHG) | ✅ Complete |
+| v14.27.1 (diagnostic) | Bias panel ↔ macro context reconciliation — field sources documented, live capture, prioritized fix list (P0: macro readiness → conviction; P1: fragile resilience sign; gate/signal UI semantics). See [data/analysis/2026-04-20_bias_macro_reconciliation.md](data/analysis/2026-04-20_bias_macro_reconciliation.md) | ✅ Complete (diagnostic only; fixes pending) |
 
 ---
 

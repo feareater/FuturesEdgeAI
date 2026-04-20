@@ -4,8 +4,8 @@
 > Read alongside CLAUDE.md and AI_ROADMAP.md.
 > Updated after every completed phase or significant decision.
 
-**Current version:** v14.30
-**Last updated:** 2026-04-07
+**Current version:** v14.30 (+ v14.27.1 diagnostic published 2026-04-20)
+**Last updated:** 2026-04-20
 
 ---
 
@@ -144,6 +144,20 @@ Decision (2026-04-06): ZR-F is the approved production candidate.
 No additional filters to be stacked until ZR-F is validated by 
 60+ forward-test trades. ZR-D reviewed for R:R improvement only — 
 ZR-D2/D3 composites explicitly deferred.
+### Track 2b — Bias Panel ↔ Macro Reconciliation (v14.27.1 diagnostic, 2026-04-20)
+
+Diagnostic complete; fixes not yet implemented. Full write-up at [data/analysis/2026-04-20_bias_macro_reconciliation.md](data/analysis/2026-04-20_bias_macro_reconciliation.md).
+
+| Priority | Fix | Scope |
+|---|---|---|
+| **P0** | Thread `readiness.overallStatus` through `_computeConviction()` — blocked macro must force STAND ASIDE; caution demotes one tier | `public/js/alerts.js` only, ~20 LOC |
+| **P1** | Setup-context-aware resilience scoring in `computeDirectionalBias()` (align with v9.0 multiplier table in [setups.js:1209-1212](server/analysis/setups.js#L1209-L1212)) | `server/analysis/bias.js:186-189` |
+| **P1** | Gate UI render `detail` (current state), not `label` (gate name) | `public/js/alerts.js:3246-3258` |
+| **P1** | Clarify signal row ✓/✗ semantics — aligned/neutral/against, or add legend | `public/js/alerts.js:3336-3353` |
+| **P2** | Consolidate marketContext reads into `deriveMarketSnapshot(mktCtx)` helper | `server/analysis/bias.js` |
+| **P2** | Investigate `dxyDirection='flat'` + null `equityBreadth`/`riskAppetite` on forward-test trade records (write-side bug in `simulator.js` or scan-engine alert composition; read path confirmed OK) | `server/trading/simulator.js`, scan engine |
+| **P3** | Conviction `sublabel` names the specific blocking gate(s) when STAND ASIDE fires from macro | `public/js/alerts.js` |
+
 ### Track 3 — Dashboard Bug Fixes
 
 **Priority:** Fix before paper trading goes live. These bugs affect live dashboard usability.

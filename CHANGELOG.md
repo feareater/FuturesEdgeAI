@@ -4,6 +4,38 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v14.27.1] — 2026-04-20 — Bias panel ↔ macro context reconciliation (diagnostic)
+
+### Diagnostic only — no logic changed
+
+Investigated an apparent contradiction between the MARKET CONTEXT (macro gates) and DIRECTIONAL BIAS panels on the live dashboard. Outcome: field-source alignment between `computeSetupReadiness()` and `computeDirectionalBias()` is actually correct — the user-visible contradictions are surface-level bugs in rendering and a missing link from macro readiness to the conviction label.
+
+Full write-up: [data/analysis/2026-04-20_bias_macro_reconciliation.md](data/analysis/2026-04-20_bias_macro_reconciliation.md) — field-source tables for all 11 bias signals and all 6 macro gates, live `/api/bias/debug` capture (MNQ, 2026-04-20T23:38:13Z), fragile-resilience scoring review, conviction-function input audit, prioritized fix list.
+
+### Key findings
+- **Fields align.** Both modules read DXY from `breadth.dollarRegime → dxy.direction → 'flat'`, VIX from `vix.regime`, risk appetite / equity breadth from `breadth.*`, DEX from `options.dexBias`. No same-concept different-field divergence. Drift is prevented only by convention; a shared snapshot helper is the P2 fix.
+- **Gate labels mislead.** [alerts.js:3246-3258](public/js/alerts.js#L3246-L3258) renders the static `g.label` ("DXY Rising Late Session", "Crisis VIX") regardless of gate state. Real state lives in the `detail` tooltip — easy to read as state claims when they are gate names.
+- **Signal ✓/✗ = "contributes vs 0 pts".** [alerts.js:3344-3352](public/js/alerts.js#L3344-L3352) — not "agrees / disagrees with bias direction". Confuses the panel reader.
+- **Fragile resilience scored as always-bearish.** [bias.js:187-189](server/analysis/bias.js#L187-L189) gives `fragile → −1` unconditionally, inconsistent with [setups.js:1209-1212](server/analysis/setups.js#L1209-L1212) which treats `fragile` as a breakout amplifier (1.15×) / reversal damper (0.90×).
+- **Macro readiness never reaches `_computeConviction()`.** [alerts.js:3437](public/js/alerts.js#L3437) signature is `(setupScore, macroScore)` only — `readiness.overallStatus` is rendered to the macro panel but not threaded into the conviction label. A BLOCKED macro can still produce "MODERATE SETUP" / "GOOD SETUP". This is the direct cause of the screenshot regression; v14.21 resolved directional conflict but did not wire in macro readiness.
+
+### Prioritized fix list (not implemented)
+- **P0** — thread `readiness.overallStatus` into `_computeConviction()`; force STAND ASIDE on `blocked`, demote one tier on `caution`
+- **P1** — setup-context-aware resilience scoring in `computeDirectionalBias()` aligned with the v9.0 multiplier table
+- **P1** — gate UI render `detail` (current state) not `label` (gate name)
+- **P1** — signal ✓/✗ semantics clarified (add legend or aligned/neutral/against icon set)
+- **P2** — consolidate marketContext reads into a single `deriveMarketSnapshot(mktCtx)` helper in bias.js
+- **P2** — investigate `dxyDirection='flat'` + null `equityBreadth`/`riskAppetite` on forward-test trade records (separate — not in bias module read path per live capture)
+- **P3** — conviction `sublabel` should name the specific blocking gate(s) when STAND ASIDE fires from macro
+
+### Files touched
+- `data/analysis/2026-04-20_bias_macro_reconciliation.md` — **NEW** — full diagnostic
+- `CHANGELOG.md`, `CLAUDE.md`, `CONTEXT_SUPPLEMENT.md`, `AI_ROADMAP.md`, `ROADMAP.md` — diagnostic note + P0–P3 references
+
+No code files changed. Server was not restarted (debug route `/api/bias/debug` already existed — [server/index.js:1562-1641](server/index.js#L1562-L1641)).
+
+---
+
 ## [v14.30] — 2026-04-18 — Data quality detection & auto-refresh
 
 ### Added: Data quality detection layer

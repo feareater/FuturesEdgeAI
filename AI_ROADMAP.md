@@ -4,6 +4,12 @@
 > This document is the single source of truth for all planned AI/ML work.
 > Read CLAUDE.md, CONTEXT_SUPPLEMENT.md, and DATABENTO_PROJECT.md before starting any session on this track.
 
+## Blocking issue — forward-test record integrity (v14.27.1 diagnostic)
+
+Before Phase 1 batch analysis can produce reliable rules, the market-context fields stamped onto resolved forward-test trade records must be trusted. The v14.27.1 diagnostic found (and confirmed against a live `/api/bias/debug` capture on 2026-04-20) that the read path in `bias.js` reads populated values correctly, while forward-test records have been showing `dxyDirection='flat'` across all trades and null `equityBreadth`/`riskAppetite` at resolution time. The bug is therefore in the **write side** (scan engine alert composition or `simulator.js` `checkLiveOutcomes()`), not in `buildMarketContext()` or `bias.js`.
+
+Action before Phase 1 ML: complete P2 of [data/analysis/2026-04-20_bias_macro_reconciliation.md](data/analysis/2026-04-20_bias_macro_reconciliation.md) — trace where forward-test records snapshot the market context and ensure the fields land populated. Without this, the Claude batch analysis in Phase 1 will train on a degenerate feature space (`dxyDirection = 'flat'` has zero variance → no signal).
+
 ---
 
 ## Overview
