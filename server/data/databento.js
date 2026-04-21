@@ -134,6 +134,27 @@ function _normalize(rec) {
   return candle;
 }
 
+// Phase 0 emergency (v14.33): hard sanity floor — rejects any tick/bar whose
+// price is more than ±25% from the last validated price. Independent of the
+// per-symbol rolling-median filter, so it still catches bad ticks when the
+// rolling median itself has been corrupted by prior bad ticks (the MCL
+// $1.55 case from the 2026-04-21 audit). Belt-and-suspenders.
+const HARD_FLOOR_LOW  = 0.75;
+const HARD_FLOOR_HIGH = 1.25;
+
+function _isHardFloorRejection(symbol, price) {
+  const prev = _lastGoodPrice[symbol];
+  if (!prev || prev <= 0) return false; // cold start / reconnect — skip, accept
+  const ratio = price / prev;
+  if (ratio < HARD_FLOOR_LOW || ratio > HARD_FLOOR_HIGH) {
+    console.warn(
+      `[SPIKE-FLOOR] rejected ${symbol} close=${price} prev=${prev} ratio=${ratio.toFixed(4)}`
+    );
+    return true;
+  }
+  return false;
+}
+
 /**
  * Check if a price is a spike relative to the rolling median for a symbol.
  * Uses a 10-tick rolling median as reference instead of a single prior price,
@@ -141,6 +162,9 @@ function _normalize(rec) {
  * Returns true if the price should be REJECTED (i.e. it's a phantom spike).
  */
 function _isSpikePrice(symbol, price) {
+  // Phase 0 hard floor runs BEFORE the rolling-median filter (see above).
+  if (_isHardFloorRejection(symbol, price)) return true;
+
   const median = _getRollingMedian(symbol);
   if (median === null) {
     // Buffer warming up — also check against last good price as fallback

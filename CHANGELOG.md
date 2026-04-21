@@ -4,6 +4,48 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v14.33] — 2026-04-21 — Emergency hard spike floor on live feed (data-layer remediation Phase 0)
+
+Phase 0 of the data-layer remediation plan from [data/analysis/2026-04-21_data_artifact_audit.md](data/analysis/2026-04-21_data_artifact_audit.md). Bug 4 mitigation only — the proper Bug 4 structural fix (longer rolling median + volume floor) is deferred to Phase 5.
+
+### Problem
+
+Audit Bug 4 (HIGH): bad ticks leak past the existing per-symbol percentage spike filter when the rolling 10-tick median itself has been corrupted by prior bad ticks during thin-liquidity overnight sessions (00:00–01:00 ET). Concrete MCL 2026-04-21 04:56Z closes of $1.55 / $2.92 / $3.21 / $3.45 (crude oil cannot trade there) were accepted by `_isSpikePrice()` because the staircase of bad ticks shifted the rolling median far enough that the next bad tick no longer exceeded the per-symbol percentage threshold.
+
+### Fix
+
+`server/data/databento.js` — new `_isHardFloorRejection(symbol, price)` helper and a single-line call at the top of `_isSpikePrice()` before the rolling-median filter. Rejects any tick or bar whose close is less than 0.75× or greater than 1.25× the last validated price (`_lastGoodPrice[symbol]`). Independent of the per-symbol percentage thresholds and the rolling-median buffer — belt-and-suspenders check that still fires when the rolling median has been poisoned. Graceful degradation on cold start / feed reconnect: if `_lastGoodPrice[symbol]` is absent or non-positive, the floor check is skipped and the tick passes through to the existing filter. Rejections log `[SPIKE-FLOOR] rejected <symbol> close=<val> prev=<prev> ratio=<ratio>` one line per event (no rate limiting — rare by design).
+
+Both the 1s tick path (rtype=32, line 595) and the 1m bar close path (rtype=33, line 629) benefit because both call through `_isSpikePrice()`.
+
+### Not in scope for this commit
+
+- Proper Bug 4 fix (rolling median → 30 ticks, add volume floor on low-volume outliers): deferred to Phase 5.
+- Bug 1 (`ts` vs `time` schema drift), Bug 2 (liveArchive dedup race), Bug 3 (MHG seed stale), Bug 5 (thin historical coverage), Bug 6 (duplicate-bar pileup), Bug 7 (IWM/DIA ETF seed): deferred to Phases 1–4.
+
+### B9 paper-trading edge unaffected
+
+No changes to setup detection, confidence scoring, `applyMarketContext()` math, outcome resolution, or the B9 trade config. The spike floor only rejects ticks the existing filter was already supposed to reject — it does not change which ticks are accepted.
+
+### Verification
+
+- Synthetic test (12/12 pass): cold-start accept; audit's MCL $1.55 and $3.21 rejected; boundary cases at ±25% correct; zero / negative `prev` guard graceful.
+- Module loads without syntax errors.
+- Server restarted via pm2; Databento TCP feed connected, all 8 live-feed symbols mapped, OPRA subscribed (QQQ/SPY/USO/GLD/IWM/SLV), `/api/datastatus` reports `wsConnected: true` with `lagSeconds: 27`.
+- `scripts/databentoDiag.js` clean: 15/16 symbols returning data (SIL 0 bars — pre-existing thin-liquidity behavior, not a regression); OPRA chains populated for all 6 baseline ETFs.
+- No `[SPIKE-FLOOR]` rejections in the first ~15 min after restart (expected — audit clusters bad ticks in 04:00–05:00 UTC; 21:30 UTC is active session).
+
+### Files changed
+
+- `server/data/databento.js` — new `_isHardFloorRejection()` helper (~18 lines added above `_isSpikePrice()`); one-line call inserted at the top of `_isSpikePrice()`.
+- `CHANGELOG.md` — this entry.
+
+### Version numbering note
+
+Phase 0 of the remediation plan was drafted targeting `v14.32`, but v14.32 was already shipped (2026-04-20 forward-test stamping fix). This commit uses `v14.33`; remaining phases (1–5) will cascade accordingly — Phase 1 `v14.34`, Phase 2 `v14.35`, Phase 3 `v14.36`, Phase 4 `v14.37`, Phase 5 `v14.38`.
+
+---
+
 ## [v14.32] — 2026-04-20 — Forward-test trade-record stamping fix (dxyDirection / equityBreadth / riskAppetite)
 
 Implements the P2 forward-test stamping item flagged in the v14.27.1 diagnostic ([data/analysis/2026-04-20_bias_macro_reconciliation.md](data/analysis/2026-04-20_bias_macro_reconciliation.md) §7). Blocker-clearing for AI_ROADMAP.md Phase 1/2 batch analysis, which was training on a degenerate feature space (`dxyDirection = 'flat'` across 582 trades, `equityBreadth`/`riskAppetite`/`bondRegime` null across 582 trades). Diagnosis document: [data/analysis/2026-04-20_p2_forward_test_stamping_diagnosis.md](data/analysis/2026-04-20_p2_forward_test_stamping_diagnosis.md).
