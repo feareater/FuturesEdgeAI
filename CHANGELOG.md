@@ -4,6 +4,67 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v14.34] — 2026-04-21 — Bar schema unification ts→time in writers (data-layer remediation Phase 1)
+
+Phase 1 of the data-layer remediation plan from [data/analysis/2026-04-21_data_artifact_audit.md](data/analysis/2026-04-21_data_artifact_audit.md). Addresses audit Bug 1 (critical: `ts` vs `time` schema drift across writers) and Bug 2 (high: liveArchive dedup race when last bar on disk was written by dailyRefresh). Code-only change — existing `ts`-field bars on disk are NOT migrated here; that is Phase 2.
+
+### Problem
+
+Audit found that three writers disagreed on the canonical field name for the bar timestamp: historicalPipeline.js and liveArchive.js wrote `ts`; dailyRefresh.js (and the one-off `refresh_5h.js`) wrote `time`. Every downstream reader — `snapshot.js`, `chart.js`, `backtest/engine.js` (after its normalize step), `barValidator.js` — expects `time`. Bars stored with only `ts` evaluate to `undefined` when read as `c.time`, so `c.time % tfSec === 0` becomes `NaN === 0 → false`, filtering the bar out silently. A compounding dedup race in `liveArchive.js` then added ~50% duplicate bars on days where the hourly refresh and live feed both ran actively (MCL/MGC/SIL worst, 50%+ dup rate on 2026-04-08 / 2026-04-09).
+
+### Fix
+
+**`server/data/liveArchive.js`**:
+- Bar-write object at line 49 — `ts: checked.time` → `time: checked.time`. Header comment updated to match.
+- Dedup check at line 72 now reads either schema: `(last.time ?? last.ts) === bar.time`. Robust during the migration window when existing files still contain `ts`-field bars written pre-v14.34.
+
+**`server/data/historicalPipeline.js`**:
+- `aggregateBars()` (lines 282–318) — reads `b.time ?? b.ts` via a local helper, writes `time`. Defensive on input, canonical on output.
+- Phase 1c bar collection (line 860) — `ts: isoToUnixSec(tsEvent)` → `time: isoToUnixSec(tsEvent)`.
+- Phase 1c sort / lookahead validation (lines 897, 902, 904) — read `a.time ?? a.ts` / `bar.time ?? bar.ts`.
+- Phase 1f RTH close extraction (line 1701) — reads `b.time ?? b.ts`.
+
+Writers now produce only `time`-field bars. Readers within historicalPipeline.js accept either schema. Post-migration (Phase 2), `ts` reads will be dead code but harmless.
+
+### Scope NOT in this commit
+
+- Migration of existing `ts`-field bars on disk: Phase 2 (`scripts/migrateBarSchema.js`).
+- Historical backfill of the 14-day thin window: Phase 3.
+- MHG seed re-backfill: Phase 3.
+- IWM / DIA ETF seed: Phase 4.
+- Proper Bug 4 structural fix (30-tick median + volume floor): Phase 5.
+- `server/data/databentofetch.js` — this module writes `ts` in 5 places (lines 177, 266, 267, 320, 321, 378, 379, 477, 478) but is unreferenced legacy code (last touched v10.1, no imports anywhere in the tree). Out of Phase 1 scope; flagged for future cleanup.
+
+### B9 paper-trading edge unaffected
+
+No changes to setup detection, confidence scoring, `applyMarketContext()` math, outcome resolution, or the B9 trade config. The schema unification changes only the key name under which the timestamp is stored — bar contents are identical.
+
+### Verification
+
+- `node --check` syntax-validates both changed files.
+- `node -e "require('./server/data/liveArchive.js')"` loads cleanly (historicalPipeline.js is a CLI module and self-runs on `require`, so it was syntax-checked via `--check` only).
+- Server restarted via pm2; Databento TCP feed reconnected, all 8 tradeable symbols mapped, OPRA subscribed.
+- Post-restart live-feed bar writes verified: MNQ / MES / MCL 2026-04-21 1m files show bars at 22:00 / 22:01 / 22:02 / 22:03 / 22:04 UTC all with schema `time,open,high,low,close,volume` (no `ts` field) and exactly one copy per minute across all three symbols. Pre-restart bars (20:55–20:59 UTC) still show the old duplicate pileup on MCL (3–5 copies per minute) — expected, scheduled for Phase 2 migration cleanup.
+- Phase 0 `[SPIKE-FLOOR]` actively firing during verification window on MCL at close=$2.82 (prev=$90.10, ratio 0.0313) and close=$3.77 (prev=$90.25, ratio 0.0418) — Phase 0 behavior preserved.
+- All server-data writes containing literal `ts:` (grep-verified) are now either event-payload metadata (`dataQuality.recordSuspiciousBar`), cache-entry timestamps in `polygonFetch.js`, or the unreferenced `databentofetch.js`. No bar-write regressions.
+
+### Surprise — flagged for the Phase 1 gate report
+
+`server/backtest/engine.js` reads `bar.ts` directly in 11 places (lines 344, 346, 373, 378, 385, 390, 396, 401, 632, 865, 1142). The normalize step at lines 200 and 207 (`bars.map(b => b.time != null ? b : { ...b, time: b.ts })`) adds a `time` property to `ts`-only bars but does NOT mirror `ts` onto `time`-only bars. Current tests pass because historical files today all carry `ts`, so the normalize step leaves `ts` intact for the downstream reads. Post-Phase-2 migration — where `ts` is deleted from every bar — those 11 reads will evaluate to `undefined` and break backtest entry/exit timestamping, force-close, and HP enrichment.
+
+Deliberately NOT fixed in Phase 1 per the plan's instruction: "If any reader reads ts, stop and flag it rather than fixing it — that's a surprise and Jeff should know." Suggested options for the Phase 1 gate:
+- (a) Extend engine.js normalize step to `{ ...b, time: b.time ?? b.ts, ts: b.ts ?? b.time }` — preserves both fields, smallest change; OR
+- (b) Change all 11 `bar.ts` reads to `bar.time ?? bar.ts`; OR
+- (c) Defer to Phase 2 and fix engine.js alongside the migration run.
+
+### Files changed
+
+- `server/data/liveArchive.js` — write object + dedup check + header comment.
+- `server/data/historicalPipeline.js` — `aggregateBars()` + Phase 1c bar collection/sort/validation + Phase 1f RTH extraction.
+- `CHANGELOG.md` — this entry.
+
+---
+
 ## [v14.33] — 2026-04-21 — Emergency hard spike floor on live feed (data-layer remediation Phase 0)
 
 Phase 0 of the data-layer remediation plan from [data/analysis/2026-04-21_data_artifact_audit.md](data/analysis/2026-04-21_data_artifact_audit.md). Bug 4 mitigation only — the proper Bug 4 structural fix (longer rolling median + volume floor) is deferred to Phase 5.

@@ -278,21 +278,23 @@ function csvSymbolToInternal(rawSymbol) {
 
 // ─── Aggregation helper ───────────────────────────────────────────────────────
 
-/** Aggregate 1m bars into N-minute bars */
+/** Aggregate 1m bars into N-minute bars. Reads `time` with `ts` fallback
+ *  (defensive during the v14.34–v14.35 schema migration window); writes `time`. */
 function aggregateBars(bars1m, minutes) {
   if (bars1m.length === 0) return [];
   const result = [];
   const tfSec = minutes * 60;
+  const _t = (b) => (b.time ?? b.ts);
   // Use window-aligned aggregation (same logic as snapshot.js live mode)
-  let windowStart = Math.floor(bars1m[0].ts / tfSec) * tfSec;
+  let windowStart = Math.floor(_t(bars1m[0]) / tfSec) * tfSec;
   let bucket = [];
 
   for (const bar of bars1m) {
-    const barWindow = Math.floor(bar.ts / tfSec) * tfSec;
+    const barWindow = Math.floor(_t(bar) / tfSec) * tfSec;
     if (barWindow !== windowStart) {
       if (bucket.length > 0) {
         result.push({
-          ts:     windowStart,
+          time:   windowStart,
           open:   bucket[0].open,
           high:   Math.max(...bucket.map(b => b.high)),
           low:    Math.min(...bucket.map(b => b.low)),
@@ -307,7 +309,7 @@ function aggregateBars(bars1m, minutes) {
   }
   if (bucket.length > 0) {
     result.push({
-      ts:     windowStart,
+      time:   windowStart,
       open:   bucket[0].open,
       high:   Math.max(...bucket.map(b => b.high)),
       low:    Math.min(...bucket.map(b => b.low)),
@@ -857,7 +859,7 @@ async function phase1c() {
         if (!dateBars[tradingDate]) dateBars[tradingDate] = {};
         if (!dateBars[tradingDate][contractKey]) dateBars[tradingDate][contractKey] = [];
         dateBars[tradingDate][contractKey].push({
-          ts: isoToUnixSec(tsEvent), open, high, low, close, volume,
+          time: isoToUnixSec(tsEvent), open, high, low, close, volume,
         });
         barsRead++;
       }
@@ -894,14 +896,15 @@ async function phase1c() {
         // Select front-month contract (highest cumulative volume for this date)
         const volMap     = dateVolume[date];
         const frontMonth = Object.keys(volMap).reduce((best, c) => volMap[c] > volMap[best] ? c : best);
-        const bars       = (dateBars[date][frontMonth] || []).sort((a, b) => a.ts - b.ts);
+        const bars       = (dateBars[date][frontMonth] || []).sort((a, b) => (a.time ?? a.ts) - (b.time ?? b.ts));
         if (bars.length === 0) continue;
 
         // Lookahead validation: every bar's trading date must match the date key
         for (const bar of bars) {
-          const barDate = isoToTradingDate(new Date(bar.ts * 1000).toISOString());
+          const barTs = bar.time ?? bar.ts;
+          const barDate = isoToTradingDate(new Date(barTs * 1000).toISOString());
           if (barDate !== date) {
-            errLog(`Lookahead: ${sym} bar ${new Date(bar.ts * 1000).toISOString()} assigned to ${date}`);
+            errLog(`Lookahead: ${sym} bar ${new Date(barTs * 1000).toISOString()} assigned to ${date}`);
             validationErrors++;
           }
         }
@@ -1698,7 +1701,7 @@ async function phase1f() {
       for (const f of fs.readdirSync(fut1mDir).filter(f => f.endsWith('.json'))) {
         const date = f.replace('.json', '');
         const bars  = readJSON(path.join(fut1mDir, f)) || [];
-        const rthBars = bars.filter(b => new Date(b.ts * 1000).getUTCHours() < 20);
+        const rthBars = bars.filter(b => new Date((b.time ?? b.ts) * 1000).getUTCHours() < 20);
         if (rthBars.length > 0) futDates[date] = rthBars[rthBars.length - 1].close;
       }
       log(`  Loaded ${Object.keys(futDates).length} futures close prices`);

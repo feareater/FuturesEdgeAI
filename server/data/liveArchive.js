@@ -3,8 +3,8 @@
 // feed to disk in the same format as the historical pipeline output.
 //
 // Target path: data/historical/futures/{SYMBOL}/1m/{YYYY-MM-DD}.json
-// Format:      flat JSON array of { ts, open, high, low, close, volume }
-//              where ts is Unix seconds (UTC) — matches existing historical files
+// Format:      flat JSON array of { time, open, high, low, close, volume }
+//              where time is Unix seconds (UTC) — matches historical pipeline + refresh output
 //
 // This is APPEND-ONLY. Each day's file grows bar by bar during the session.
 // Errors are caught and logged; a disk write failure never crashes the live feed.
@@ -45,9 +45,10 @@ async function writeLiveCandleToDisk(symbol, candle) {
     const dir     = path.join(HIST_DIR, symbol, '1m');
     const filePath = path.join(dir, `${date}.json`);
 
-    // Convert to historical format: ts (not time)
+    // Historical format: canonical `time` field (Unix seconds). Unified v14.34;
+    // prior versions wrote `ts` here, causing schema drift vs dailyRefresh/readers.
     const bar = {
-      ts:     checked.time,
+      time:   checked.time,
       open:   checked.open,
       high:   checked.high,
       low:    checked.low,
@@ -68,8 +69,13 @@ async function writeLiveCandleToDisk(symbol, candle) {
       // File doesn't exist yet — start fresh
     }
 
-    // Skip duplicate (same timestamp already persisted)
-    if (bars.length > 0 && bars[bars.length - 1].ts === bar.ts) return;
+    // Skip duplicate (same timestamp already persisted). Read either schema —
+    // existing files may have been written with `ts` pre-v14.34 OR `time` by
+    // dailyRefresh/new writers. Robust during the migration window (Phase 2).
+    if (bars.length > 0) {
+      const lastTs = bars[bars.length - 1].time ?? bars[bars.length - 1].ts;
+      if (lastTs === bar.time) return;
+    }
 
     bars.push(bar);
     await fs.writeFile(filePath, JSON.stringify(bars), 'utf8');
