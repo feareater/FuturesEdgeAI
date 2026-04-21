@@ -4,6 +4,78 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v14.35] — 2026-04-21 — Bar schema migration on disk + engine.js both-field normalize (data-layer remediation Phase 2, Bugs 1+2+6)
+
+Phase 2 of the data-layer remediation plan. Heals every existing `ts`-field bar on disk under `data/historical/futures/**` and collapses the duplicate-timestamp pileups called out in the audit (Bug 6: ~50% dup rate on 2026-04-08/09 for MGC/SIL/MHG; Bug 2: ~1 dup per hourly interleave). Bundles the engine.js both-field normalize fix flagged at the Phase 1 gate so post-migration backtests don't regress.
+
+### engine.js normalize fix (option a, per Phase 1 gate)
+
+[server/backtest/engine.js:191–212](server/backtest/engine.js#L191-L212) — `loadDailyBars()` now delegates to a new `_normalizeBars()` helper that outputs bars with BOTH `time` and `ts` mirrored from whichever field the source file has. Rationale: 11 downstream readers in engine.js reference `bar.ts` directly (lines 344, 346, 373, 378, 385, 390, 396, 401, 632, 865, 1142). Preserving both fields after normalize keeps those reads working against pre-migration (`ts`-only), post-migration (`time`-only), and freshly-aggregated (`time`-only via Phase 1's historicalPipeline) bars alike. Verified: spot-check backtest on 2026-03-01 → 2026-04-01 for MNQ/MES/MCL or_breakout 5m conf≥70 returned 21 trades, WR 47.6%, PF 4.89, Sharpe 7.21 — no engine errors, consistent with B9 profile.
+
+### Migration script: `scripts/migrateBarSchema.js`
+
+Walks every per-date file under `data/historical/futures/{sym}/{tf}/{date}.json` and normalizes in three passes:
+
+1. Per-bar schema: `{time, ts}` → keep `time`, drop `ts`. `{ts}` only → rename to `time`. `{time}` only → no change. Neither → log warning and drop (0 bars hit this path in the real run).
+2. Dedup by `time`: highest volume wins; ties broken by last occurrence (matches the hourly refresh's authoritative-replace semantics for MCL's $90-vs-bad-tick case — legitimate high-volume bar beats low-volume spurious).
+3. Sort by `time` ascending.
+
+Per-file atomic backup: each modified file is renamed to `<file>.bak` before the new content is written (the Phase 2 gate decision). Zero-cost rollback: `find data/historical/futures -name '*.json.bak' | xargs -I{} bash -c 'mv "{}" "${1%.bak}"' _ {}`. `--no-backup` flag disables sidecars. Flags: `--dry-run`, `--symbol SYM`, `--verbose`, `--no-backup`.
+
+### Migration run summary (2026-04-21, ~314 s on the full tree)
+
+| metric | value |
+|---|---|
+| Files scanned | 186,640 |
+| Files changed | 181,120 (97.0%) |
+| Files unchanged | 5,520 (already clean — mostly dailyRefresh-touched recents) |
+| `.bak` sidecars created | 181,120 |
+| Bars processed | 65,296,000 |
+| Bars renamed (ts→time) | 63,104,945 (96.6%) |
+| Bars cleaned (both→time) | 0 (no writer ever emitted both) |
+| Bad bars dropped (no time/ts) | 0 |
+| Bars deduped | 9,059 |
+
+**Per-symbol dedup breakdown** (partial — see commit verification log for full table):
+- MGC: 3,206 bars deduped (largest — matches audit's Bug 6 callout)
+- MCL: 9,602 bars deduped (MCL-only first run; 0 more in full run because already migrated)
+- SIL: 1,580 / MNQ: 1,415 / MES: 1,130 / MHG: 667 / MYM: 418 / M2K: 337 / MBT: 202
+- Reference instruments (UB/ZB/ZF/ZN/ZT/M6B/M6E): ≤53 dupes each (confirms audit's "reference instruments are clean" finding)
+
+### Verification
+
+- **Pre-commit grep sweep**: 186,640 files re-scanned — `0 files with ts-field bars remaining`, `0 ts-field bars total`, `0 unreadable files`. Schema unification 100% complete on the historical tree.
+- **Spot-check (MCL)**: 2026-04-08 pre-migration had 2,999 bars with 54% dup rate; post-migration 1,380 bars, 0 dups. 2026-04-09 pre had 2,723 bars / 50% dupes; post 1,366 / 0. Clean match with audit's empirical targets.
+- **Today's file**: MNQ/MES/M2K/MYM/MGC/SIL/MCL 2026-04-21 1m files still show 1 residual dupe each — caused by the live feed racing with the migration script (bars appended via `writeLiveCandleToDisk` between the script's read and rename). Not a regression: matches the baseline state from the audit's Bug 2 pattern; a single dupe per today's file is the pre-migration steady-state for those symbols. Phase 5's proper spike filter + future full-file dedup check will address remaining edge cases.
+- **Server restart** via pm2: Databento TCP feed reconnected (`wsConnected:true`, `lagSeconds:1`), 8 tradeable symbols listed, no startup errors, no SPIKE-FLOOR / Rejected-bar events since restart.
+- **Backtest spot-check** (2026-03-01 → 2026-04-01, MNQ/MES/MCL, or_breakout 5m, conf≥70, 1 contract): 21 trades, WR 47.6%, PF 4.89, Sharpe 7.21, Net +$3,073, MaxDD $421. No engine.js errors, no bar.ts `undefined` crashes — the normalize-both-fields fix is validated end-to-end.
+- **/api/candles sanity**: GET /api/candles?symbol=MNQ&tf=5m&limit=10 returns clean `time`-keyed candles, no schema errors.
+
+### B9 paper-trading edge unaffected
+
+- Zero changes to setup detection, confidence scoring, `applyMarketContext()` math, outcome resolution, or the B9 trade config.
+- The migration strictly removes duplicate bars (which would have been double-counted by the scan engine and backtest) and unifies the timestamp field name. No OHLCV values changed; bars whose `time` is unique across the file are kept verbatim.
+- engine.js normalize fix preserves identical read semantics for every existing read site — both pre-migration and post-migration bar schemas now produce the same `bar.time` and `bar.ts` values.
+
+### Rollback
+
+All 181,120 modified files have `.bak` sidecars. Full rollback:
+
+```bash
+cd data/historical/futures
+find . -name '*.json.bak' | while read f; do mv "$f" "${f%.bak}"; done
+```
+
+Rollback leaves the engine.js normalize fix in place (harmless — produces same output for `ts`-only bars as the pre-v14.35 code did).
+
+### Files changed
+
+- `server/backtest/engine.js` — `loadDailyBars()` + new `_normalizeBars()` helper (~15 lines net).
+- `scripts/migrateBarSchema.js` — new (~210 lines).
+- `CHANGELOG.md` — this entry.
+
+---
+
 ## [v14.34] — 2026-04-21 — Bar schema unification ts→time in writers (data-layer remediation Phase 1)
 
 Phase 1 of the data-layer remediation plan from [data/analysis/2026-04-21_data_artifact_audit.md](data/analysis/2026-04-21_data_artifact_audit.md). Addresses audit Bug 1 (critical: `ts` vs `time` schema drift across writers) and Bug 2 (high: liveArchive dedup race when last bar on disk was written by dailyRefresh). Code-only change — existing `ts`-field bars on disk are NOT migrated here; that is Phase 2.

@@ -188,23 +188,29 @@ function _minimalContext() {
   };
 }
 
-/** Load bars for a symbol+date+timeframe. Normalizes ts→time for indicators.js.
+/** Load bars for a symbol+date+timeframe. Normalizes to both `time` and `ts`
+ *  so downstream consumers keyed on either name work regardless of source-file
+ *  schema (v14.35: Phase 2 migration rewrites on-disk bars to `time`-only; 11
+ *  readers further down in this engine still reference `.ts` by name).
  *  Checks pre-aggregated futures_agg/ directory first (Phase C), falls back to futures/. */
+function _normalizeBars(bars) {
+  return bars.map(b => {
+    const t = b.time ?? b.ts;
+    return (b.time != null && b.ts != null) ? b : { ...b, time: t, ts: t };
+  });
+}
 function loadDailyBars(symbol, date, tf) {
   const tfDir = tf || '1m';
   // Phase C: check pre-aggregated path first (skip for 1m — no pre-agg for 1m)
   if (tfDir !== '1m') {
     const aggPath = path.join(DATA_DIR, 'futures_agg', symbol, tfDir, `${date}.json`);
     if (fs.existsSync(aggPath)) {
-      const bars = readJSON(aggPath) || [];
-      return bars.map(b => b.time != null ? b : { ...b, time: b.ts });
+      return _normalizeBars(readJSON(aggPath) || []);
     }
   }
   // Fallback: original per-TF directory
   const f = path.join(DATA_DIR, 'futures', symbol, tfDir, `${date}.json`);
-  const bars = readJSON(f) || [];
-  // indicators.js uses c.time; historical files store c.ts — normalize
-  return bars.map(b => b.time != null ? b : { ...b, time: b.ts });
+  return _normalizeBars(readJSON(f) || []);
 }
 
 /** Load HP snapshot for a symbol+date. Returns null if unavailable. */
