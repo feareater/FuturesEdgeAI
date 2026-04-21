@@ -4,6 +4,59 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v14.32] — 2026-04-20 — Forward-test trade-record stamping fix (dxyDirection / equityBreadth / riskAppetite)
+
+Implements the P2 forward-test stamping item flagged in the v14.27.1 diagnostic ([data/analysis/2026-04-20_bias_macro_reconciliation.md](data/analysis/2026-04-20_bias_macro_reconciliation.md) §7). Blocker-clearing for AI_ROADMAP.md Phase 1/2 batch analysis, which was training on a degenerate feature space (`dxyDirection = 'flat'` across 582 trades, `equityBreadth`/`riskAppetite`/`bondRegime` null across 582 trades). Diagnosis document: [data/analysis/2026-04-20_p2_forward_test_stamping_diagnosis.md](data/analysis/2026-04-20_p2_forward_test_stamping_diagnosis.md).
+
+### Diagnosis
+
+Root cause is **Candidate A + Candidate C combined**, both on the write side of the forward-trade record:
+1. **Path mismatch (A)** — `simulator.js:_persistForwardTrade()` read `equityBreadth`/`riskAppetite`/`bondRegime` from the top level of `setup.scoreBreakdown.context`, but setups.js `applyMarketContext()` places those fields inside a nested `breadthDetail` sub-object. Reads always returned `undefined` → null.
+2. **Missing fallback (C)** — `contextBreakdown.dxyDirection` at [setups.js:1362](server/analysis/setups.js#L1362) is sourced from `marketContext.dxy?.direction` only, with no fallback to `breadth.dollarRegime`. Non-DXY-applicable symbols (MHG/SIL/M2K/MYM/crypto) get hard-coded `'flat'` from `_buildDxyContext`. The authoritative Phase 2 gate fallback chain (`breadth.dollarRegime → dxy.direction → 'flat'`, per [CLAUDE.md:232](CLAUDE.md#L232) and mirrored in [bias.js:21-29](server/analysis/bias.js#L21-L29)) was not being applied at the stamp site.
+
+Ruled out: Candidate B (live marketContext builder correctly populates breadth — confirmed by the 2026-04-20 live `/api/bias/debug` capture) and Candidate D (simulator reads the entry-time snapshot on `alert.setup.scoreBreakdown.context`, not a resolution-time re-derivation).
+
+Backtest records are not affected because the backtest engine writes breadth fields directly onto trade records from `_precomputeBreadth()` (per CONTEXT_SUPPLEMENT.md §Phase V), bypassing `scoreBreakdown.context`. That's why backtest records have always been populated and forward-test records weren't.
+
+### Fixed — Forward-test record stamping
+
+- [server/trading/simulator.js:248-314](server/trading/simulator.js#L248-L314) `_persistForwardTrade()` — reads `equityBreadth`/`riskAppetite`/`bondRegime` from `ctx.breadthDetail` (where setups.js already puts them) and applies the documented Phase 2 fallback chain for `dxyDirection`: `breadthDetail.dollarRegime → ctx.dxyDirection → null`. Stamps `null` — not `'flat'`/`'neutral'` — when a field is genuinely missing (cold start, pre-v14.32 alerts without `dollarRegime` in breadthDetail). Honest missingness, not synthetic defaults. Adds `// TODO(P2-deriveMarketSnapshot):` marker noting the shared fallback chain duplicated here and in bias.js.
+- [server/analysis/setups.js:1300-1306](server/analysis/setups.js#L1300-L1306) `breadthDetail` — exposes `dollarRegime: b.dollarRegime` on the breadth-detail sub-object of `contextBreakdown`. Pure data exposure: `b.dollarRegime` already feeds the commodity dollar-regime scoring block at lines 1279-1283 and the Phase 2 loss-gate fallback at 1319-1321. Exposing it enables the simulator's (and any future consumer's) fallback chain to consult `breadth.dollarRegime` as the primary source, matching the bias.js semantics. No multiplier/gate/math change — `applyMarketContext()` return value shape grows by one key only.
+
+### Forward-only — no historical backfill
+
+- All 582 existing records in `data/logs/forward_trades.json` stay as-is. Pre-v14.32 records keep their `dxyDirection='flat'` / null breadth values; they were resolved against alerts whose `scoreBreakdown.context` never exposed the breadth fields at the right paths, and backfilling from reconstructed historical breadth would require re-running the alert pipeline over past dates — separate offline work, not this commit.
+- Fix applies forward: any alert created post-v14.32 (scored by new setups.js → `breadthDetail` now contains `dollarRegime`) that resolves post-v14.32 (stamped by new simulator.js) will have populated `equityBreadth`/`riskAppetite`/`bondRegime` and a fallback-aware `dxyDirection`. Trades resolving post-v14.32 against alerts scored pre-v14.32 will populate `equityBreadth`/`riskAppetite`/`bondRegime` (those are already in pre-v14.32 `breadthDetail`) but `dxyDirection` falls through to `ctx.dxyDirection` for those alerts (same behavior as today, since `breadthDetail.dollarRegime` is undefined on them).
+
+### B9 paper-trading edge unaffected
+
+- No changes to outcome resolution (SL/TP touch detection, SL-before-TP rule, 16:45 ET force-close), dedup gates (`_openPositions` / `_orBreakoutSessionKeys`, one-trade-per-symbol, or_breakout session dedup), setup detection, confidence scoring multipliers, Phase 2 loss-analysis gates, backtest engine, `bias.js`, or the scan-engine alert composition.
+- The only change to setups.js is a single field addition to the `breadthDetail` object in the `contextBreakdown` return value — an already-computed value being exposed on the output, not a new computation or gate.
+
+### Verification (2026-04-21)
+
+- Empirical baseline (pre-fix): last 20 resolved trades in `forward_trades.json` showed `dxyDirection="flat"` on 20/20 (uniform), `equityBreadth`/`riskAppetite`/`bondRegime` null on 20/20; `vixRegime`/`resilienceLabel`/`dexBias` populated normally. Split diagnostic of a path mismatch.
+- Post-restart alert cache confirmed `setup.scoreBreakdown.context.breadthDetail` now contains `{equityBreadth, bondRegime, copperRegime, dollarRegime, riskAppetite}` (5 fields, was 4).
+- Synthetic dry-run: took a fresh post-restart MNQ 15m alert, replicated `_persistForwardTrade()` stamping inline — stamped `equityBreadth=4`, `riskAppetite='on'`, `bondRegime='neutral'`, `dxyDirection='flat'` (breadth-truthful, not the old null/flat-by-accident). All 5 assertions PASS including the honesty check (dxyDirection is `'flat'` only when breadth is also `'flat'`, never synthetically defaulted).
+- API surface clean: `/api/forwardtest/summary`, `/api/forwardtest/trades`, `/api/forward-test/export`, `/api/bias?symbol=MNQ`, `/api/datastatus`, `/` (dashboard) all respond with no errors. `forward_trades.json` schema unchanged (field names preserved, only values improve).
+- Full in-market resolution verification pending next live trade close post-v14.32 — synthetic dry-run on a real post-restart alert exercises the exact stamping path, so end-to-end logic is confirmed. Over time, the bulk-grep split (pre-restart null, post-v14.32 populated) aligns to the restart boundary.
+
+### Files changed
+
+- `server/trading/simulator.js` — `_persistForwardTrade()` read paths + dxyDirection fallback chain
+- `server/analysis/setups.js` — one field added to `breadthDetail` object inside `applyMarketContext()` (pure data exposure)
+- `CHANGELOG.md`, `CLAUDE.md`, `CONTEXT_SUPPLEMENT.md`, `ROADMAP.md`, `AI_ROADMAP.md` — version tick + cross-references
+- `data/analysis/2026-04-20_p2_forward_test_stamping_diagnosis.md` — new diagnosis document; status stamp at bottom
+
+### Remaining P2 work
+
+- **P2 `deriveMarketSnapshot(mktCtx)` helper** — the fallback chain is now implemented in three places (`bias.js:21-29`, `setups.js:1319-1321` in reverse order, `simulator.js:270-279`). Consolidate into a single helper used everywhere. Code hygiene only — no behavior change. Deferred to its own ticket.
+- **Phase 2 conditional filter analysis** — now unblocked. Run once enough fresh (v14.32+) trades accumulate in `forward_trades.json`.
+
+Server restart required — this is a server-side module change, not hot-toggleable.
+
+---
+
 ## [v14.31] — 2026-04-20 — Resilience-sign fix in directional bias (regime-aware)
 
 Implements the P1 resilience-sign item from the v14.27.1 diagnostic ([data/analysis/2026-04-20_bias_macro_reconciliation.md](data/analysis/2026-04-20_bias_macro_reconciliation.md) §5). Ships on its own so the numeric impact on `bias.score` is observable in isolation, separate from the v14.28 UI/logic changes.

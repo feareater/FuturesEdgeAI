@@ -4,7 +4,7 @@
 > Read alongside CLAUDE.md and AI_ROADMAP.md.
 > Updated after every completed phase or significant decision.
 
-**Current version:** v14.31 — resilience-sign fix in bias.js (2026-04-20)
+**Current version:** v14.32 — forward-test trade-record stamping fix (2026-04-20)
 **Last updated:** 2026-04-20
 
 ---
@@ -154,8 +154,8 @@ Diagnostic at [data/analysis/2026-04-20_bias_macro_reconciliation.md](data/analy
 | **P1** | Gate UI render `detail` (current state), not `label` (gate name) | `public/js/alerts.js:3234-3262` | ✅ **Done v14.28** — `g.detail` primary, static label + id as hover tooltip |
 | **P1** | Clarify signal row ✓/✗ semantics — aligned/neutral/against, or add legend | `public/js/alerts.js:3336-3380` | ✅ **Done v14.28** — three-state icons keyed to `sign(contribution)` vs `b.direction`; legend row |
 | **P1** | Setup-context-aware resilience scoring in `computeDirectionalBias()` (align with v9.0 multiplier table in [setups.js:1209-1212](server/analysis/setups.js#L1209-L1212)) | `server/analysis/bias.js:186-213` | ✅ **Done v14.31** — regime-aware: trend → fragile with regime direction / resilient against; range → resilient with direction / fragile against; missing/neutral regime → 0. Display-only; setups.js multiplier path untouched, B9 edge unaffected. |
-| **P2** | Consolidate marketContext reads into `deriveMarketSnapshot(mktCtx)` helper | `server/analysis/bias.js` | ⬜ **Deferred** (code-hygiene only) |
-| **P2** | Investigate `dxyDirection='flat'` + null `equityBreadth`/`riskAppetite` on forward-test trade records (write-side bug in `simulator.js` or scan-engine alert composition; read path confirmed OK) | `server/trading/simulator.js`, scan engine | ⬜ **Deferred** — blocker for AI_ROADMAP.md Phase 1 batch analysis |
+| **P2** | Consolidate marketContext reads into `deriveMarketSnapshot(mktCtx)` helper | `server/analysis/bias.js`, `setups.js`, `simulator.js` | ⬜ **Deferred** (code-hygiene only). Post-v14.32, the fallback chain is duplicated in 3 places — bias.js:21-29, setups.js:1319-1321 (reverse order), simulator.js:270-279 — worth consolidating. |
+| **P2** | Investigate `dxyDirection='flat'` + null `equityBreadth`/`riskAppetite` on forward-test trade records (write-side bug in `simulator.js` or scan-engine alert composition; read path confirmed OK) | `server/trading/simulator.js`, `setups.js` breadthDetail | ✅ **Done v14.32** — path mismatch (A) + missing fallback (C) in `_persistForwardTrade()`. Fix: simulator reads breadth fields from `ctx.breadthDetail` (where setups.js puts them) and applies `breadthDetail.dollarRegime → ctx.dxyDirection → null` fallback for dxyDirection. setups.js `breadthDetail` extended to expose `dollarRegime` (pure data exposure, no math change). Forward-only; 582 historical records not backfilled. Unblocks AI_ROADMAP Phase 1 batch analysis once fresh trades accumulate. |
 
 ### Track 3 — Dashboard Bug Fixes
 

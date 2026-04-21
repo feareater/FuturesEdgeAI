@@ -96,7 +96,7 @@ FuturesEdgeAI/
 │   │   └── commentary.js      ← Claude API prompt builder + caller
 │   ├── trading/
 │   │   ├── autotrader.js      ← Kill-switch state machine for paper trading
-│   │   └── simulator.js       ← Virtual position tracker; checkLiveOutcomes() for forward-test; one-trade-per-symbol gate + or_breakout session dedup
+│   │   └── simulator.js       ← Virtual position tracker; checkLiveOutcomes() for forward-test; one-trade-per-symbol gate + or_breakout session dedup; _persistForwardTrade() reads breadth fields from ctx.breadthDetail + applies Phase 2 fallback (breadth.dollarRegime → dxy.direction → null) for dxyDirection (v14.32)
 │   ├── push/
 │   │   └── pushManager.js     ← VAPID push manager; subscriptions in data/push/subscriptions.json
 │   └── storage/
@@ -341,6 +341,7 @@ Default view (Reset to Default): all layers ON.
 | v14.27.1 (diagnostic) | Bias panel ↔ macro context reconciliation — field sources documented, live capture, prioritized fix list (P0: macro readiness → conviction; P1: fragile resilience sign; gate/signal UI semantics). See [data/analysis/2026-04-20_bias_macro_reconciliation.md](data/analysis/2026-04-20_bias_macro_reconciliation.md) | ✅ Complete (diagnostic only; fixes pending) |
 | v14.28 | Conviction sees macro readiness + bias panel UI clarity — P0 (`_computeConviction()` hard-gates STAND ASIDE on `readiness.overallStatus==='blocked'` with blocking-gate sublabel; `caution` demotes one tier), P1 gate rows render `g.detail` (live state) with static label as tooltip, P1 signal icons become ✓ aligned / ➖ neutral / ✗ against with a legend row. Client JS + CSS only, no server restart. Remaining: P1 resilience sign, P2 forward-test stamping, P2 `deriveMarketSnapshot` helper. | ✅ Complete |
 | v14.31 | Resilience-sign fix in directional bias — `computeDirectionalBias()` at [server/analysis/bias.js:186-213](server/analysis/bias.js#L186-L213) now regime-aware: trend context → fragile contributes with regime direction, resilient against; range context → resilient with direction, fragile against; missing/neutral regime → 0. Display-only; setups.js multiplier path untouched so B9 paper-trading edge is unaffected. Remaining: P2 forward-test stamping, P2 `deriveMarketSnapshot` helper. | ✅ Complete |
+| v14.32 | Forward-test trade-record stamping fix — `_persistForwardTrade()` in [server/trading/simulator.js:248-314](server/trading/simulator.js#L248-L314) now reads `equityBreadth`/`riskAppetite`/`bondRegime` from `ctx.breadthDetail` (where setups.js puts them) and applies the Phase 2 fallback chain for `dxyDirection`: `breadthDetail.dollarRegime → ctx.dxyDirection → null`. Complementary 1-line exposure in [server/analysis/setups.js:1300-1306](server/analysis/setups.js#L1300-L1306) adds `dollarRegime: b.dollarRegime` to `breadthDetail` — pure data exposure, no math change. Forward-only: existing 582 records in `forward_trades.json` not backfilled. B9 edge unaffected (no changes to scoring, outcome resolution, dedup, or backtest). Unblocks AI_ROADMAP Phase 1 once fresh trades accumulate. See [data/analysis/2026-04-20_p2_forward_test_stamping_diagnosis.md](data/analysis/2026-04-20_p2_forward_test_stamping_diagnosis.md). Remaining: P2 `deriveMarketSnapshot` helper. | ✅ Complete |
 
 ---
 

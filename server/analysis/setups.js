@@ -1301,6 +1301,7 @@ function applyMarketContext(baseScore, setup, marketContext) {
       equityBreadth: b.equityBreadth,
       bondRegime:    b.bondRegime,
       copperRegime:  b.copperRegime,
+      dollarRegime:  b.dollarRegime,
       riskAppetite:  b.riskAppetite,
     };
   }

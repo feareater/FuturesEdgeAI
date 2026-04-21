@@ -244,10 +244,21 @@ function _isPastSessionClose(unixSec) {
 
 /**
  * Build a forward-test trade record from a resolved alert and persist it.
+ *
+ * Breadth fields (equityBreadth / riskAppetite / bondRegime) live on
+ * setup.scoreBreakdown.context.breadthDetail (populated by setups.js
+ * applyMarketContext). dxyDirection uses the same fallback chain as the
+ * Phase 2 gates and bias.js: breadth.dollarRegime → dxy.direction → null.
+ * Honest missingness — we never coerce to 'flat'/'neutral' to hide nulls.
+ *
+ * TODO(P2-deriveMarketSnapshot): the same fallback chain is duplicated in
+ * bias.js:21-29 and setups.js:1319-1321 (in reverse order there). Consolidate
+ * into a shared deriveMarketSnapshot(mktCtx) helper in a follow-up ticket.
  */
 function _persistForwardTrade(alert, outcome, exitPrice, exitTime) {
   const s = alert.setup || {};
   const ctx = s.scoreBreakdown?.context || {};
+  const bd = ctx.breadthDetail || {};
   const dir = s.direction === 'bullish' ? 1 : -1;
   const pv = POINT_VALUE[alert.symbol] || 1;
   const feePerRT = INSTRUMENTS[alert.symbol]?.feePerRT ?? 4;
@@ -255,6 +266,17 @@ function _persistForwardTrade(alert, outcome, exitPrice, exitTime) {
   const netPnl   = parseFloat((grossPnl - feePerRT).toFixed(2));
 
   const exitReason = outcome === 'won' ? 'tp' : outcome === 'lost' ? 'sl' : 'timeout';
+
+  // DXY fallback chain: breadth.dollarRegime (primary, live+backtest) → dxy.direction (live-only) → null
+  const rawDollar = bd.dollarRegime;
+  let dxyDirection;
+  if (rawDollar === 'rising' || rawDollar === 'falling') {
+    dxyDirection = rawDollar;
+  } else if (rawDollar === 'flat') {
+    dxyDirection = 'flat';
+  } else {
+    dxyDirection = ctx.dxyDirection ?? null;
+  }
 
   const trade = {
     alertKey:       `${alert.symbol}:${alert.timeframe}:${s.type}:${s.time}`,
@@ -276,10 +298,10 @@ function _persistForwardTrade(alert, outcome, exitPrice, exitTime) {
     // ML context fields
     vixRegime:      ctx.vixRegime      ?? null,
     vixLevel:       ctx.vixLevel       ?? null,
-    dxyDirection:   ctx.dxyDirection   ?? null,
-    equityBreadth:  ctx.equityBreadth  ?? null,
-    riskAppetite:   ctx.riskAppetite   ?? null,
-    bondRegime:     ctx.bondRegime     ?? null,
+    dxyDirection,
+    equityBreadth:  bd.equityBreadth   ?? null,
+    riskAppetite:   bd.riskAppetite    ?? null,
+    bondRegime:     bd.bondRegime      ?? null,
     ddBandLabel:    s.ddBandLabel      ?? null,
     hpNearest:      ctx.hpNearest      ?? null,
     resilienceLabel: ctx.resilienceLabel ?? null,

@@ -4,13 +4,15 @@
 > This document is the single source of truth for all planned AI/ML work.
 > Read CLAUDE.md, CONTEXT_SUPPLEMENT.md, and DATABENTO_PROJECT.md before starting any session on this track.
 
-## Blocking issue — forward-test record integrity (v14.27.1 diagnostic, still open after v14.28)
+## Blocking issue — forward-test record integrity (resolved v14.32, 2026-04-20)
 
-Before Phase 1 batch analysis can produce reliable rules, the market-context fields stamped onto resolved forward-test trade records must be trusted. The v14.27.1 diagnostic found (and confirmed against a live `/api/bias/debug` capture on 2026-04-20) that the read path in `bias.js` reads populated values correctly, while forward-test records have been showing `dxyDirection='flat'` across all trades and null `equityBreadth`/`riskAppetite` at resolution time. The bug is therefore in the **write side** (scan engine alert composition or `simulator.js` `checkLiveOutcomes()`), not in `buildMarketContext()` or `bias.js`.
+**Status: ✅ Resolved.** The P2 forward-test stamping bug flagged in the v14.27.1 diagnostic was fixed in v14.32. Root cause was a path mismatch in `_persistForwardTrade()` (simulator read `equityBreadth`/`riskAppetite`/`bondRegime` from the top level of `setup.scoreBreakdown.context`, but setups.js `applyMarketContext()` places those fields inside a nested `breadthDetail` sub-object) compounded by a missing fallback chain for `dxyDirection` (stamp site read `dxy.direction` only, not the authoritative `breadth.dollarRegime → dxy.direction → 'flat'` chain used by the Phase 2 gates and `bias.js`).
 
-**Status after v14.28 (2026-04-20):** v14.28 landed the P0 + two P1 UI/logic fixes (macro readiness now gates conviction, gate rows show live state, signal icons show alignment). The P2 forward-test stamping investigation was **explicitly out of scope** for v14.28 — it is a separate write-path bug and must land on its own so any change to record shape is observable in isolation.
+Fix in [server/trading/simulator.js:248-314](server/trading/simulator.js#L248-L314) and a 1-line data exposure in [server/analysis/setups.js:1300-1306](server/analysis/setups.js#L1300-L1306). Forward-only — the 582 pre-v14.32 records in `data/logs/forward_trades.json` were not backfilled. Any resolution post-v14.32 populates the fields correctly.
 
-Action before Phase 1 ML: complete the P2 item in [data/analysis/2026-04-20_bias_macro_reconciliation.md](data/analysis/2026-04-20_bias_macro_reconciliation.md) §8 — trace where forward-test records snapshot the market context and ensure the fields land populated. Without this, the Claude batch analysis in Phase 1 will train on a degenerate feature space (`dxyDirection = 'flat'` has zero variance → no signal).
+Diagnosis + candidate-by-candidate evaluation: [data/analysis/2026-04-20_p2_forward_test_stamping_diagnosis.md](data/analysis/2026-04-20_p2_forward_test_stamping_diagnosis.md).
+
+**Action for Phase 1 batch analysis:** wait for a sufficient sample of v14.32+ resolved trades to accumulate in `forward_trades.json` (recommend n ≥ 100 post-v14.32 before drawing rule-level conclusions). Until then, pre-v14.32 records can be used for structural analysis (outcomes, R:R, time-of-day, symbol) but the context features (`dxyDirection`, `equityBreadth`, `riskAppetite`, `bondRegime`) have near-zero variance on the old records and should be excluded from feature-importance work until the post-v14.32 sample is populated.
 
 ---
 
