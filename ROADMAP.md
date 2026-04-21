@@ -4,7 +4,7 @@
 > Read alongside CLAUDE.md and AI_ROADMAP.md.
 > Updated after every completed phase or significant decision.
 
-**Current version:** v14.30 (+ v14.28 bias UI clarity published 2026-04-20)
+**Current version:** v14.31 — resilience-sign fix in bias.js (2026-04-20)
 **Last updated:** 2026-04-20
 
 ---
@@ -146,14 +146,14 @@ No additional filters to be stacked until ZR-F is validated by
 ZR-D2/D3 composites explicitly deferred.
 ### Track 2b — Bias Panel ↔ Macro Reconciliation (v14.27.1 diagnostic → v14.28 partial fix, 2026-04-20)
 
-Diagnostic at [data/analysis/2026-04-20_bias_macro_reconciliation.md](data/analysis/2026-04-20_bias_macro_reconciliation.md). v14.28 landed P0 + two P1 UI items; remaining fixes below.
+Diagnostic at [data/analysis/2026-04-20_bias_macro_reconciliation.md](data/analysis/2026-04-20_bias_macro_reconciliation.md). v14.28 landed P0 + two P1 UI items; v14.31 landed the P1 resilience-sign fix. P2 items remain deferred.
 
 | Priority | Fix | Scope | Status |
 |---|---|---|---|
 | **P0** | Thread `readiness.overallStatus` through `_computeConviction()` — blocked macro must force STAND ASIDE; caution demotes one tier | `public/js/alerts.js` only | ✅ **Done v14.28** — BLOCKED hard-gates STAND ASIDE with blocking-gate sublabel; CAUTION demotes one tier via post-compute ladder. **P3 subsumed** (sublabel names gate IDs). |
 | **P1** | Gate UI render `detail` (current state), not `label` (gate name) | `public/js/alerts.js:3234-3262` | ✅ **Done v14.28** — `g.detail` primary, static label + id as hover tooltip |
 | **P1** | Clarify signal row ✓/✗ semantics — aligned/neutral/against, or add legend | `public/js/alerts.js:3336-3380` | ✅ **Done v14.28** — three-state icons keyed to `sign(contribution)` vs `b.direction`; legend row |
-| **P1** | Setup-context-aware resilience scoring in `computeDirectionalBias()` (align with v9.0 multiplier table in [setups.js:1209-1212](server/analysis/setups.js#L1209-L1212)) | `server/analysis/bias.js:186-189` | ⬜ **Deferred** — lands on its own so numeric impact is observable in isolation |
+| **P1** | Setup-context-aware resilience scoring in `computeDirectionalBias()` (align with v9.0 multiplier table in [setups.js:1209-1212](server/analysis/setups.js#L1209-L1212)) | `server/analysis/bias.js:186-213` | ✅ **Done v14.31** — regime-aware: trend → fragile with regime direction / resilient against; range → resilient with direction / fragile against; missing/neutral regime → 0. Display-only; setups.js multiplier path untouched, B9 edge unaffected. |
 | **P2** | Consolidate marketContext reads into `deriveMarketSnapshot(mktCtx)` helper | `server/analysis/bias.js` | ⬜ **Deferred** (code-hygiene only) |
 | **P2** | Investigate `dxyDirection='flat'` + null `equityBreadth`/`riskAppetite` on forward-test trade records (write-side bug in `simulator.js` or scan-engine alert composition; read path confirmed OK) | `server/trading/simulator.js`, scan engine | ⬜ **Deferred** — blocker for AI_ROADMAP.md Phase 1 batch analysis |
 

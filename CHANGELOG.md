@@ -4,6 +4,35 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v14.31] — 2026-04-20 — Resilience-sign fix in directional bias (regime-aware)
+
+Implements the P1 resilience-sign item from the v14.27.1 diagnostic ([data/analysis/2026-04-20_bias_macro_reconciliation.md](data/analysis/2026-04-20_bias_macro_reconciliation.md) §5). Ships on its own so the numeric impact on `bias.score` is observable in isolation, separate from the v14.28 UI/logic changes.
+
+### Fixed — Resilience signal is now regime-aware (P1)
+- [server/analysis/bias.js:186-213](server/analysis/bias.js#L186-L213) — resilience contribution depends on `indicators.regime.type` + `.direction` instead of a static `fragile → -1` / `resilient → +1` rule. The static rule contradicted the v9.0 multiplier table in [setups.js:1209-1212](server/analysis/setups.js#L1209-L1212), where `fragile` is a breakout amplifier (×1.15) / reversal damper (×0.90) and `resilient` is the inverse — i.e., the sign depends on whether the current regime is a breakout (trend) or reversal (range) context, not on the label alone.
+- New mapping:
+  - `regime.type === 'trend'` (breakout context): `fragile` contributes **with** the regime direction (+1 if bullish, −1 if bearish), `resilient` **against** it.
+  - `regime.type === 'range'` (reversal context): `resilient` contributes **with** the prevailing direction, `fragile` against it.
+  - `regime` missing, `regime.direction` neutral, or `regime.type` unknown → contribution is 0. No sign guessing, no NaN leak.
+- Contribution magnitude preserved at ±1 — overall `bias.score` range stays ≈ −18 to +18.
+- Validated against an 11-case synthetic harness (all 4 regime/label combinations for trend + range, plus 3 degradation cases); all signs match the spec in diagnostic §5.
+
+### Scope note — display-only, no trade-gating impact
+This is a bias-panel numerics fix. The resilience multiplier path in [setups.js:1209-1212](server/analysis/setups.js#L1209-L1212) — the only resilience read used by the live scan engine and backtest engine for trade decisions — is **not touched**. B9 paper-trading edge (or_breakout, 5m, conf≥70, hours 9–10 ET, MNQ=5 / MES=2 / MCL=2) is unaffected. The signed bias score feeds the dashboard bias panel and `_computeConviction()` macro-score input only.
+
+### Files changed
+- `server/analysis/bias.js` — resilience block at lines 186-213
+- `CHANGELOG.md`, `CLAUDE.md`, `CONTEXT_SUPPLEMENT.md`, `ROADMAP.md` — version tick + cross-references
+- `data/analysis/2026-04-20_bias_macro_reconciliation.md` — §5 status stamp
+
+### Remaining work from the v14.27.1 diagnostic (still deferred)
+- **P2 forward-test trade record stamping** — `dxyDirection='flat'` / null `equityBreadth` / null `riskAppetite` on resolved trade records; write-path bug in `simulator.js` or scan-engine alert composition. Blocker for AI_ROADMAP.md Phase 1.
+- **P2 `deriveMarketSnapshot(mktCtx)` helper** in bias.js — code-hygiene consolidation, no behavior change.
+
+Server restart required — this is a server-side module change, not hot-toggleable.
+
+---
+
 ## [v14.28] — 2026-04-20 — Conviction sees macro readiness + bias panel UI clarity
 
 Implements P0 and the two P1 UI-clarity items from the v14.27.1 diagnostic ([data/analysis/2026-04-20_bias_macro_reconciliation.md](data/analysis/2026-04-20_bias_macro_reconciliation.md) §8). The P1 resilience-sign fix and the P2 items (forward-test stamping, `deriveMarketSnapshot` helper) remain deferred to their own sessions so each change's effect is observable in isolation.

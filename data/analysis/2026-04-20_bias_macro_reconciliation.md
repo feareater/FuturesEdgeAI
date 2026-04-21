@@ -194,6 +194,8 @@ the correct reading is "dealers are amplifying the bullish trend-continuation/br
 
 This was the user's "suspicious" instinct on the screenshot.
 
+**Status: P1 implemented in v14.31** ([server/analysis/bias.js:186-213](../../server/analysis/bias.js#L186-L213); see CHANGELOG.md v14.31 entry and `git log --grep=v14.31` for the commit hash) — regime-aware contribution: trend context → fragile with regime direction, resilient against; range context → resilient with direction, fragile against; missing/neutral regime → 0. 11-case synthetic harness passes. setups.js multiplier path untouched (display-only, no trade-gating impact).
+
 ---
 
 ## 6. Does `_computeConviction()` see macro readiness status?

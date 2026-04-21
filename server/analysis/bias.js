@@ -183,9 +183,30 @@ function computeDirectionalBias(symbol, marketContext, indicators) {
   addSignal('VIX Regime', vixRegime, vixRegPts);
   addSignal('VIX Direction', vixDir, vixDirPts);
 
-  // 7. Resilience
+  // 7. Resilience — regime-aware per v9.0 multiplier table in setups.js:1209-1212
+  // trend regime = breakout context: fragile amplifies with trend, resilient dampens against trend
+  // range regime = reversal context: resilient amplifies with prevailing direction, fragile against
+  // Missing regime / neutral direction / unknown type → 0 (graceful, no sign guess)
+  // Spec: data/analysis/2026-04-20_bias_macro_reconciliation.md §5
   const resLabel = marketContext?.options?.resilienceLabel ?? 'neutral';
-  const resPts = resLabel === 'resilient' ? 1 : resLabel === 'fragile' ? -1 : 0;
+  const resRegime = indicators?.regime ?? null;
+  let resRegimeDir = 'neutral';
+  if (resRegime && resRegime.direction) {
+    const rd = String(resRegime.direction).toLowerCase();
+    if (rd.includes('bullish'))      resRegimeDir = 'bullish';
+    else if (rd.includes('bearish')) resRegimeDir = 'bearish';
+  }
+  let resPts = 0;
+  if (resLabel !== 'neutral' && resRegime && resRegimeDir !== 'neutral') {
+    const dirSign = resRegimeDir === 'bullish' ? 1 : -1;
+    if (resRegime.type === 'trend') {
+      if      (resLabel === 'fragile')   resPts =  dirSign;
+      else if (resLabel === 'resilient') resPts = -dirSign;
+    } else if (resRegime.type === 'range') {
+      if      (resLabel === 'resilient') resPts =  dirSign;
+      else if (resLabel === 'fragile')   resPts = -dirSign;
+    }
+  }
   addSignal('Resilience', resLabel, resPts);
 
   // 8. Market regime (from indicators.regime if available)
