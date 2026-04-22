@@ -4,6 +4,113 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v14.36] — 2026-04-21 — 14-day Databento backfill + MHG seed re-backfill (data-layer remediation Phase 3, Bugs 3+5)
+
+Phase 3 of the data-layer remediation plan. Fills the thin-historical window (Bug 5: all 8 tradeable CME symbols had 14–15 days of <500 bars/day since 2026-04-02) and restores the MHG seed cache (Bug 3: stale since 2026-04-08). Writes `time`-field bars (Phase 1 compliance) with per-file `.bak` sidecars (Phase 2 rollback strategy).
+
+### Part A — Historical 14-day backfill
+
+New `scripts/backfillHistoricalWindow.js`:
+
+- Symbols: `MNQ`, `MES`, `M2K`, `MYM`, `MGC`, `SIL`, `MHG`, `MCL` (the 8 tradeable)
+- Window: last 14 calendar days, today excluded (live feed is still appending + Databento has ~15-min ingest lag)
+- Source: Databento historical REST (`POST hist.databento.com/v0/timeseries.get_range`, `ohlcv-1m`, `GLBX.MDP3`, `stype_in=parent`) — same pattern as `dailyRefresh.js:fetchSymbol24h`
+- Per-(symbol, date) day-boundary query: minimum 1 HTTP request per day per symbol; 150 ms rate-throttle between calls
+- Skip-if-complete gate: (symbol, date) with ≥1,300 bars already on disk is left alone (near-complete 23-hour CME session). `--force` bypasses.
+- Merge semantics when the existing file is present but thin: Phase 2 dedup (highest volume wins, ties broken by last occurrence); sorts ascending by `time`
+- Parent subscription returns bars for ALL listed contract months per symbol (~4× the single-contract count); dedup-by-time keeps the front-month bar per minute (highest volume is the canonical front-month selector)
+- Per-file `.bak` sidecar on every write for rollback
+- Today's date always skipped — the live feed is actively writing, and Databento's historical API has an ingest lag
+- After all 1m dates land for a symbol, 5m / 15m / 30m are re-aggregated and written to both `data/historical/futures/{sym}/{tf}/` and `data/historical/futures_agg/{sym}/{tf}/`
+- Flags: `--dry-run`, `--symbol SYM`, `--days N` (default 14), `--verbose`, `--force`
+
+**Backfill run summary (2026-04-21, 314 s wall clock):**
+
+| metric | value |
+|---|---|
+| Symbols attempted | 8 |
+| (symbol, date) pairs attempted | 112 (8 × 14) |
+| 1m files written | 77 |
+| Dates skipped (already ≥1,300 bars or weekend-empty) | 35 |
+| Dates errored | 0 |
+| Bars fetched from Databento | 126,530 (raw, pre-dedup across contract months) |
+| Bars merged onto disk | 83,968 (post front-month dedup) |
+| Aggregated files written | 462 (5m+15m+30m × 2 dirs × affected dates) |
+
+Per-symbol post-backfill coverage: every weekday Apr 07 → Apr 20 has 1,080–1,475 bars per symbol (full sessions). Weekends correctly minimal (17–44 Sat, 118–197 Sun). MHG now on par with MNQ / MES / MGC / MCL — the audit's "14-15 days of <500 bars/day" is closed.
+
+### Part B — MHG seed file restored
+
+`server/data/seedFetch.js`:
+
+- `SYMBOLS` dict — added `MHG: 'HG=F'` (line 27). Root cause of Bug 3 was literally that **MHG had never been in the SYMBOLS list** — the audit's speculation of a ticker mismatch (`HG=F` vs `MHG=F`) turned out to be wrong; both tickers work (empirically verified: `HG=F` returns 6,917 1m bars, `MHG=F` returns 6,918). Using `HG=F` for consistency with `dailyRefresh.js` `YAHOO_TICKERS`.
+- New optional `symbols` filter on `fetchAll({ symbols: ['MHG'] })` — when passed, the crypto side-loop and reference-symbol side-loop are skipped so targeted re-backfills don't touch unrelated seed files. Back-compat: `fetchAll()` with no args behaves exactly as before.
+- CLI entry point accepts `--symbol MHG` (repeatable) — threads symbols through the new filter.
+
+Ran `node server/data/seedFetch.js --symbol MHG`. All seed TFs populated to 2026-04-21T23:23Z:
+
+| file | bars | last timestamp | last close |
+|---|---|---|---|
+| MHG_1m.json | 4,416 | 2026-04-21T23:23:00Z | $6.015 |
+| MHG_5m.json | 6,746 | 2026-04-21T23:23Z | $6.015 |
+| MHG_15m.json | 2,257 | 2026-04-21T23:23Z | $6.015 |
+| MHG_30m.json | 2,277 | 2026-04-21T23:23Z | $6.015 |
+| MHG_1h.json | 1,141 | 2026-04-21T23:23Z | $6.015 |
+| MHG_3m.json | 1,472 | 2026-04-21T23:23Z | $6.015 (derived from 1m) |
+| MHG_2h.json | 571 | 2026-04-21T23:23Z | $6.015 (derived from 1h) |
+| MHG_4h.json | 286 | 2026-04-21T23:23Z | $6.015 (derived from 1h) |
+
+Pre-v14.36 last timestamp was 2026-04-08T22:14Z; now current. Copper price ~$6.01 matches the live market.
+
+### Verification
+
+- **Regression test (known-good March window)**: 2026-03-01 → 2026-04-01 MNQ/MES/MCL or_breakout 5m conf≥70 → **21 trades, WR 47.6%, PF 4.89, Net +$3,073, Sharpe 7.21** — **bit-for-bit identical** to the Phase 2 spot-check. Engine is not regressed; the Phase 1–3 chain preserves historical backtest behavior.
+- **Per-symbol per-day bar counts verified**: all 8 tradeable × 14 calendar days show expected full-session counts on weekdays, minimal on weekends, 0 duplicates per date file. See commit verification log for the full table.
+- **Higher-TF aggregates**: 5m / 15m / 30m files in both `futures/` and `futures_agg/` re-derived from the freshly backfilled 1m and have matching bar counts (e.g. MCL 2026-04-15: 1,475 × 1m → 296 × 5m → 99 × 15m → 50 × 30m).
+- **MHG seed reads**: all TF files present, all timestamps current, close values consistent with live copper market.
+- **Server restart** (pm2): live feed reconnected, no startup errors, `/api/datastatus` clean.
+
+### B9 paper-trading edge unaffected
+
+- No changes to setup detection, confidence scoring, `applyMarketContext()` math, outcome resolution, or the B9 trade config.
+- seedFetch.js: pure data/ticker additions — the existing MNQ/MES/MGC/MCL/SIL/M2K/MYM logic is untouched; the optional `symbols` filter preserves old behavior when omitted.
+- Backfill script only writes data files; no code paths in the scan engine or backtest reach into it.
+
+### Rollback
+
+All modified files in `data/historical/futures/` have `.bak` sidecars. Same one-liner as Phase 2:
+
+```bash
+cd data/historical/futures && find . -name '*.json.bak' | while read f; do mv "$f" "${f%.bak}"; done
+```
+
+`data/seed/MHG_*.json` — the pre-v14.36 version was literally absent (never written), so rollback is `rm data/seed/MHG_*.json` to return to the pre-v14.36 state.
+
+### Surprise — flagged for the Phase 3 gate report
+
+Post-backfill spot-check on 2026-04-02 → 2026-04-20 (MNQ/MES/MCL/MGC/SIL/MHG/M2K/MYM, or_breakout 5m, conf≥70) returned **0 trades** — NOT because bars are missing (they're full now) but because options HP data is unavailable for every ETF after 2026-04-01:
+
+```
+QQQ: April HP files=1, latest=2026-04-01
+SPY: April HP files=1, latest=2026-04-01
+USO: April HP files=1, latest=2026-04-01
+GLD: April HP files=1, latest=2026-04-01
+IWM: April HP files=1, latest=2026-04-01
+SLV: April HP files=1, latest=2026-04-01
+```
+
+Missing HP → `dexBias === 'neutral'` on every post-04-01 day → Phase 2 loss-analysis filter 3 (hard skip when `dexBias === 'neutral'`) kills every OR breakout. The raw OPRA zips under `data/historical/raw/OPRA/{etf}/` end at 2026-04-02, so historical HP cannot be recomputed for later dates without either (a) new OPRA zip purchases from Databento covering 2026-04-03 onward, or (b) the OPRA live TCP feed (`features.liveOpra=true`) accumulating enough strike OI to snapshot.
+
+Out of Phase 3 scope — the audit's Phase 3 fix sketch specifically targets the 1m bar files in `data/historical/futures/`. Flagging for your call on when to address. Ignoring for now doesn't break anything; it just means April backtests remain 0-trade until HP catches up. The March regression test confirms nothing upstream is regressed.
+
+### Files changed
+
+- `scripts/backfillHistoricalWindow.js` — new (~250 lines).
+- `server/data/seedFetch.js` — added `MHG: 'HG=F'` to SYMBOLS, optional `symbols` filter on `fetchAll`, `--symbol SYM` CLI flag.
+- `CHANGELOG.md` — this entry.
+
+---
+
 ## [v14.35] — 2026-04-21 — Bar schema migration on disk + engine.js both-field normalize (data-layer remediation Phase 2, Bugs 1+2+6)
 
 Phase 2 of the data-layer remediation plan. Heals every existing `ts`-field bar on disk under `data/historical/futures/**` and collapses the duplicate-timestamp pileups called out in the audit (Bug 6: ~50% dup rate on 2026-04-08/09 for MGC/SIL/MHG; Bug 2: ~1 dup per hourly interleave). Bundles the engine.js both-field normalize fix flagged at the Phase 1 gate so post-migration backtests don't regress.

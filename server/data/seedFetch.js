@@ -24,6 +24,7 @@ const SYMBOLS = {
   SIL: 'SIL',   // Global X Silver Miners ETF — full multi-TF
   M2K: 'RTY=F',  // Micro Russell 2000 (RTY is the full-size ticker on Yahoo)
   MYM: 'MYM=F',  // Micro Dow Jones
+  MHG: 'HG=F',   // Micro Copper — uses full-size HG=F (same convention as dailyRefresh.js)
 };
 
 // Reference/correlation symbols — fetched with full timeframes so they can be charted.
@@ -111,10 +112,19 @@ function aggregate(symbol, timeframe, sourceCandles, n) {
 // fetchAll — fetches all symbols × timeframes and writes to data/seed/
 // ---------------------------------------------------------------------------
 
-async function fetchAll() {
+async function fetchAll(opts = {}) {
   fs.mkdirSync(SEED_DIR, { recursive: true });
 
-  for (const [symbol, yfSymbol] of Object.entries(SYMBOLS)) {
+  // Optional filter: `{ symbols: ['MHG'] }` restricts the primary-symbol loop.
+  // Reference symbols + crypto are always skipped when `symbols` is passed, so
+  // targeted reruns (e.g. MHG re-backfill) don't touch unrelated seed files.
+  const symFilter = Array.isArray(opts.symbols) ? new Set(opts.symbols) : null;
+
+  const symEntries = symFilter
+    ? Object.entries(SYMBOLS).filter(([s]) => symFilter.has(s))
+    : Object.entries(SYMBOLS);
+
+  for (const [symbol, yfSymbol] of symEntries) {
     console.log(`[seedFetch] ── ${symbol} (${yfSymbol}) ──`);
 
     for (const { tf, yf, range } of TIMEFRAMES) {
@@ -165,6 +175,10 @@ async function fetchAll() {
     console.log(`[seedFetch] ${symbol} 4h  ${fourH.candles.length} candles → ${symbol}_4h.json (derived from 1h)`);
   }
 
+  // When a symbol filter is active (targeted re-backfill), skip the crypto
+  // and reference-symbol side loops to avoid touching unrelated seed files.
+  if (symFilter) return;
+
   // Fetch crypto perpetual futures from Coinbase International Exchange
   const { fetchAllCrypto } = require('./coinbaseFetch');
   await fetchAllCrypto();
@@ -205,9 +219,18 @@ async function fetchAll() {
 
 module.exports = { fetchAll };
 
-// CLI: "node server/data/seedFetch.js" still works as before
+// CLI: `node server/data/seedFetch.js` runs everything; `--symbol MHG` (repeatable)
+// restricts to specific primary symbols and skips crypto + reference refreshes.
 if (require.main === module) {
-  fetchAll()
+  const args    = process.argv.slice(2);
+  const symbols = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--symbol' && i + 1 < args.length) symbols.push(args[++i]);
+  }
+  const opts = symbols.length > 0 ? { symbols } : {};
+  if (symbols.length > 0) console.log(`Seed fetch filtered to: ${symbols.join(', ')}`);
+
+  fetchAll(opts)
     .then(() => console.log('\nSeed fetch complete.'))
     .catch(err => {
       console.error('\nSeed fetch failed:', err.message);
