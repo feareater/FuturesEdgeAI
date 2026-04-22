@@ -15,7 +15,7 @@ const http = require('http');
 
 const BASE_URL  = 'http://localhost:3000';
 const REPORT_PATH = path.resolve(__dirname, '../reports/b6_analysis.md');
-const CHANGELOG   = path.resolve(__dirname, '../CHANGELOG.md');
+const CHANGELOG   = path.resolve(__dirname, '../docs/CHANGELOG.md');
 
 // ─── A5 Baseline (hardcoded) ──────────────────────────────────────────────────
 

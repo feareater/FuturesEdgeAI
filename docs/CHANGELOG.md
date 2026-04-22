@@ -221,7 +221,7 @@ Phase 2 of the data-layer remediation plan. Heals every existing `ts`-field bar 
 
 ### engine.js normalize fix (option a, per Phase 1 gate)
 
-[server/backtest/engine.js:191–212](server/backtest/engine.js#L191-L212) — `loadDailyBars()` now delegates to a new `_normalizeBars()` helper that outputs bars with BOTH `time` and `ts` mirrored from whichever field the source file has. Rationale: 11 downstream readers in engine.js reference `bar.ts` directly (lines 344, 346, 373, 378, 385, 390, 396, 401, 632, 865, 1142). Preserving both fields after normalize keeps those reads working against pre-migration (`ts`-only), post-migration (`time`-only), and freshly-aggregated (`time`-only via Phase 1's historicalPipeline) bars alike. Verified: spot-check backtest on 2026-03-01 → 2026-04-01 for MNQ/MES/MCL or_breakout 5m conf≥70 returned 21 trades, WR 47.6%, PF 4.89, Sharpe 7.21 — no engine errors, consistent with B9 profile.
+[server/backtest/engine.js:191–212](../server/backtest/engine.js#L191-L212) — `loadDailyBars()` now delegates to a new `_normalizeBars()` helper that outputs bars with BOTH `time` and `ts` mirrored from whichever field the source file has. Rationale: 11 downstream readers in engine.js reference `bar.ts` directly (lines 344, 346, 373, 378, 385, 390, 396, 401, 632, 865, 1142). Preserving both fields after normalize keeps those reads working against pre-migration (`ts`-only), post-migration (`time`-only), and freshly-aggregated (`time`-only via Phase 1's historicalPipeline) bars alike. Verified: spot-check backtest on 2026-03-01 → 2026-04-01 for MNQ/MES/MCL or_breakout 5m conf≥70 returned 21 trades, WR 47.6%, PF 4.89, Sharpe 7.21 — no engine errors, consistent with B9 profile.
 
 ### Migration script: `scripts/migrateBarSchema.js`
 
@@ -289,7 +289,7 @@ Rollback leaves the engine.js normalize fix in place (harmless — produces same
 
 ## [v14.34] — 2026-04-21 — Bar schema unification ts→time in writers (data-layer remediation Phase 1)
 
-Phase 1 of the data-layer remediation plan from [data/analysis/2026-04-21_data_artifact_audit.md](data/analysis/2026-04-21_data_artifact_audit.md). Addresses audit Bug 1 (critical: `ts` vs `time` schema drift across writers) and Bug 2 (high: liveArchive dedup race when last bar on disk was written by dailyRefresh). Code-only change — existing `ts`-field bars on disk are NOT migrated here; that is Phase 2.
+Phase 1 of the data-layer remediation plan from [data/analysis/2026-04-21_data_artifact_audit.md](../data/analysis/2026-04-21_data_artifact_audit.md). Addresses audit Bug 1 (critical: `ts` vs `time` schema drift across writers) and Bug 2 (high: liveArchive dedup race when last bar on disk was written by dailyRefresh). Code-only change — existing `ts`-field bars on disk are NOT migrated here; that is Phase 2.
 
 ### Problem
 
@@ -350,7 +350,7 @@ Deliberately NOT fixed in Phase 1 per the plan's instruction: "If any reader rea
 
 ## [v14.33] — 2026-04-21 — Emergency hard spike floor on live feed (data-layer remediation Phase 0)
 
-Phase 0 of the data-layer remediation plan from [data/analysis/2026-04-21_data_artifact_audit.md](data/analysis/2026-04-21_data_artifact_audit.md). Bug 4 mitigation only — the proper Bug 4 structural fix (longer rolling median + volume floor) is deferred to Phase 5.
+Phase 0 of the data-layer remediation plan from [data/analysis/2026-04-21_data_artifact_audit.md](../data/analysis/2026-04-21_data_artifact_audit.md). Bug 4 mitigation only — the proper Bug 4 structural fix (longer rolling median + volume floor) is deferred to Phase 5.
 
 ### Problem
 
@@ -392,13 +392,13 @@ Phase 0 of the remediation plan was drafted targeting `v14.32`, but v14.32 was a
 
 ## [v14.32] — 2026-04-20 — Forward-test trade-record stamping fix (dxyDirection / equityBreadth / riskAppetite)
 
-Implements the P2 forward-test stamping item flagged in the v14.27.1 diagnostic ([data/analysis/2026-04-20_bias_macro_reconciliation.md](data/analysis/2026-04-20_bias_macro_reconciliation.md) §7). Blocker-clearing for AI_ROADMAP.md Phase 1/2 batch analysis, which was training on a degenerate feature space (`dxyDirection = 'flat'` across 582 trades, `equityBreadth`/`riskAppetite`/`bondRegime` null across 582 trades). Diagnosis document: [data/analysis/2026-04-20_p2_forward_test_stamping_diagnosis.md](data/analysis/2026-04-20_p2_forward_test_stamping_diagnosis.md).
+Implements the P2 forward-test stamping item flagged in the v14.27.1 diagnostic ([data/analysis/2026-04-20_bias_macro_reconciliation.md](../data/analysis/2026-04-20_bias_macro_reconciliation.md) §7). Blocker-clearing for AI_ROADMAP.md Phase 1/2 batch analysis, which was training on a degenerate feature space (`dxyDirection = 'flat'` across 582 trades, `equityBreadth`/`riskAppetite`/`bondRegime` null across 582 trades). Diagnosis document: [data/analysis/2026-04-20_p2_forward_test_stamping_diagnosis.md](../data/analysis/2026-04-20_p2_forward_test_stamping_diagnosis.md).
 
 ### Diagnosis
 
 Root cause is **Candidate A + Candidate C combined**, both on the write side of the forward-trade record:
 1. **Path mismatch (A)** — `simulator.js:_persistForwardTrade()` read `equityBreadth`/`riskAppetite`/`bondRegime` from the top level of `setup.scoreBreakdown.context`, but setups.js `applyMarketContext()` places those fields inside a nested `breadthDetail` sub-object. Reads always returned `undefined` → null.
-2. **Missing fallback (C)** — `contextBreakdown.dxyDirection` at [setups.js:1362](server/analysis/setups.js#L1362) is sourced from `marketContext.dxy?.direction` only, with no fallback to `breadth.dollarRegime`. Non-DXY-applicable symbols (MHG/SIL/M2K/MYM/crypto) get hard-coded `'flat'` from `_buildDxyContext`. The authoritative Phase 2 gate fallback chain (`breadth.dollarRegime → dxy.direction → 'flat'`, per [CLAUDE.md:232](CLAUDE.md#L232) and mirrored in [bias.js:21-29](server/analysis/bias.js#L21-L29)) was not being applied at the stamp site.
+2. **Missing fallback (C)** — `contextBreakdown.dxyDirection` at [setups.js:1362](../server/analysis/setups.js#L1362) is sourced from `marketContext.dxy?.direction` only, with no fallback to `breadth.dollarRegime`. Non-DXY-applicable symbols (MHG/SIL/M2K/MYM/crypto) get hard-coded `'flat'` from `_buildDxyContext`. The authoritative Phase 2 gate fallback chain (`breadth.dollarRegime → dxy.direction → 'flat'`, per [CLAUDE.md:232](CLAUDE.md#L232) and mirrored in [bias.js:21-29](../server/analysis/bias.js#L21-L29)) was not being applied at the stamp site.
 
 Ruled out: Candidate B (live marketContext builder correctly populates breadth — confirmed by the 2026-04-20 live `/api/bias/debug` capture) and Candidate D (simulator reads the entry-time snapshot on `alert.setup.scoreBreakdown.context`, not a resolution-time re-derivation).
 
@@ -406,8 +406,8 @@ Backtest records are not affected because the backtest engine writes breadth fie
 
 ### Fixed — Forward-test record stamping
 
-- [server/trading/simulator.js:248-314](server/trading/simulator.js#L248-L314) `_persistForwardTrade()` — reads `equityBreadth`/`riskAppetite`/`bondRegime` from `ctx.breadthDetail` (where setups.js already puts them) and applies the documented Phase 2 fallback chain for `dxyDirection`: `breadthDetail.dollarRegime → ctx.dxyDirection → null`. Stamps `null` — not `'flat'`/`'neutral'` — when a field is genuinely missing (cold start, pre-v14.32 alerts without `dollarRegime` in breadthDetail). Honest missingness, not synthetic defaults. Adds `// TODO(P2-deriveMarketSnapshot):` marker noting the shared fallback chain duplicated here and in bias.js.
-- [server/analysis/setups.js:1300-1306](server/analysis/setups.js#L1300-L1306) `breadthDetail` — exposes `dollarRegime: b.dollarRegime` on the breadth-detail sub-object of `contextBreakdown`. Pure data exposure: `b.dollarRegime` already feeds the commodity dollar-regime scoring block at lines 1279-1283 and the Phase 2 loss-gate fallback at 1319-1321. Exposing it enables the simulator's (and any future consumer's) fallback chain to consult `breadth.dollarRegime` as the primary source, matching the bias.js semantics. No multiplier/gate/math change — `applyMarketContext()` return value shape grows by one key only.
+- [server/trading/simulator.js:248-314](../server/trading/simulator.js#L248-L314) `_persistForwardTrade()` — reads `equityBreadth`/`riskAppetite`/`bondRegime` from `ctx.breadthDetail` (where setups.js already puts them) and applies the documented Phase 2 fallback chain for `dxyDirection`: `breadthDetail.dollarRegime → ctx.dxyDirection → null`. Stamps `null` — not `'flat'`/`'neutral'` — when a field is genuinely missing (cold start, pre-v14.32 alerts without `dollarRegime` in breadthDetail). Honest missingness, not synthetic defaults. Adds `// TODO(P2-deriveMarketSnapshot):` marker noting the shared fallback chain duplicated here and in bias.js.
+- [server/analysis/setups.js:1300-1306](../server/analysis/setups.js#L1300-L1306) `breadthDetail` — exposes `dollarRegime: b.dollarRegime` on the breadth-detail sub-object of `contextBreakdown`. Pure data exposure: `b.dollarRegime` already feeds the commodity dollar-regime scoring block at lines 1279-1283 and the Phase 2 loss-gate fallback at 1319-1321. Exposing it enables the simulator's (and any future consumer's) fallback chain to consult `breadth.dollarRegime` as the primary source, matching the bias.js semantics. No multiplier/gate/math change — `applyMarketContext()` return value shape grows by one key only.
 
 ### Forward-only — no historical backfill
 
@@ -445,10 +445,10 @@ Server restart required — this is a server-side module change, not hot-togglea
 
 ## [v14.31] — 2026-04-20 — Resilience-sign fix in directional bias (regime-aware)
 
-Implements the P1 resilience-sign item from the v14.27.1 diagnostic ([data/analysis/2026-04-20_bias_macro_reconciliation.md](data/analysis/2026-04-20_bias_macro_reconciliation.md) §5). Ships on its own so the numeric impact on `bias.score` is observable in isolation, separate from the v14.28 UI/logic changes.
+Implements the P1 resilience-sign item from the v14.27.1 diagnostic ([data/analysis/2026-04-20_bias_macro_reconciliation.md](../data/analysis/2026-04-20_bias_macro_reconciliation.md) §5). Ships on its own so the numeric impact on `bias.score` is observable in isolation, separate from the v14.28 UI/logic changes.
 
 ### Fixed — Resilience signal is now regime-aware (P1)
-- [server/analysis/bias.js:186-213](server/analysis/bias.js#L186-L213) — resilience contribution depends on `indicators.regime.type` + `.direction` instead of a static `fragile → -1` / `resilient → +1` rule. The static rule contradicted the v9.0 multiplier table in [setups.js:1209-1212](server/analysis/setups.js#L1209-L1212), where `fragile` is a breakout amplifier (×1.15) / reversal damper (×0.90) and `resilient` is the inverse — i.e., the sign depends on whether the current regime is a breakout (trend) or reversal (range) context, not on the label alone.
+- [server/analysis/bias.js:186-213](../server/analysis/bias.js#L186-L213) — resilience contribution depends on `indicators.regime.type` + `.direction` instead of a static `fragile → -1` / `resilient → +1` rule. The static rule contradicted the v9.0 multiplier table in [setups.js:1209-1212](../server/analysis/setups.js#L1209-L1212), where `fragile` is a breakout amplifier (×1.15) / reversal damper (×0.90) and `resilient` is the inverse — i.e., the sign depends on whether the current regime is a breakout (trend) or reversal (range) context, not on the label alone.
 - New mapping:
   - `regime.type === 'trend'` (breakout context): `fragile` contributes **with** the regime direction (+1 if bullish, −1 if bearish), `resilient` **against** it.
   - `regime.type === 'range'` (reversal context): `resilient` contributes **with** the prevailing direction, `fragile` against it.
@@ -457,7 +457,7 @@ Implements the P1 resilience-sign item from the v14.27.1 diagnostic ([data/analy
 - Validated against an 11-case synthetic harness (all 4 regime/label combinations for trend + range, plus 3 degradation cases); all signs match the spec in diagnostic §5.
 
 ### Scope note — display-only, no trade-gating impact
-This is a bias-panel numerics fix. The resilience multiplier path in [setups.js:1209-1212](server/analysis/setups.js#L1209-L1212) — the only resilience read used by the live scan engine and backtest engine for trade decisions — is **not touched**. B9 paper-trading edge (or_breakout, 5m, conf≥70, hours 9–10 ET, MNQ=5 / MES=2 / MCL=2) is unaffected. The signed bias score feeds the dashboard bias panel and `_computeConviction()` macro-score input only.
+This is a bias-panel numerics fix. The resilience multiplier path in [setups.js:1209-1212](../server/analysis/setups.js#L1209-L1212) — the only resilience read used by the live scan engine and backtest engine for trade decisions — is **not touched**. B9 paper-trading edge (or_breakout, 5m, conf≥70, hours 9–10 ET, MNQ=5 / MES=2 / MCL=2) is unaffected. The signed bias score feeds the dashboard bias panel and `_computeConviction()` macro-score input only.
 
 ### Files changed
 - `server/analysis/bias.js` — resilience block at lines 186-213
@@ -474,22 +474,22 @@ Server restart required — this is a server-side module change, not hot-togglea
 
 ## [v14.28] — 2026-04-20 — Conviction sees macro readiness + bias panel UI clarity
 
-Implements P0 and the two P1 UI-clarity items from the v14.27.1 diagnostic ([data/analysis/2026-04-20_bias_macro_reconciliation.md](data/analysis/2026-04-20_bias_macro_reconciliation.md) §8). The P1 resilience-sign fix and the P2 items (forward-test stamping, `deriveMarketSnapshot` helper) remain deferred to their own sessions so each change's effect is observable in isolation.
+Implements P0 and the two P1 UI-clarity items from the v14.27.1 diagnostic ([data/analysis/2026-04-20_bias_macro_reconciliation.md](../data/analysis/2026-04-20_bias_macro_reconciliation.md) §8). The P1 resilience-sign fix and the P2 items (forward-test stamping, `deriveMarketSnapshot` helper) remain deferred to their own sessions so each change's effect is observable in isolation.
 
 ### Fixed — Macro BLOCKED now forces STAND ASIDE conviction (P0)
-- `_computeConviction()` at [public/js/alerts.js:3448](public/js/alerts.js#L3448) now takes `(setupScore, macroScore, readinessStatus, blockedGateIds)` and short-circuits to **STAND ASIDE** when `readinessStatus === 'blocked'`. The sublabel names the blocking gate IDs (`STAND ASIDE — Macro BLOCKED — dex-neutral`), directly fixing the screenshot regression where a BLOCKED macro + bullish bias was still producing MODERATE SETUP.
+- `_computeConviction()` at [public/js/alerts.js:3448](../public/js/alerts.js#L3448) now takes `(setupScore, macroScore, readinessStatus, blockedGateIds)` and short-circuits to **STAND ASIDE** when `readinessStatus === 'blocked'`. The sublabel names the blocking gate IDs (`STAND ASIDE — Macro BLOCKED — dex-neutral`), directly fixing the screenshot regression where a BLOCKED macro + bullish bias was still producing MODERATE SETUP.
 - When `readinessStatus === 'caution'`, the computed tier is demoted one step via a post-compute ladder (`HIGH CONVICTION → GOOD SETUP → MODERATE SETUP → MARGINAL → STAND ASIDE`). Sublabel is tagged `macro CAUTION (demoted from X)` so the override is visible, not silent.
-- `fetchAndRenderBias()` at [public/js/alerts.js:3187-3199](public/js/alerts.js#L3187) now caches `window._lastReadinessStatus` and `window._lastBlockedGateIds` alongside `_lastMacroScore`; `_renderConviction()` at [public/js/alerts.js:3562-3572](public/js/alerts.js#L3562) passes them to `_computeConviction()`.
+- `fetchAndRenderBias()` at [public/js/alerts.js:3187-3199](../public/js/alerts.js#L3187) now caches `window._lastReadinessStatus` and `window._lastBlockedGateIds` alongside `_lastMacroScore`; `_renderConviction()` at [public/js/alerts.js:3562-3572](../public/js/alerts.js#L3562) passes them to `_computeConviction()`.
 
 ### Changed — Macro gate rows render live state, not static gate names (P1)
-- [public/js/alerts.js:3234-3262](public/js/alerts.js#L3234) — gate rows now show `g.detail` (e.g. "DXY flat, hour 19 — no late-session block", "DEX neutral — options flow has no directional conviction") as primary text. The static gate label and id become the hover tooltip (`row.title`), so users can still identify the gate but can no longer misread the name as a state claim. Falls back to `g.label` if `g.detail` is empty.
+- [public/js/alerts.js:3234-3262](../public/js/alerts.js#L3234) — gate rows now show `g.detail` (e.g. "DXY flat, hour 19 — no late-session block", "DEX neutral — options flow has no directional conviction") as primary text. The static gate label and id become the hover tooltip (`row.title`), so users can still identify the gate but can no longer misread the name as a state claim. Falls back to `g.label` if `g.detail` is empty.
 
 ### Changed — Signal ✓/➖/✗ icons now indicate alignment with overall bias (P1)
-- [public/js/alerts.js:3336-3380](public/js/alerts.js#L3336) — three-state icon scheme driven by `sign(signal.contribution)` vs `b.direction`:
+- [public/js/alerts.js:3336-3380](../public/js/alerts.js#L3336) — three-state icon scheme driven by `sign(signal.contribution)` vs `b.direction`:
   - **✓ aligned** — non-zero contribution with sign matching overall bias direction
   - **➖ neutral** — contribution === 0, or overall bias is neutral (no direction to align with)
   - **✗ against** — non-zero contribution with sign opposing overall bias direction
-- Small legend row rendered once at the top of the signal list: "✓ aligned  ➖ neutral  ✗ against". Existing green/red colors preserved; new `.sig-neutral { color: var(--text-dim); }` added in [public/css/dashboard.css](public/css/dashboard.css).
+- Small legend row rendered once at the top of the signal list: "✓ aligned  ➖ neutral  ✗ against". Existing green/red colors preserved; new `.sig-neutral { color: var(--text-dim); }` added in [public/css/dashboard.css](../public/css/dashboard.css).
 - No longer mutates `listEl.innerHTML` on every tick when count is stable — expected child count is `signals.length + 1` (legend row).
 
 ### Files changed
@@ -499,7 +499,7 @@ Implements P0 and the two P1 UI-clarity items from the v14.27.1 diagnostic ([dat
 - `CHANGELOG.md`, `CLAUDE.md`, `CONTEXT_SUPPLEMENT.md`, `AI_ROADMAP.md`, `ROADMAP.md` — version tick + cross-references
 
 ### Remaining work from the v14.27.1 diagnostic (not done this session)
-- **P1 resilience sign fix** ([server/analysis/bias.js:187-189](server/analysis/bias.js#L187-L189)) — landed separately so its effect on bias-score numerics is observable in isolation.
+- **P1 resilience sign fix** ([server/analysis/bias.js:187-189](../server/analysis/bias.js#L187-L189)) — landed separately so its effect on bias-score numerics is observable in isolation.
 - **P2 forward-test trade record stamping** — `dxyDirection='flat'` / null `equityBreadth` / null `riskAppetite` on resolved trade records, bug is in the write path (simulator.js or scan-engine), not in bias read path.
 - **P2 `deriveMarketSnapshot(mktCtx)` helper** in bias.js — code hygiene consolidation, no behavior change.
 
@@ -513,14 +513,14 @@ No server restart needed — client JS / CSS only. Dashboard picks up changes on
 
 Investigated an apparent contradiction between the MARKET CONTEXT (macro gates) and DIRECTIONAL BIAS panels on the live dashboard. Outcome: field-source alignment between `computeSetupReadiness()` and `computeDirectionalBias()` is actually correct — the user-visible contradictions are surface-level bugs in rendering and a missing link from macro readiness to the conviction label.
 
-Full write-up: [data/analysis/2026-04-20_bias_macro_reconciliation.md](data/analysis/2026-04-20_bias_macro_reconciliation.md) — field-source tables for all 11 bias signals and all 6 macro gates, live `/api/bias/debug` capture (MNQ, 2026-04-20T23:38:13Z), fragile-resilience scoring review, conviction-function input audit, prioritized fix list.
+Full write-up: [data/analysis/2026-04-20_bias_macro_reconciliation.md](../data/analysis/2026-04-20_bias_macro_reconciliation.md) — field-source tables for all 11 bias signals and all 6 macro gates, live `/api/bias/debug` capture (MNQ, 2026-04-20T23:38:13Z), fragile-resilience scoring review, conviction-function input audit, prioritized fix list.
 
 ### Key findings
 - **Fields align.** Both modules read DXY from `breadth.dollarRegime → dxy.direction → 'flat'`, VIX from `vix.regime`, risk appetite / equity breadth from `breadth.*`, DEX from `options.dexBias`. No same-concept different-field divergence. Drift is prevented only by convention; a shared snapshot helper is the P2 fix.
-- **Gate labels mislead.** [alerts.js:3246-3258](public/js/alerts.js#L3246-L3258) renders the static `g.label` ("DXY Rising Late Session", "Crisis VIX") regardless of gate state. Real state lives in the `detail` tooltip — easy to read as state claims when they are gate names.
-- **Signal ✓/✗ = "contributes vs 0 pts".** [alerts.js:3344-3352](public/js/alerts.js#L3344-L3352) — not "agrees / disagrees with bias direction". Confuses the panel reader.
-- **Fragile resilience scored as always-bearish.** [bias.js:187-189](server/analysis/bias.js#L187-L189) gives `fragile → −1` unconditionally, inconsistent with [setups.js:1209-1212](server/analysis/setups.js#L1209-L1212) which treats `fragile` as a breakout amplifier (1.15×) / reversal damper (0.90×).
-- **Macro readiness never reaches `_computeConviction()`.** [alerts.js:3437](public/js/alerts.js#L3437) signature is `(setupScore, macroScore)` only — `readiness.overallStatus` is rendered to the macro panel but not threaded into the conviction label. A BLOCKED macro can still produce "MODERATE SETUP" / "GOOD SETUP". This is the direct cause of the screenshot regression; v14.21 resolved directional conflict but did not wire in macro readiness.
+- **Gate labels mislead.** [alerts.js:3246-3258](../public/js/alerts.js#L3246-L3258) renders the static `g.label` ("DXY Rising Late Session", "Crisis VIX") regardless of gate state. Real state lives in the `detail` tooltip — easy to read as state claims when they are gate names.
+- **Signal ✓/✗ = "contributes vs 0 pts".** [alerts.js:3344-3352](../public/js/alerts.js#L3344-L3352) — not "agrees / disagrees with bias direction". Confuses the panel reader.
+- **Fragile resilience scored as always-bearish.** [bias.js:187-189](../server/analysis/bias.js#L187-L189) gives `fragile → −1` unconditionally, inconsistent with [setups.js:1209-1212](../server/analysis/setups.js#L1209-L1212) which treats `fragile` as a breakout amplifier (1.15×) / reversal damper (0.90×).
+- **Macro readiness never reaches `_computeConviction()`.** [alerts.js:3437](../public/js/alerts.js#L3437) signature is `(setupScore, macroScore)` only — `readiness.overallStatus` is rendered to the macro panel but not threaded into the conviction label. A BLOCKED macro can still produce "MODERATE SETUP" / "GOOD SETUP". This is the direct cause of the screenshot regression; v14.21 resolved directional conflict but did not wire in macro readiness.
 
 ### Prioritized fix list (not implemented)
 - **P0** — thread `readiness.overallStatus` into `_computeConviction()`; force STAND ASIDE on `blocked`, demote one tier on `caution`
@@ -535,7 +535,7 @@ Full write-up: [data/analysis/2026-04-20_bias_macro_reconciliation.md](data/anal
 - `data/analysis/2026-04-20_bias_macro_reconciliation.md` — **NEW** — full diagnostic
 - `CHANGELOG.md`, `CLAUDE.md`, `CONTEXT_SUPPLEMENT.md`, `AI_ROADMAP.md`, `ROADMAP.md` — diagnostic note + P0–P3 references
 
-No code files changed. Server was not restarted (debug route `/api/bias/debug` already existed — [server/index.js:1562-1641](server/index.js#L1562-L1641)).
+No code files changed. Server was not restarted (debug route `/api/bias/debug` already existed — [server/index.js:1562-1641](../server/index.js#L1562-L1641)).
 
 ---
 

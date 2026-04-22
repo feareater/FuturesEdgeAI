@@ -10,10 +10,12 @@ node_modules/
 Historical_data/
 
 # Scratch / temp files
-server.log
 *.log
 *_tmp.json
 *_tmp.js
+
+# Runtime logs directory (server.log, pipeline_*.log)
+logs/
 
 # Binary installers (e.g. rtraderpro.msi in trading-knowledge/bootcamp)
 *.msi

@@ -1,7 +1,7 @@
 # FuturesEdge AI — Databento Integration Project Plan
 
 > **Living document.** Update status column as work progresses.
-> Read CLAUDE.md and CONTEXT_SUPPLEMENT.md before starting any session.
+> Read ../CLAUDE.md and CONTEXT_SUPPLEMENT.md before starting any session.
 > This document is the single source of truth for all Databento integration work.
 
 ---
@@ -576,7 +576,7 @@ Merge each feature branch to main only after its acceptance criteria are met and
 
 ## Standing infrastructure — post-Phase-5 data-layer remediation (v14.33–v14.38)
 
-The following scripts were added during the 2026-04-21/22 data-layer remediation (audit: [data/analysis/2026-04-21_data_artifact_audit.md](data/analysis/2026-04-21_data_artifact_audit.md)). They are NOT kanban items — they are ongoing maintenance tooling. Full commit-level detail in [CHANGELOG.md](CHANGELOG.md) entries v14.33 → v14.38.
+The following scripts were added during the 2026-04-21/22 data-layer remediation (audit: [data/analysis/2026-04-21_data_artifact_audit.md](../data/analysis/2026-04-21_data_artifact_audit.md)). They are NOT kanban items — they are ongoing maintenance tooling. Full commit-level detail in [CHANGELOG.md](CHANGELOG.md) entries v14.33 → v14.38.
 
 ### `scripts/backfillHistoricalWindow.js` — historical 1m gap-filler (v14.36, standing)
 

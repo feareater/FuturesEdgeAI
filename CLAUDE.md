@@ -1,5 +1,5 @@
 # FuturesEdge AI — CLAUDE.md
-> Project context for Claude Code. Read this, ROADMAP.md, and CONTEXT_SUPPLEMENT.md at the start of every session.
+> Project context for Claude Code. Read this, docs/ROADMAP.md, and docs/CONTEXT_SUPPLEMENT.md at the start of every session.
 
 ---
 
@@ -59,7 +59,8 @@ FuturesEdge AI is a browser-based trading analysis dashboard for a single user (
 ```
 FuturesEdgeAI/
 ├── CLAUDE.md                  ← You are here
-├── CHANGELOG.md               ← Version history of all changes
+├── docs/                      ← Project docs (CHANGELOG, ROADMAP, AI_ROADMAP, CONTEXT_SUPPLEMENT, DATABENTO_PROJECT, IMPLEMENTATION_ROADMAP)
+├── logs/                      ← Runtime logs (server.log, pipeline_*.log) — gitignored
 ├── package.json
 ├── .env                       ← API keys — never commit this
 ├── .gitignore
@@ -469,7 +470,7 @@ git branch -d feature/ironbeam-live-data
 - Commit at logical checkpoints (not just at the end)
 - Keep commits focused — one concern per commit
 - Push `main` to GitHub after every completed feature
-- Never commit `.env`, `server.log`, or `data/seed/*.json`
+- Never commit `.env`, `logs/server.log`, or `data/seed/*.json`
 
 ---
 

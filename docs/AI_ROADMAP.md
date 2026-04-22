@@ -2,15 +2,15 @@
 
 > **Status: B9 PASSED (WR 42.7%, PF 2.265). Phase 2 loss-analysis filters complete (v14.11). Paper trading ACTIVE on MNQ/MES/MCL as of 2026-04-06. Alert commentary re-enabled with rate limiting. Collecting forward-test trades — Phase 1 Claude batch analysis begins after 500+ completed trades.**
 > This document is the single source of truth for all planned AI/ML work.
-> Read CLAUDE.md, CONTEXT_SUPPLEMENT.md, and DATABENTO_PROJECT.md before starting any session on this track.
+> Read ../CLAUDE.md, CONTEXT_SUPPLEMENT.md, and DATABENTO_PROJECT.md before starting any session on this track.
 
 ## Blocking issue — forward-test record integrity (resolved v14.32, 2026-04-20)
 
 **Status: ✅ Resolved.** The P2 forward-test stamping bug flagged in the v14.27.1 diagnostic was fixed in v14.32. Root cause was a path mismatch in `_persistForwardTrade()` (simulator read `equityBreadth`/`riskAppetite`/`bondRegime` from the top level of `setup.scoreBreakdown.context`, but setups.js `applyMarketContext()` places those fields inside a nested `breadthDetail` sub-object) compounded by a missing fallback chain for `dxyDirection` (stamp site read `dxy.direction` only, not the authoritative `breadth.dollarRegime → dxy.direction → 'flat'` chain used by the Phase 2 gates and `bias.js`).
 
-Fix in [server/trading/simulator.js:248-314](server/trading/simulator.js#L248-L314) and a 1-line data exposure in [server/analysis/setups.js:1300-1306](server/analysis/setups.js#L1300-L1306). Forward-only — the 582 pre-v14.32 records in `data/logs/forward_trades.json` were not backfilled. Any resolution post-v14.32 populates the fields correctly.
+Fix in [server/trading/simulator.js:248-314](../server/trading/simulator.js#L248-L314) and a 1-line data exposure in [server/analysis/setups.js:1300-1306](../server/analysis/setups.js#L1300-L1306). Forward-only — the 582 pre-v14.32 records in `data/logs/forward_trades.json` were not backfilled. Any resolution post-v14.32 populates the fields correctly.
 
-Diagnosis + candidate-by-candidate evaluation: [data/analysis/2026-04-20_p2_forward_test_stamping_diagnosis.md](data/analysis/2026-04-20_p2_forward_test_stamping_diagnosis.md).
+Diagnosis + candidate-by-candidate evaluation: [data/analysis/2026-04-20_p2_forward_test_stamping_diagnosis.md](../data/analysis/2026-04-20_p2_forward_test_stamping_diagnosis.md).
 
 **Action for Phase 1 batch analysis:** wait for a sufficient sample of v14.32+ resolved trades to accumulate in `forward_trades.json` (recommend n ≥ 100 post-v14.32 before drawing rule-level conclusions). Until then, pre-v14.32 records can be used for structural analysis (outcomes, R:R, time-of-day, symbol) but the context features (`dxyDirection`, `equityBreadth`, `riskAppetite`, `bondRegime`) have near-zero variance on the old records and should be excluded from feature-importance work until the post-v14.32 sample is populated.
 

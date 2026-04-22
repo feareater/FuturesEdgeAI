@@ -1,7 +1,7 @@
 # FuturesEdge AI — Master Roadmap
 
 > Single source of truth for project status and planned work.
-> Read alongside CLAUDE.md and AI_ROADMAP.md.
+> Read alongside ../CLAUDE.md and AI_ROADMAP.md.
 > Updated after every completed phase or significant decision.
 
 **Current version:** v14.38 — data-layer remediation (Phases 0–5, 2026-04-21/22)
