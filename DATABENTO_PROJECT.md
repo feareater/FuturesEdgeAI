@@ -574,5 +574,49 @@ Merge each feature branch to main only after its acceptance criteria are met and
 
 ---
 
-*Last updated: 2026-04-06*
-*A1–A6 complete. B1–B6 complete. Full pipeline (1b→1g) operational. Final A5 (breadth active): Net +$238K, WR 33.9%, PF 1.584, 9,286 trades. or_breakout+pdh_breakout only, zone_rejection disabled. B6: OPRA live TCP feed (opraLive.js), dual-source options.js, liveOpra feature flag. Next: enable liveOpra, verify strikeCount>0, collect 30 days live data, proceed to C (validation).*
+## Standing infrastructure — post-Phase-5 data-layer remediation (v14.33–v14.38)
+
+The following scripts were added during the 2026-04-21/22 data-layer remediation (audit: [data/analysis/2026-04-21_data_artifact_audit.md](data/analysis/2026-04-21_data_artifact_audit.md)). They are NOT kanban items — they are ongoing maintenance tooling. Full commit-level detail in [CHANGELOG.md](CHANGELOG.md) entries v14.33 → v14.38.
+
+### `scripts/backfillHistoricalWindow.js` — historical 1m gap-filler (v14.36, standing)
+
+Per-symbol per-day Databento REST pull for the 8 tradeable CME symbols (MNQ/MES/M2K/MYM/MGC/SIL/MHG/MCL). Chunked per-day to stay well under Databento's 10,000-record and rate-limit constraints. Writes `time` field to match the Phase 1 schema unification. Skip-if-complete gate on any (symbol, date) already holding ≥1,300 bars; today's date is always skipped (live feed is appending, Databento has ~15-min ingest lag). Merge-with-existing uses Phase 2 dedup semantics (highest volume wins; ties broken by last occurrence). Per-file `.bak` sidecars on every modified file. Re-aggregates 5m/15m/30m into both `data/historical/futures/{sym}/{tf}/` and `data/historical/futures_agg/{sym}/{tf}/` for every touched date.
+
+```bash
+# Full 14-day gap-fill across all 8 tradeable symbols
+node scripts/backfillHistoricalWindow.js --days 14
+
+# Single-symbol spot-fix
+node scripts/backfillHistoricalWindow.js --symbol MCL --days 14
+
+# Dry-run first (plan only, no HTTP, no writes)
+node scripts/backfillHistoricalWindow.js --dry-run --days 14
+
+# Force re-pull even for files that already have ≥1,300 bars
+node scripts/backfillHistoricalWindow.js --force --days 7
+```
+
+Run this whenever `scripts/auditInstruments.js` flags a symbol with thin coverage, or after a prolonged live-feed outage where the hourly 95-min refresh can't close the gap on its own.
+
+### `scripts/migrateBarSchema.js` — bar-schema normalizer (v14.35, standing, idempotent)
+
+Walks every per-date file under `data/historical/futures/{sym}/{tf}/{date}.json` and (a) rewrites `ts`-field bars to `time`, (b) dedups by resolved timestamp (highest volume wins, last occurrence breaks volume ties), (c) sorts ascending. Shipped in v14.35 as the initial migration (181,120 files rewritten, 9,059 duplicate timestamps collapsed). Idempotent — safe to re-run anytime. Per-file `.bak` sidecars on every modified file.
+
+### `scripts/backfillETFDailyCloses.js` — ETF daily-close REST fetcher (v14.37)
+
+Uses `fetchETFDailyCloses()` in `server/data/databento.js` to pull ETF daily OHLCV via Databento REST (`DBEQ.BASIC`, `ohlcv-1d`) and merge into `data/historical/etf_closes.json`. Introduced v14.37 to populate DIA (MYM options proxy) whose raw zip was never purchased. See the known-limitations section below for dataset floor and source-divergence caveats.
+
+---
+
+## Known limitations / cleanup items
+
+Recorded during the v14.33–v14.38 remediation, queued for future cleanup. None are gate-blocking.
+
+- **Three-writer date-grouping drift.** `historicalPipeline.js` uses ET-anchored tradingDate grouping (bars from a 17:00-ET → 17:00-ET session window belong to the following calendar date); `dailyRefresh.js` uses a fixed-5h ET approximation (no DST compensation); `backfillHistoricalWindow.js` uses UTC-calendar day boundaries. Downstream readers are date-indifferent (they read bar timestamps directly, not the file-name date), so a given session's bars may live in slightly different date files depending on which writer last touched the directory. Cosmetic only; flagged for a future unification pass.
+- **DBEQ.BASIC dataset floor is 2023-03-28.** Passing an earlier `--start` to `scripts/backfillETFDailyCloses.js` (or any direct call through `fetchETFDailyCloses()`) returns HTTP 422 `data_start_before_available_start`. Relevant when adding a new ETF to `etf_closes.json`.
+- **DBEQ.BASIC and XNYS.PILLAR report non-identical closes for the same ETF on the same date.** On overlapping IWM dates (2023-03-28 → 2026-04-02) observed deltas were typically $0.02–$0.21 (0.01–0.12% of close), with one outlier at $6.68 on 2025-04-02 attributable to a dividend-adjustment methodology difference. Do not mix sources silently — v14.37 preserved the original 1,740 XNYS.PILLAR IWM values in place and kept only the 11 new DBEQ.BASIC post-2026-04-02 dates. If a future task ever needs to bulk-replace ETF closes from DBEQ.BASIC, audit the source-consistency of any downstream computations (HP scaling ratios, resilience) first.
+
+---
+
+*Last updated: 2026-04-22*
+*A1–A6 complete. B1–B6 complete. Full pipeline (1b→1g) operational. Final A5 (breadth active): Net +$238K, WR 33.9%, PF 1.584, 9,286 trades. or_breakout+pdh_breakout only, zone_rejection disabled. B6: OPRA live TCP feed (opraLive.js), dual-source options.js, liveOpra feature flag. Data-layer remediation v14.33–v14.38 shipped 2026-04-21/22 — see standing-infrastructure and known-limitations sections above. Next: enable liveOpra, verify strikeCount>0, collect 30 days live data, proceed to C (validation).*

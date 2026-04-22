@@ -4,8 +4,8 @@
 > Read alongside CLAUDE.md and AI_ROADMAP.md.
 > Updated after every completed phase or significant decision.
 
-**Current version:** v14.32 — forward-test trade-record stamping fix (2026-04-20)
-**Last updated:** 2026-04-20
+**Current version:** v14.38 — data-layer remediation (Phases 0–5, 2026-04-21/22)
+**Last updated:** 2026-04-22
 
 ---
 
@@ -32,6 +32,7 @@ FuturesEdge AI is a browser-based futures trading analysis dashboard that detect
 - Breadth cache (4082 dates pre-computed) + TF pre-aggregation (134K files, all 16 symbols)
 - Hourly data refresh: 60-min interval, 95-min lookback, all 16 CME symbols (Databento→Yahoo fallback), HP recompute, OPRA baseline subscription (QQQ/SPY/USO/GLD/IWM/SLV)
 - Data quality detection layer: real-time spike/gap/stale/broker-mismatch detection with per-chart badge and auto-refresh trigger (v14.30)
+- Data-layer remediation v14.33–v14.38 (2026-04-21/22): Bugs 1–7 from [data/analysis/2026-04-21_data_artifact_audit.md](data/analysis/2026-04-21_data_artifact_audit.md) shipped — bar schema unified to `time`, 181,120 historical files migrated + deduped, 14-day Databento REST backfill for all 8 tradeable symbols, MHG seed re-backfill, IWM + DIA seed + daily-close coverage, three-layer live-feed spike filter (hard floor + volume floor + 30-tick rolling median). Bug 8 (reference-instrument seed backfill — M6E, M6B, ZT, ZF, ZN, ZB, UB, MBT) **deferred** — cosmetic chart scrollback only, no algorithmic impact.
 
 ### Analysis Engine
 - Indicators: EMA 9/21/50, VWAP, ATR(14), PDH/PDL, swing H/L, volume profile, opening range, session levels

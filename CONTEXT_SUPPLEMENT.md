@@ -109,6 +109,11 @@
 - `CLOSE_SPIKE_THRESHOLD` in snapshot.js: MNQ/MES/M2K/MYM/MHG = 5%, MGC/MCL/SIL = 8%, DEFAULT = 6%
 - `_sanitizeYahooBars()` in gapFill.js: spike threshold lowered from 3× to 2× tick threshold; added 10× median range sanity check
 
+### Bar schema + spike filter hardening (v14.34 / v14.35 / v14.38)
+- **Bar schema unified** to `time` field on every file under `data/historical/futures/**` after the v14.35 migration (181,120 files rewritten, 9,059 duplicate timestamps collapsed). Hourly refresh already wrote `time`; `liveArchive.js` and `historicalPipeline.js` joined it in v14.34. `engine.js` normalize mirrors `time`↔`ts` so downstream reads work regardless of caller. Per-file `.bak` sidecars retained for rollback. Maintenance script: `node scripts/migrateBarSchema.js` (standing, idempotent).
+- **Live-feed spike filter hardened** to three layers (v14.38): Layer 1 hard floor (±25% from last validated price, belt-and-suspenders from v14.33); Layer 2 low-volume floor (`volume<3 AND deviation>0.5%` from the 30-tick rolling median); Layer 3 per-symbol percentage threshold (unchanged). Rolling-median buffer raised from 10 → 30 ticks. Full narrative in CHANGELOG [v14.38].
+- **14-day Databento backfill available on demand** (v14.36): `node scripts/backfillHistoricalWindow.js --days 14` re-pulls thin or gappy 1m windows for the 8 tradeable CME symbols, re-aggregates 5m/15m/30m, skips (symbol, date) pairs already carrying ≥1,300 bars. Today's date is always skipped.
+
 ---
 
 ## Instruments
@@ -177,7 +182,10 @@ public/
 config/
   settings.json         ← risk block + features block (hot-toggle)
 scripts/
-  databentoDiag.js      ← Standalone Databento connection & data health check (no server required)
+  databentoDiag.js             ← Standalone Databento connection & data health check (no server required)
+  migrateBarSchema.js          ← Rewrites bar files under data/historical/futures/** to canonical `time` schema + dedups (v14.35, standing)
+  backfillHistoricalWindow.js  ← 14-day Databento REST pull for 8 tradeable CME symbols, skip-if-complete, .bak sidecars (v14.36, standing)
+  backfillETFDailyCloses.js    ← Databento REST ETF daily-close fetch → etf_closes.json; DBEQ.BASIC floor 2023-03-28 (v14.37)
 ```
 
 ---
@@ -201,7 +209,7 @@ scripts/
 ## Data Quality Detection System (v14.30)
 
 ### What's detected (4 categories)
-1. **Price spikes / unrealistic wicks** — surfaced from `barValidator.js` (null/zero/NaN, open-gap, ATR spike clamp) and `_sanitizeCandles()` in snapshot.js (isolated spikes, extreme wicks)
+1. **Price spikes / unrealistic wicks** — surfaced from `barValidator.js` (null/zero/NaN, open-gap, ATR spike clamp) and `_sanitizeCandles()` in snapshot.js (isolated spikes, extreme wicks). Upstream on the live-feed tick path, `databento.js:_isSpikePrice()` applies a three-layer check (hard floor + low-volume floor + per-symbol threshold against a 30-tick rolling median) hardened in v14.38 — see the Hourly Refresh section above for details.
 2. **Gaps / missing bars** — intra-session gap > 2× TF interval during CME Globex market hours
 3. **Stale / frozen bars** — no new bar in > 2× TF interval during market hours (stale > 5 min → bad)
 4. **OHLC broker-mismatch** — Yahoo Finance 1m cross-check: 0.3% threshold for equity (MNQ/MES/M2K/MYM), 0.5% for commodities (MGC/MCL/SIL/MHG); flagged only if ≥3 consecutive bars diverge

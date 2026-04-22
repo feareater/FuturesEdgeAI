@@ -68,7 +68,7 @@ FuturesEdgeAI/
 │   ├── auth/
 │   │   └── tradovate.js       ← OAuth + session token management
 │   ├── data/
-│   │   ├── instruments.js     ← Single source of truth: all 16 CME symbols + 6 OPRA underlyings (pointValue, dbRoot, optionsProxy, etc.)
+│   │   ├── instruments.js     ← Single source of truth: all 16 CME symbols + 7 OPRA underlyings — QQQ/SPY/GLD/USO/IWM/SLV/DIA — (pointValue, dbRoot, optionsProxy, etc.). IWM + DIA seed files and DIA daily-close entries in etf_closes.json added v14.37.
 │   │   ├── snapshot.js        ← OHLCV fetch + candle normalization (source-agnostic); _sanitizeCandles has 3-pass filter (null/zero, close spikes via CLOSE_SPIKE_THRESHOLD, wick spikes); purgeAllInvalidBars rebuilds higher TFs from clean 1m
 │   │   ├── seedFetch.js       ← Yahoo Finance seed data fetch (MNQ/MGC/MES/MCL/SIL/M2K/MYM)
 │   │   ├── dailyRefresh.js    ← Hourly data refresh: Databento→Yahoo fallback, 60-min interval, all 16 CME symbols, HP recompute
@@ -392,6 +392,8 @@ Update at runtime via `POST /api/settings/span` or the SPAN Margins panel in the
 - `server/data/databento.js` — TCP Live API adapter (CRAM auth), ohlcv-1s ticks + ohlcv-1m bars, historical REST functions
 - `server/data/snapshot.js` — live gate, seed+live merge in `getCandles()`, `writeLiveCandle()`, 1m→5m/15m/30m aggregation
 
+> **Bar schema note (v14.34 / v14.35):** All on-disk bar files under `data/historical/futures/**` now use the canonical `time` field (Unix seconds). Pre-v14.34 writers (`liveArchive.js` and `historicalPipeline.js`) wrote `ts`; v14.34 unified all writers to `time`, and v14.35 migrated every existing file to match (181,120 files rewritten, 9,059 duplicate timestamps collapsed, per-file `.bak` sidecars present). `engine.js` `loadDailyBars()` normalizes bars to carry BOTH `time` and `ts` so downstream reads keyed on either name continue to work. Full narrative in CHANGELOG [v14.34] and [v14.35].
+
 ### TCP connection
 - Host: `glbx-mdp3.lsg.databento.com:13000` (Node.js `net` module, raw TCP)
 - Auth: CRAM — `SHA256("<challenge>|<apiKey>").hex + "-" + apiKey.slice(-5)`
@@ -414,8 +416,8 @@ Update at runtime via `POST /api/settings/span` or the SPAN Margins panel in the
 
 ### How it works
 1. `startLiveFeed(symbols, onCandle, onTick)` — connects TCP, authenticates, subscribes
-2. **ohlcv-1s** (rtype=32): spike-filtered via `_isSpikePrice()` (per-symbol threshold from rolling 10-tick median: MNQ/MES/M2K/MYM 1.5%, MGC/MHG 1.2%, SIL 1.5%, MCL 2.0%) → `onTick(symbol, price, time)` → `broadcast({ type: 'live_price' })` → `ChartAPI.updateLivePrice()` builds in-progress forming candle (also spike-filtered client-side with matching thresholds), updates chart every second
-3. **ohlcv-1m** (rtype=33): spike-filtered (close rejected if beyond per-symbol threshold from rolling median; wicks clamped to max(1.5× body, minWickFloor)) → `onCandle(symbol, candle)` → `validateBar()` (5-rule sanity check: null/zero guard, open continuity, OHLC consistency, ATR spike clamp with per-symbol bounds, volume guard) → `writeLiveCandle()` stores bar + aggregates 5m/15m/30m → `_onLiveCandle()` broadcasts `live_candle` + fires targeted scan
+2. **ohlcv-1s** (rtype=32): spike-filtered via `_isSpikePrice(symbol, price, volume)` — three-layer check (v14.38): **Layer 1** hard floor rejecting ±25% from last validated price (belt-and-suspenders, v14.33); **Layer 2** low-volume floor rejecting `volume<3 AND deviation>0.5%` from the 30-tick rolling median (v14.38); **Layer 3** per-symbol percentage threshold against the same 30-tick median (MNQ/MES/M2K/MYM 1.5%, MGC/MHG 1.2%, SIL 1.5%, MCL 2.0% — unchanged). → `onTick(symbol, price, time)` → `broadcast({ type: 'live_price' })` → `ChartAPI.updateLivePrice()` builds in-progress forming candle (also spike-filtered client-side with matching thresholds), updates chart every second
+3. **ohlcv-1m** (rtype=33): spike-filtered (hard floor + per-symbol threshold; volume floor bypassed on the 1m bar path); wicks clamped to max(1.5× body, minWickFloor) → `onCandle(symbol, candle)` → `validateBar()` (5-rule sanity check: null/zero guard, open continuity, OHLC consistency, ATR spike clamp with per-symbol bounds, volume guard) → `writeLiveCandle()` stores bar + aggregates 5m/15m/30m → `_onLiveCandle()` broadcasts `live_candle` + fires targeted scan
 4. `getCandles()` merges seed history + live bars (returns **defensive copies**, not shared references) — chart always shows full history
 5. Completed bars: `ChartAPI.updateLiveCandle()` replaces forming candle, resets `_liveTickBar`
 
@@ -558,6 +560,11 @@ Standard backtest window going forward: last 12–24 months (approx 2024-01-01 t
 ### Diagnostic scripts
 - `node scripts/auditInstruments.js` — candle store health check for all 8 tradeable futures. Reports bar count, price range, bad bars, spikes, staleness. PASS/WARN/FAIL per symbol.
 - `node scripts/databentoDiag.js` — standalone Databento connection & data health check. Tests API auth (GLBX.MDP3 + OPRA.PILLAR schemas), queries server live feed status + OPRA subscribed symbols, fetches last 90min of 1m bars for all 16 CME symbols, prints grouped summary table (tradeable + reference). No server required.
+
+### Data-layer maintenance scripts (added v14.35–v14.37; standing infrastructure)
+- `node scripts/migrateBarSchema.js [--dry-run] [--symbol SYM] [--verbose] [--no-backup]` — walks every per-date file under `data/historical/futures/{sym}/{tf}/{date}.json`; normalizes bar schema to `time` field (Phase 1 unified this across all writers in v14.34); dedups by `time` (highest volume wins, ties broken by last occurrence). Per-file `.bak` sidecars on every modified file for rollback. Ran 2026-04-21 as Phase 2: 181,120 files rewritten, 9,059 duplicate timestamps collapsed, 0 bad bars dropped. Idempotent — safe to re-run.
+- `node scripts/backfillHistoricalWindow.js [--dry-run] [--symbol SYM] [--days N] [--verbose] [--force]` — per-symbol per-day Databento REST pull (`hist.databento.com/v0/timeseries.get_range`, `ohlcv-1m`, `GLBX.MDP3`, `stype_in=parent`) for the 8 tradeable CME symbols. Skip-if-complete: (symbol, date) with ≥1,300 bars is left alone; `--force` bypasses. Today always skipped (live feed is appending). Merges with Phase 2 dedup semantics, writes `time` field with `.bak` sidecars, re-aggregates 5m/15m/30m to both `futures/{sym}/{tf}/` and `futures_agg/{sym}/{tf}/`. Chunked per-day stays under Databento rate limits. Re-run anytime for gap-filling.
+- `node scripts/backfillETFDailyCloses.js --ticker TKR [--ticker TKR2] [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--dry-run]` — fetches ETF daily closes via `fetchETFDailyCloses()` (Databento REST, `DBEQ.BASIC`, `ohlcv-1d`) and merges into `data/historical/etf_closes.json`. **DBEQ.BASIC dataset floor is 2023-03-28** — passing an earlier `--start` returns HTTP 422. `.bak` sidecar on the merged file. Introduced v14.37 to add DIA (MYM options proxy) whose raw zip was never purchased.
 
 ### Backtest UI (`public/backtest2.html`, `backtest2.js`, `backtest2.css`)
 - Config: date range, symbols, timeframes, setup types, min confidence, starting balance, HP toggle, max hold, fee/RT, contracts, trading hours filter
