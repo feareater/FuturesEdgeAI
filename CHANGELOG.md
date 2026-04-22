@@ -4,6 +4,60 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v14.37] — 2026-04-21 — IWM + DIA ETF seed + daily-close backfill (data-layer remediation Phase 4, Bug 7)
+
+Phase 4 of the data-layer remediation plan. Unblocks M2K (Russell 2000 Micro) and MYM (Dow Jones Micro) options-proxy HP / GEX / DEX / resilience computation. The audit's Bug 7 identified two missing pieces: no `data/seed/IWM_*.json` file (M2K chart/proxy thin), and no `data/seed/DIA_*.json` file + zero DIA entries in `etf_closes.json` (MYM proxy entirely unmapped).
+
+### seedFetch.js
+
+- `REF_SYMBOLS` dict — added `IWM: 'IWM'` (M2K options proxy) and `DIA: 'DIA'` (MYM options proxy). They join QQQ / SPY / GLD / USO / SLV / DXY / VIX in the reference-symbol refresh loop.
+- The `symbols` filter on `fetchAll(opts)` introduced in v14.36 now also applies to the reference-symbol loop (was primary-only). Targeted re-backfills like `node server/data/seedFetch.js --symbol IWM --symbol DIA` now restrict to exactly those refs and skip the crypto + other-ref side effects.
+
+### New script: `scripts/backfillETFDailyCloses.js`
+
+Pulls daily OHLCV closes for arbitrary ETF tickers via the Databento historical REST API (`DBEQ.BASIC`, `ohlcv-1d`) and merges them into `data/historical/etf_closes.json`. Uses the existing `fetchETFDailyCloses()` from `server/data/databento.js` — no new Databento integration surface.
+
+- Per-ticker, per-date merge (last-write-wins within the ticker's sub-map). Other ETFs left untouched.
+- `.bak` sidecar on the `etf_closes.json` file itself (not per-entry) for one-shot rollback.
+- Flags: `--ticker TKR` (required, repeatable), `--start ISO`, `--end ISO` (default yesterday UTC), `--dry-run`.
+- **DBEQ.BASIC dataset floor:** data starts 2023-03-28. The first run with `--start 2018-01-01` hit HTTP 422; this commit fixes the usage to `--start 2023-03-28` (or later).
+
+### Backfill run (2026-04-21)
+
+1. `node scripts/backfillETFDailyCloses.js --ticker DIA --ticker IWM --start 2023-03-28` — 768 DIA closes fetched (2023-03-28 → 2026-04-20, all new; prior count 0), 768 IWM closes fetched (of which 11 new post-2026-04-02, 726 would-overlap existing XNYS.PILLAR values).
+2. Since DBEQ.BASIC and XNYS.PILLAR give slightly different IWM close values (median delta $0.02–$0.21 for typical dates; one $6.68 delta on 2025-04-02 likely a dividend-adjustment discrepancy), a follow-up restore pass reverted the 1,740 existing XNYS.PILLAR IWM values in place and kept only the 11 new DBEQ.BASIC post-2026-04-02 IWM dates. Historical HP calibration remains on the original data source.
+3. `node server/data/seedFetch.js --symbol IWM --symbol DIA` — populated IWM_1m/2m/5m/15m/30m/1h/2h/4h (1,951 / 976 / 2,341 / 781 / 781 / 421 / 211 / 106 bars) and DIA_* (same shapes). All last timestamps 2026-04-21T20:00Z.
+
+### Verification — Bug 7 criterion met immediately
+
+Post-restart, `/api/options` for both previously-blocked symbols returns fully populated HP data:
+
+| symbol | resilience | dex | dexBias | gexFlip (ETF) | scaledGexFlip (futures) | scalingRatio |
+|---|---|---|---|---|---|---|
+| M2K | 62 (neutral) | 18.0M | bullish (dexScore 74) | 273 (IWM) | 2,760 (M2K) | 10.11 |
+| MYM | 40 (neutral) | 2.1M | bullish (dexScore 98) | 491 (DIA) | 49,300 (MYM) | 100.41 |
+
+All fields are non-null (the specific criterion from the audit's Phase 4 plan). The scaling ratios (IWM 10.11× → M2K, DIA 100.41× → MYM) correctly place futures-space level projections at plausible price levels for the respective Micro contracts. No hourly-refresh cycle was needed.
+
+### B9 paper-trading edge unaffected
+
+- seedFetch.js changes: two new reference tickers added + an existing filter extended to cover the reference loop. Pure data/config additions; no logic change to primary-symbol seed processing.
+- etf_closes.json: DIA added (previously absent, so no downstream computation referenced it); IWM unchanged for all 1,740 historical dates, only 11 new post-2026-04-02 dates appended.
+- No changes to setup detection, confidence scoring, `applyMarketContext()` math, outcome resolution, the B9 trade config, or options chain processing semantics.
+
+### Rollback
+
+- `data/historical/etf_closes.json.bak` — pre-Phase-4 snapshot (6 ETFs, no DIA, IWM at 1,740 dates). Restore via `mv data/historical/etf_closes.json.bak data/historical/etf_closes.json`.
+- `data/seed/IWM_*.json` and `data/seed/DIA_*.json` were absent pre-v14.37; rollback is `rm data/seed/IWM_*.json data/seed/DIA_*.json`.
+
+### Files changed
+
+- `server/data/seedFetch.js` — `REF_SYMBOLS` += IWM + DIA; `fetchAll()` symbol filter now applies to the reference loop.
+- `scripts/backfillETFDailyCloses.js` — new (~110 lines).
+- `CHANGELOG.md` — this entry.
+
+---
+
 ## [v14.36] — 2026-04-21 — 14-day Databento backfill + MHG seed re-backfill (data-layer remediation Phase 3, Bugs 3+5)
 
 Phase 3 of the data-layer remediation plan. Fills the thin-historical window (Bug 5: all 8 tradeable CME symbols had 14–15 days of <500 bars/day since 2026-04-02) and restores the MHG seed cache (Bug 3: stale since 2026-04-08). Writes `time`-field bars (Phase 1 compliance) with per-file `.bak` sidecars (Phase 2 rollback strategy).

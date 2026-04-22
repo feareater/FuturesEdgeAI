@@ -36,6 +36,8 @@ const REF_SYMBOLS = {
   GLD: 'GLD',      // SPDR Gold Trust (MGC proxy)
   USO: 'USO',      // US Oil Fund ETF (MCL proxy)
   SLV: 'SLV',      // iShares Silver Trust (SIL proxy)
+  IWM: 'IWM',      // iShares Russell 2000 ETF (M2K proxy) — added v14.37 (Phase 4, Bug 7)
+  DIA: 'DIA',      // SPDR Dow Jones ETF     (MYM proxy) — added v14.37 (Phase 4, Bug 7)
 };
 
 // Yahoo Finance supports: 1m (max 7d), 2m (max 60d), 5m (max 60d), 15m/30m (max 60d),
@@ -175,16 +177,22 @@ async function fetchAll(opts = {}) {
     console.log(`[seedFetch] ${symbol} 4h  ${fourH.candles.length} candles → ${symbol}_4h.json (derived from 1h)`);
   }
 
-  // When a symbol filter is active (targeted re-backfill), skip the crypto
-  // and reference-symbol side loops to avoid touching unrelated seed files.
-  if (symFilter) return;
+  // When a symbol filter is active, skip the crypto side-loop entirely and
+  // restrict the reference-symbol side-loop to the filtered set. This lets
+  // targeted re-backfills (e.g. `--symbol IWM --symbol DIA`, v14.37) touch
+  // only what's asked for.
+  if (!symFilter) {
+    // Fetch crypto perpetual futures from Coinbase International Exchange
+    const { fetchAllCrypto } = require('./coinbaseFetch');
+    await fetchAllCrypto();
+  }
 
-  // Fetch crypto perpetual futures from Coinbase International Exchange
-  const { fetchAllCrypto } = require('./coinbaseFetch');
-  await fetchAllCrypto();
+  const refEntries = symFilter
+    ? Object.entries(REF_SYMBOLS).filter(([s]) => symFilter.has(s))
+    : Object.entries(REF_SYMBOLS);
 
-  // Reference symbols (DXY, VIX, QQQ, SPY) — full timeframes for charting
-  for (const [symbol, yfSymbol] of Object.entries(REF_SYMBOLS)) {
+  // Reference symbols (DXY, VIX, QQQ, SPY, IWM, DIA, ...) — full timeframes for charting
+  for (const [symbol, yfSymbol] of refEntries) {
     console.log(`[seedFetch] ── ${symbol} (${yfSymbol}) reference ──`);
     for (const { tf, yf, range } of TIMEFRAMES) {
       try {
