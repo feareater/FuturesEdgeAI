@@ -11,5 +11,9 @@ Historical_data/
 
 # Scratch / temp files
 server.log
+*.log
 *_tmp.json
 *_tmp.js
+
+# Binary installers (e.g. rtraderpro.msi in trading-knowledge/bootcamp)
+*.msi
