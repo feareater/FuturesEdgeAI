@@ -5,7 +5,7 @@
 //   • Activate → delete old caches, claim clients
 //   • Fetch    → cache-first for shell assets; network-only for /api/ and /ws
 
-const CACHE_NAME = 'futuresedge-v37';
+const CACHE_NAME = 'futuresedge-v38';
 
 // All assets required to render the UI — these are cached at install time.
 // API calls are intentionally excluded: trading data must always be fresh.

@@ -4,7 +4,7 @@
 > Read alongside ../CLAUDE.md and AI_ROADMAP.md.
 > Updated after every completed phase or significant decision.
 
-**Current version:** v14.38 — data-layer remediation (Phases 0–5, 2026-04-21/22)
+**Current version:** v14.39 — right-panel + OHLC-options-row stale-on-symbol-switch fix (Track 3 follow-up, 2026-04-22)
 **Last updated:** 2026-04-22
 
 ---
@@ -165,7 +165,7 @@ Diagnostic at [data/analysis/2026-04-20_bias_macro_reconciliation.md](data/analy
 | Bug | Description | Severity | Status |
 |-----|-------------|----------|--------|
 | MES aggregation | Aggregated candle values show unrealistic prices for MES | High — incorrect chart data | **Fixed v14.5** — partial bar was not replaced by completed bar on window close |
-| Dollar values stale | Dollar/currency values remain stale after symbol switch on dashboard | Medium — confusing display | **Fixed v14.5** — setup overlay + predictions cleared on symbol switch |
+| Dollar values stale | Dollar/currency values remain stale after symbol switch on dashboard | Medium — confusing display | **Fixed v14.5** — setup overlay + predictions cleared on symbol switch. **Follow-up v14.39** — extended clear-on-click discipline to the Market Context / Directional Bias / Setup Score / Macro Context / Conviction subcomponents + OHLC header options-metrics row. Added `window._symbolSwitchGen` in-flight guard on `/api/bias`, `/api/options`, `/api/ddbands` so stale responses can't overwrite the new blank state; ETF-proxy short-circuit so MHG renders N/A instead of inheriting SLV values. Client-only; B9 edge unaffected. See CHANGELOG [v14.39]. |
 | Symbol load failures | Some symbols fail to load chart data intermittently | Medium — user-facing error | **Fixed v14.5** — graceful "Waiting for data" overlay + startup warnings |
 | TF selector centering | Timeframe selector buttons not properly centered in UI | Low — cosmetic | **Fixed v14.5** — justify-content:center on all screen sizes |
 

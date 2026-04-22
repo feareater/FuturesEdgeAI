@@ -4,6 +4,73 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v14.39] — 2026-04-22 — Right-panel + OHLC options-row stale data on symbol switch (Track 3 follow-up)
+
+Fixes a right-panel and OHLC-header stale-data leak that Jeff surfaced from live trading: clicking a different symbol in the topbar swaps the chart candles correctly, but the Market Context / Directional Bias / Setup Score / Conviction panel AND the OHLC-header options-metrics row (`<ETF> P/C | IV | MaxPain | DEX | Resilience`) continue to display the PREVIOUS symbol's values until the next scheduled bias + options refresh completes. During a seven-symbol click walk (MNQ → MES → MCL → SIL → MHG → MYM → M2K), each click left the panel showing the prior symbol's "Current" price, TP/SL, ↑/↓ reference levels, all 11 directional-bias signal rows, all 6 macro-gate rows, and the conviction label. On MHG specifically the OHLC options row showed SLV's values (SLV was SIL's proxy) — MHG has no options proxy at all and should be N/A, not populated from the previously selected symbol's ETF.
+
+Extends the v14.5 Track 3 "clear-on-click discipline" (which covered the setup overlay + predictions block) to the Market Context / Setup Score / Directional Bias / Macro Context / OHLC-options-row subcomponents. Complements the v14.28 conviction-hard-gate work by ensuring stale inputs never reach `_computeConviction()` between a click and the next bias response.
+
+### Root cause
+
+1. `window._lastMacroScore`, `window._lastReadinessStatus`, `window._lastBlockedGateIds`, `window._lastBiasDirection`, `window._lastSetupData`, `window._lastSetupScore`, `window._lastGammaData` in [public/js/alerts.js](public/js/alerts.js) are **global caches, not symbol-keyed**. When the active symbol changes, they retain the prior symbol's values until the next `/api/bias` + `/api/predict` responses land. The bias panel renderers (`_renderConviction`, `_renderSetupScore`) read from these caches on any WS refresh trigger during the in-flight window and paint stale values.
+2. The `chartViewChange` event fires from chart.js only **after** the candle fetch resolves (`_notifyView()` at the end of `loadData`, [public/js/chart.js:586](public/js/chart.js#L586)). `_clearSymbolState()` was hooked to `chartViewChange`, so blanking happened hundreds of ms after the click — not synchronously.
+3. `_fetchOptionsData()` had no symbol-guard: MHG (no `ETF_PROXY` entry in [server/data/options.js:39](server/data/options.js#L39)) returned `{ options: null }` from the server, but the client's `if (options)` gate meant the OHLC options widget DOM was never touched, so it kept showing the prior symbol's SLV / QQQ / SPY values.
+4. No in-flight request discipline — if the user clicked MNQ → MES → MCL in quick succession, the MNQ and MES `/api/bias` responses (still pending) could land after MCL's blank state was painted and overwrite it with MNQ/MES data.
+
+### Fix — purely client-side, minimal surface
+
+**[public/js/alerts.js](public/js/alerts.js)** — extended `_clearSymbolState(newSym)` to (a) bump a new `window._symbolSwitchGen` counter, (b) invalidate every window-scoped cache the bias/setup renderers read from, (c) call the newly-exposed `window._blankBiasPanel(newSym)`, (d) blank the OHLC header options + gamma + DD-band widgets synchronously. Added a synchronous sym-btn click handler (installed alongside chart.js's handler) that fires `_clearSymbolState()` + kicks off the bias + options + DD-band fetches immediately — no longer gated on the chart candle round-trip.
+
+`_fetchOptionsData(symbol)` now short-circuits at entry for symbols with no ETF proxy (client-side mirror of `ETF_PROXY` — MNQ→QQQ, MES→SPY, M2K→IWM, MYM→DIA, MGC→GLD, MCL→USO, SIL→SLV). On MHG the OHLC options row hides outright rather than inheriting the prior symbol's data. The in-flight guard (symbol-switch generation counter captured at function entry, re-checked after each `await`) prevents stale `/api/options`, `/api/options/flow`, `/api/gamma`, `/api/candles`, and `/api/bias` responses from overwriting the new symbol's blank state.
+
+`_fetchDDBands(symbol)` received the same generation-guard treatment.
+
+The bias-panel IIFE exposes `window._blankBiasPanel(newSym)` (resets `_biasBuilt` skeleton flag, rewrites the three section containers to a `Loading…` placeholder, blanks the conviction label + detail) and `window._fetchAndRenderBias` (so the outer IIFE's click handler can fire the bias refetch without waiting for `chartViewChange`). `fetchAndRenderBias(symbol)` captures `window._symbolSwitchGen` at entry and bails after each `await` if the counter has moved — same pattern as `_fetchOptionsData`.
+
+**[public/sw.js](public/sw.js)** — cache version bumped to `futuresedge-v38` so existing PWAs pick up the new JS on next load.
+
+### Scope fences honored
+
+- `server/analysis/setups.js` — untouched. B9 paper-trading edge (or_breakout 5m conf ≥ 70, MNQ/MES/MCL) is unaffected.
+- Confidence scoring math, `applyMarketContext()`, Phase 2 loss gates, multipliers, breadth scoring, DD band scoring — all untouched.
+- Backtest engine — out of scope, untouched.
+- `server/trading/simulator.js` `_persistForwardTrade()` — the v14.32 P2 stamping fix stays as-is.
+- Server-side API routes — no changes. Fix is purely under `public/`.
+- `config/settings.json` — no schema changes.
+
+### Verification
+
+**Manual walkthrough — MNQ → MES → MCL → SIL → MHG → MYM → M2K** (each click verified):
+
+1. All bias panel + conviction fields blank to `Loading…` / `LOADING` within a single animation frame of the click — confirmed via console log `[v14.39] sym-switch clear-on-click: <prev> -> <new>` emitted synchronously from the sym-btn click handler.
+2. OHLC header options row em-dashes on click; repopulates within ~300–500ms for symbols with an ETF proxy, stays hidden on MHG (no `ETF_PROXY['MHG']` entry — `_fetchOptionsData` short-circuits before any network call).
+3. Rapid MNQ → MES → MCL clicks: no MNQ or MES late-arrival responses overwrite the MCL blank state. `[v14.39] sym-switch clear-on-click` logs fire three times in order; no stale render event.
+4. Conviction row no longer shows "MODERATE SETUP" with prior symbol's price during the in-flight window — renders `LOADING / Waiting for new symbol…` until the new `/api/bias` + `/api/predict` responses land.
+5. Same-symbol click (clicking the already-active button) is a no-op — `newSym === activeSymbol` guard short-circuits the handler.
+
+### B9 paper-trading edge unaffected
+
+- No changes to setup detection, confidence scoring, `applyMarketContext()` math, outcome resolution, the B9 trade config, or any backtest code paths.
+- No server-side changes.
+- No changes to the alert pipeline, forward-test harness, or `_persistForwardTrade()`.
+- No new `setup.*` fields, no schema changes.
+- The cache invalidation + generation-counter discipline is strictly additive: it only prevents stale UI reads between symbol-switch click and new-data arrival. Once data arrives, render paths are identical to pre-v14.39.
+
+### Files changed
+
+- `public/js/alerts.js` — `_clearSymbolState(newSym)` extended (+cache invalidation, +generation counter bump, +bias-panel/options/gamma/DD-band blanking, +symbol label update); new synchronous sym-btn click handler; `_fetchOptionsData` gains ETF-proxy short-circuit + per-await in-flight guard; `_fetchDDBands` gains in-flight guard; `fetchAndRenderBias` gains in-flight guard; new `ETF_PROXY_CLIENT` constant; bias IIFE exposes `window._blankBiasPanel(newSym)` + `window._fetchAndRenderBias`.
+- `public/sw.js` — `CACHE_NAME` bumped `futuresedge-v37` → `v38`.
+- `docs/CHANGELOG.md` — this entry.
+- `docs/CLAUDE.md` — Build Phases table updated with v14.39 row.
+- `docs/CONTEXT_SUPPLEMENT.md` — dashboard UI section note referencing the fix.
+- `docs/ROADMAP.md` — Track 3 row extended with v14.39 follow-up.
+
+### Rollback
+
+Trivial: revert the four `public/` files and the three doc files. No data migrated, no server state changed. Hard-reload (Ctrl+Shift+R) in the browser after revert to evict the v38 cache.
+
+---
+
 ## [v14.38] — 2026-04-22 — Spike filter hardening: 30-tick median + low-volume floor (data-layer remediation Phase 5, Bug 4 proper fix)
 
 Phase 5 of the data-layer remediation plan. Replaces the Phase 0 emergency-only spike floor (v14.33, kept as belt-and-suspenders) with a structurally sound filter. The audit's Bug 4 root cause: during thin-liquidity overnight windows (00:00–01:00 ET), bad ticks at volume 1–2 can push the rolling 10-tick median far enough that a staircase of subsequent bad ticks passes the per-symbol percentage threshold — the MCL $1.55 / $2.92 / $3.21 / $3.45 pattern from 2026-04-21.

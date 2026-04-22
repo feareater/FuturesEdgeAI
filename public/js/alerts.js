@@ -85,8 +85,25 @@
   // Bridge for chart.js (which loads first) to check taken state
   window._isTaken = (key) => takenTrades.has(key);
 
+  // Client-side mirror of server/data/options.js ETF_PROXY — drives the "N/A / hidden"
+  // decision for the OHLC header options row. Must stay in sync with options.js.
+  const ETF_PROXY_CLIENT = { MNQ:'QQQ', MES:'SPY', M2K:'IWM', MYM:'DIA', MGC:'GLD', MCL:'USO', SIL:'SLV' };
+
   // ── Symbol switch cleanup — clears stale data before new fetch completes ──
-  function _clearSymbolState() {
+  // Extended in v14.39 (Track 3 follow-up): also blanks the Market Context /
+  // Directional Bias / Setup Score / Conviction panels and the OHLC header
+  // options + DD band + gamma widgets, and invalidates the window-scoped caches
+  // (_lastMacroScore / _lastReadinessStatus / _lastBlockedGateIds / _lastBiasDirection /
+  // _lastSetupData / _lastSetupScore / _lastGammaData) that the bias/conviction
+  // renderers read from. Also bumps window._symbolSwitchGen so in-flight fetches
+  // can detect a stale response and bail out without overwriting the new blank
+  // state. `newSym` is optional — when provided, updates the bias panel symbol
+  // label up-front.
+  function _clearSymbolState(newSym) {
+    // Bump the generation counter FIRST so any in-flight fetch already awaiting a
+    // response will see a changed counter post-await and skip its render.
+    window._symbolSwitchGen = (window._symbolSwitchGen || 0) + 1;
+
     // Clear current alerts so stale cards don't linger during fetch
     currentAlerts = [];
     // Immediately re-sync chart markers (clears stale markers for old symbol)
@@ -94,6 +111,29 @@
     // Show loading state in predictions panel
     const predFeed = document.getElementById('predictions-feed');
     if (predFeed) predFeed.innerHTML = '<p class="placeholder">Loading…</p>';
+
+    // Invalidate window-scoped caches that the bias panel + conviction row read from.
+    // The render functions gracefully handle null (show "Loading…" / "INITIALIZING").
+    window._lastMacroScore       = null;
+    window._lastReadinessStatus  = null;
+    window._lastBlockedGateIds   = [];
+    window._lastBiasDirection    = 'neutral';
+    window._lastSetupData        = null;
+    window._lastSetupScore       = null;
+    window._lastGammaData        = null;
+
+    // Blank the bias panel (Market Context / Directional Bias / Setup Score /
+    // Conviction row). Exposed by the bias-panel IIFE below.
+    if (typeof window._blankBiasPanel === 'function') {
+      window._blankBiasPanel(newSym);
+    }
+
+    // Blank the OHLC header options row — hide entirely if the new symbol has no
+    // ETF proxy (e.g. MHG), else show em-dashes until the new fetch lands.
+    _updateOptionsWidget(null);
+    _updateGammaWidget(null);
+    // DD bands: keep widget visible but reset content; _fetchDDBands will repopulate.
+    _updateDDBandWidget(null);
   }
 
   // ── Price formatter — XRP uses 4 decimal places ───────────────────────────
@@ -472,10 +512,14 @@
   }
 
   async function _fetchDDBands(symbol) {
+    // v14.39: in-flight guard — bail out if symbol switched mid-fetch.
+    const myGen = window._symbolSwitchGen || 0;
     try {
       const res = await fetch(`/api/ddbands?symbol=${symbol}`);
+      if ((window._symbolSwitchGen || 0) !== myGen) return;
       if (!res.ok) return;
       const { ddBands } = await res.json();
+      if ((window._symbolSwitchGen || 0) !== myGen) return;
       if (ddBands && window.ChartAPI) window.ChartAPI.setDDBands(ddBands);
       _updateDDBandWidget(ddBands);
     } catch (e) {
@@ -507,12 +551,32 @@
   }
 
   async function _fetchOptionsData(symbol) {
+    // v14.39: symbols without an ETF options proxy (e.g. MHG) have no options chain
+    // server-side. Short-circuit here so the OHLC header options row and gamma
+    // widget don't keep stale values from the previously selected symbol.
+    if (!ETF_PROXY_CLIENT[symbol]) {
+      _updateOptionsWidget(null);
+      _updateGammaWidget(null);
+      _lastGammaData = null;
+      window.ChartAPI?.setGammaLevels?.(null);
+      window.ChartAPI?.setOptionsLevels?.(null);
+      return;
+    }
+
+    // v14.39: in-flight guard. Capture the symbol-switch generation at entry.
+    // After each await, bail out if the user has switched symbols in the meantime —
+    // otherwise a stale response would overwrite the new symbol's blank state.
+    const myGen = window._symbolSwitchGen || 0;
+    const _stale = () => (window._symbolSwitchGen || 0) !== myGen;
+
     // Get current futures price for strike scaling
     let futuresPrice = null;
     try {
       const cr = await fetch(`/api/candles?symbol=${symbol}&timeframe=15m`);
+      if (_stale()) return;
       if (cr.ok) {
         const { candles } = await cr.json();
+        if (_stale()) return;
         futuresPrice = candles?.[candles.length - 1]?.close ?? null;
       }
     } catch (_) {}
@@ -527,10 +591,12 @@
         fetch(`/api/options/flow?symbol=${symbol}${fp}`),
         fetch(`/api/gamma?symbol=${symbol}${fp}`),
       ]);
+      if (_stale()) return;
 
       // Gamma levels (flip, call wall, put wall) — send to chart regardless of other data
       if (gammaRes.ok) {
         const { data: gd } = await gammaRes.json();
+        if (_stale()) return;
         _lastGammaData = gd;
         window.ChartAPI?.setGammaLevels?.(gd);
         _updateGammaWidget(gd);
@@ -539,6 +605,7 @@
       // Polygon options (ETF proxy with scaled strikes)
       if (polyRes.ok) {
         const { data: polyData } = await polyRes.json();
+        if (_stale()) return;
         if (polyData) {
           const walls = (polyData.scaled?.oiWalls ?? polyData.oiWalls ?? [])
             .map(w => w.futuresStrike ?? w.strike)
@@ -556,6 +623,7 @@
       // Returns scaled* fields when futuresPrice was provided.
       if (!usedPolygon && yahoRes.ok) {
         const { options } = await yahoRes.json();
+        if (_stale()) return;
         if (options) {
           // Use futures-scaled levels when available (MNQ→QQQ proxy, scaled to NQ price space)
           const hasScaled = options.scaledOiWalls || options.scaledMaxPain;
@@ -1125,10 +1193,32 @@
       });
     }
 
+    // v14.39 (Track 3 follow-up): synchronous sym-btn click handler. chart.js
+    // fires loadData (async) on click; its chartViewChange event only reaches us
+    // hundreds of ms later, after the candle fetch resolves. We need to blank
+    // the bias panel + OHLC header options row on the same tick as the click —
+    // otherwise those fields display the prior symbol's values until the next
+    // scheduled bias/options refresh. See CHANGELOG [v14.39].
+    document.querySelectorAll('.sym-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const newSym = btn.dataset.symbol;
+        if (!newSym || newSym === activeSymbol) return; // same-symbol click — no-op
+        console.log(`[v14.39] sym-switch clear-on-click: ${activeSymbol} -> ${newSym}`);
+        _clearSymbolState(newSym);
+        // Kick off bias + options fetches immediately — don't wait for the chart
+        // candle fetch + chartViewChange round-trip.
+        _fetchOptionsData(newSym);
+        _fetchDDBands(newSym);
+        if (typeof window._fetchAndRenderBias === 'function') {
+          window._fetchAndRenderBias(newSym);
+        }
+      });
+    });
+
     // Listen for dashboard mode changes (Futures ↔ Crypto)
     document.addEventListener('dashModeChange', (e) => {
       activeSymbol = e.detail.symbol;
-      _clearSymbolState();
+      _clearSymbolState(activeSymbol);
       fetchAndRender();
       const rsWidget = document.getElementById('rs-widget');
       if (rsWidget) rsWidget.style.display = (activeSymbol === 'MNQ' || activeSymbol === 'MES') ? '' : 'none';
@@ -1143,7 +1233,10 @@
       activeTf     = e.detail.tf;
       // Immediately clear stale symbol state and show loading indicators
       // before the async fetch replaces them with fresh data.
-      _clearSymbolState();
+      // (Also invoked synchronously on sym-btn click below — this second call
+      // re-asserts the blank state if the click fell on a same-symbol TF switch,
+      // and is a no-op otherwise since generation bumps are idempotent for rendering.)
+      _clearSymbolState(activeSymbol);
       fetchAndRender();
       // RS widget only relevant for equity index symbols
       const rsWidget = document.getElementById('rs-widget');
@@ -3172,14 +3265,22 @@
 
   async function fetchAndRenderBias(symbol) {
     if (!symbol) symbol = _getCurrentSymbol();
+    // v14.39: in-flight guard — capture the symbol-switch generation at entry.
+    // If the user switches symbols while this fetch is in flight, bail before
+    // rendering stale data over the new blank state.
+    const myGen = window._symbolSwitchGen || 0;
+    const _stale = () => (window._symbolSwitchGen || 0) !== myGen;
+
     // Update symbol label
     const symLabel = document.getElementById('bias-symbol-label');
     if (symLabel) symLabel.textContent = symbol;
     try {
       const modeParam = _biasMode === 'manual' ? '&mode=manual' : '';
       const res = await fetch(`/api/bias?symbol=${encodeURIComponent(symbol)}${modeParam}`);
+      if (_stale()) return;
       if (!res.ok) return;
       const data = await res.json();
+      if (_stale()) return;
       if (data.status === 'initializing') {
         _showInitializing();
         return;
@@ -3202,6 +3303,33 @@
       // Fail silently — do not break existing alert rendering
     }
   }
+
+  // v14.39: expose fetchAndRenderBias to the outer alerts IIFE so the sym-btn
+  // click handler can kick off the bias refetch synchronously without waiting
+  // for the chart's candle round-trip + chartViewChange event.
+  window._fetchAndRenderBias = fetchAndRenderBias;
+
+  // v14.39: synchronous blank for the bias panel — invoked by _clearSymbolState()
+  // in the outer IIFE at sym-btn click time, before any network round-trip.
+  // Resets the skeleton flag so the next render rebuilds from a clean slate.
+  window._blankBiasPanel = function (newSym) {
+    _biasBuilt = false;
+    if (newSym) {
+      const sl = document.getElementById('bias-symbol-label');
+      if (sl) sl.textContent = newSym;
+    }
+    const loading = '<div class="bias-init-placeholder">Loading\u2026</div>';
+    const rs = document.getElementById('bias-readiness-section');
+    const ds = document.getElementById('bias-direction-section');
+    const ss = document.getElementById('bias-setup-score-section');
+    if (rs) rs.innerHTML = loading;
+    if (ds) ds.innerHTML = loading;
+    if (ss) ss.innerHTML = loading;
+    const cl = document.getElementById('conviction-label');
+    const cd = document.getElementById('conviction-detail');
+    if (cl) { cl.textContent = 'LOADING'; cl.className = 'conviction-label conviction-gray'; }
+    if (cd) cd.textContent = 'Waiting for new symbol\u2026';
+  };
 
   function _showInitializing() {
     const rs = document.getElementById('bias-readiness-section');
