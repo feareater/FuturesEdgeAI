@@ -4,6 +4,56 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v14.38] — 2026-04-22 — Spike filter hardening: 30-tick median + low-volume floor (data-layer remediation Phase 5, Bug 4 proper fix)
+
+Phase 5 of the data-layer remediation plan. Replaces the Phase 0 emergency-only spike floor (v14.33, kept as belt-and-suspenders) with a structurally sound filter. The audit's Bug 4 root cause: during thin-liquidity overnight windows (00:00–01:00 ET), bad ticks at volume 1–2 can push the rolling 10-tick median far enough that a staircase of subsequent bad ticks passes the per-symbol percentage threshold — the MCL $1.55 / $2.92 / $3.21 / $3.45 pattern from 2026-04-21.
+
+### Fix — three independent rejection layers in `_isSpikePrice()`
+
+| layer | check | introduced | purpose |
+|---|---|---|---|
+| 1 | Hard floor — reject if `\|price / lastGoodPrice - 1\| > 25%` | v14.33 (Phase 0) | belt-and-suspenders; still fires when the median itself is poisoned |
+| 2 | **Volume floor — reject if `volume < 3` AND `deviation > 0.5%` from the 30-tick median** | **v14.38 (Phase 5)** | **catches low-volume phantoms the per-symbol threshold lets through** |
+| 3 | Per-symbol percentage threshold — unchanged (MNQ/MES/M2K/MYM/SIL 1.5%, MGC/MHG 1.2%, MCL 2.0%) | pre-v14.33 | the original filter |
+
+### Changes
+
+- `server/data/databento.js:416` — `PRICE_BUFFER_SIZE` 10 → **30**. A 30-tick buffer (roughly 30 seconds of ohlcv-1s bars) gives a more stable median baseline in thin overnight volume; a bad-tick staircase has to corrupt ~15 ticks to shift the median far enough that Layer 3 would clear, vs ~5 with the old 10-tick buffer. Layer 2 catches the pattern long before that.
+- `_isSpikePrice(symbol, price, volume?)` — volume is a new optional parameter. When undefined, Layer 2 is bypassed and the filter falls through to Layer 3 (original behavior). This keeps the 1m bar path (`rtype=33`) on the pre-v14.38 semantics while activating the volume floor for the 1s tick path (`rtype=32`) where low-volume phantoms cluster.
+- `_handleStreamRecord()` `rtype=32` tick branch — now reads `rec.volume` and passes it to `_isSpikePrice()`.
+- New constants: `LOW_VOLUME_FLOOR = 3` (contracts), `LOW_VOLUME_DEV_THRESHOLD = 0.005` (0.5% from median).
+- Rejection log: `[SPIKE-VOL] <symbol> rejected tick <price> vol=<vol> (median=<med>, dev=<pct>%, floor=3)` — one line per rejection.
+
+### Per-symbol thresholds deliberately unchanged
+
+The audit's Phase 5 spec reads: "do NOT change the per-symbol percentage thresholds unless diagnosis shows a specific symbol needs it. This phase is about the filter structure, not the per-symbol magic numbers." Values in `TICK_SPIKE_THRESHOLD` (MNQ 1.5%, MCL 2.0%, etc.) and `ATR_BOUNDS_1M` are all untouched.
+
+### Verification
+
+- **Synthetic test (11/11 pass)**: hard floor still rejects MCL $1.55; volume-floor rejects low-vol divergent ticks (e.g. vol=2 at 0.65% div); high-volume moves on the same price pass; low-volume tiny-deviation ticks pass (0.2% < 0.5%); per-symbol threshold still fires on >2% MCL moves; corrupted-median-plus-low-volume rejects (scenario the audit called out); cold start accepts gracefully; the 1m bar path (volume omitted) behaves as pre-Phase-5; buffer caps at 30.
+- **Module load clean**: `node --check` + `require('./server/data/databento.js')` succeed.
+- **Server restart clean** (pm2): `wsConnected:true`, `lagSeconds:1`, 8 tradeable symbols live, OPRA subscribed (QQQ/SPY/USO/GLD/IWM/SLV).
+- **databentoDiag**: all live symbols returning 88–90 bars per 90-min window. No errors.
+- **Layer 2 live-fired during the verification window** (2026-04-22T03:21Z UTC — inside the audit's 04:00–05:00 UTC thin-liquidity bad-tick cluster): `[SPIKE-VOL] SIL rejected tick 78.63 vol=1 (median=78.0400, dev=0.76%, floor=3)`. This tick would have cleared Layer 3 (0.76% < SIL's 1.5% per-symbol threshold) — the volume floor is catching exactly the pattern the audit identified.
+
+### B9 paper-trading edge unaffected
+
+- Filter structure is strictly tighter than before: every tick rejected by Phase 5 was also eligible for rejection under the existing hard floor or per-symbol check. No tick that was accepted pre-v14.38 will be rejected post-v14.38 UNLESS it has both `volume < 3` and `deviation > 0.5%` — i.e. it was a low-confidence tick at a divergent price, which is the definition of a phantom.
+- 1m bar path untouched (volume argument omitted → Layer 2 bypassed).
+- No changes to setup detection, confidence scoring, `applyMarketContext()`, outcome resolution, or any other engine or backtest code.
+- Phase 0 hard floor preserved (Layer 1).
+
+### Rollback
+
+Trivial: revert `server/data/databento.js` to the previous commit (v14.37). No data was migrated by this phase; behavior change is entirely within the live-feed spike filter.
+
+### Files changed
+
+- `server/data/databento.js` — `PRICE_BUFFER_SIZE` bumped to 30, new `LOW_VOLUME_FLOOR` / `LOW_VOLUME_DEV_THRESHOLD` constants, `_isSpikePrice` takes optional `volume`, tick path passes volume through.
+- `CHANGELOG.md` — this entry.
+
+---
+
 ## [v14.37] — 2026-04-21 — IWM + DIA ETF seed + daily-close backfill (data-layer remediation Phase 4, Bug 7)
 
 Phase 4 of the data-layer remediation plan. Unblocks M2K (Russell 2000 Micro) and MYM (Dow Jones Micro) options-proxy HP / GEX / DEX / resilience computation. The audit's Bug 7 identified two missing pieces: no `data/seed/IWM_*.json` file (M2K chart/proxy thin), and no `data/seed/DIA_*.json` file + zero DIA entries in `etf_closes.json` (MYM proxy entirely unmapped).

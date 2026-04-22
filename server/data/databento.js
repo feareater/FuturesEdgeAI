@@ -155,14 +155,35 @@ function _isHardFloorRejection(symbol, price) {
   return false;
 }
 
+// Phase 5 volume floor (v14.38): during thin-liquidity overnight windows,
+// Databento occasionally emits 1-second ticks where `volume` is 1–2 contracts
+// at a price far from the consensus. The per-symbol percentage threshold may
+// still clear those (e.g. a 0.6% move on MCL is below the 2.0% threshold) but
+// the move is not economically credible with that volume. Any tick below the
+// volume floor that also deviates more than LOW_VOLUME_DEV_THRESHOLD from the
+// rolling median is rejected regardless of the per-symbol threshold.
+const LOW_VOLUME_FLOOR        = 3;      // contracts
+const LOW_VOLUME_DEV_THRESHOLD = 0.005; // 0.5% of the rolling median
+
 /**
  * Check if a price is a spike relative to the rolling median for a symbol.
- * Uses a 10-tick rolling median as reference instead of a single prior price,
- * preventing staircase corruption where one bad tick shifts the baseline.
- * Returns true if the price should be REJECTED (i.e. it's a phantom spike).
+ * Uses a 30-tick rolling median (raised from 10 in v14.38) for a more stable
+ * baseline in thin overnight volume. Returns true if the price should be
+ * REJECTED (i.e. it's a phantom spike).
+ *
+ * Three independent rejection layers, in order:
+ *   1. Phase 0 hard floor   — ±25% from last validated price (belt-and-suspenders).
+ *   2. Phase 5 volume floor — low-volume ticks with >0.5% deviation from 30-tick median.
+ *   3. Per-symbol threshold — default rolling-median check (unchanged from v14.33).
+ *
+ * @param {string} symbol
+ * @param {number} price
+ * @param {number} [volume]  Optional; enables the Phase 5 volume floor. Omit or
+ *                           pass undefined to skip the volume check (e.g. when
+ *                           the caller has no volume context).
  */
-function _isSpikePrice(symbol, price) {
-  // Phase 0 hard floor runs BEFORE the rolling-median filter (see above).
+function _isSpikePrice(symbol, price, volume) {
+  // Layer 1: Phase 0 hard floor — runs BEFORE anything else (belt-and-suspenders).
   if (_isHardFloorRejection(symbol, price)) return true;
 
   const median = _getRollingMedian(symbol);
@@ -173,14 +194,25 @@ function _isSpikePrice(symbol, price) {
     const threshold = TICK_SPIKE_THRESHOLD[symbol] || DEFAULT_TICK_THRESHOLD;
     return Math.abs(price - prev) / prev > threshold;
   }
-  const threshold = TICK_SPIKE_THRESHOLD[symbol] || DEFAULT_TICK_THRESHOLD;
   const deviation = Math.abs(price - median) / median;
+
+  // Layer 2: Phase 5 volume floor — low-volume + modestly divergent → reject.
+  if (volume !== undefined && volume < LOW_VOLUME_FLOOR && deviation > LOW_VOLUME_DEV_THRESHOLD) {
+    console.warn(
+      `[SPIKE-VOL] ${symbol} rejected tick ${price} vol=${volume} ` +
+      `(median=${median.toFixed(4)}, dev=${(deviation * 100).toFixed(2)}%, floor=${LOW_VOLUME_FLOOR})`
+    );
+    return true;
+  }
+
+  // Layer 3: existing per-symbol percentage threshold.
+  const threshold = TICK_SPIKE_THRESHOLD[symbol] || DEFAULT_TICK_THRESHOLD;
   if (deviation > threshold) {
     console.warn(
       `[SPIKE-1S] ${symbol} rejected tick ${price} ` +
       `(median=${median.toFixed(4)}, dev=${(deviation * 100).toFixed(2)}%)`
     );
-    return true; // is a spike, reject it
+    return true;
   }
   return false;
 }
@@ -452,9 +484,12 @@ const TICK_SPIKE_THRESHOLD = {
 };
 const DEFAULT_TICK_THRESHOLD = 0.015;
 
-// Rolling price buffer per symbol — circular buffer of last 10 accepted tick prices
+// Rolling price buffer per symbol — circular buffer of last N accepted tick prices.
+// Raised from 10 to 30 in v14.38 (Phase 5) — more stable median baseline in thin
+// overnight volume where a bad-tick staircase can shift a 10-tick median enough
+// that subsequent bad ticks pass the per-symbol percentage filter.
 const _priceBuffer = {};
-const PRICE_BUFFER_SIZE = 10;
+const PRICE_BUFFER_SIZE = 30;
 
 function _updatePriceBuffer(symbol, price) {
   if (!_priceBuffer[symbol]) _priceBuffer[symbol] = [];
@@ -612,12 +647,14 @@ function _handleStreamRecord(rec) {
     const instrumentId = rec.hd?.instrument_id ?? rec.instrument_id;
     const internal     = _instrumentMap.get(instrumentId);
     if (!internal) return;
-    const price = _price(rec.close);
-    const time  = _tsToSeconds(rec.hd?.ts_event ?? rec.ts_event);
+    const price  = _price(rec.close);
+    const time   = _tsToSeconds(rec.hd?.ts_event ?? rec.ts_event);
+    const volume = Number(rec.volume ?? 0);
     if (price > 0 && time > 0) {
-      // Spike filter: reject tick if price deviates beyond per-symbol threshold from rolling median
-      if (_isSpikePrice(internal, price)) {
-        return;  // _isSpikePrice already logs [SPIKE-1S] details
+      // Spike filter: 3-layer check (hard floor + volume floor + per-symbol threshold).
+      // Passing `volume` enables the Phase 5 volume floor.
+      if (_isSpikePrice(internal, price, volume)) {
+        return;  // the relevant [SPIKE-*] log was emitted inside _isSpikePrice
       }
       _acceptPrice(internal, price);
       _onTickCb(internal, price, time);
