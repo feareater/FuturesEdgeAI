@@ -4,6 +4,74 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v14.39.1] — 2026-04-22 — Hotfix: bias panel stuck on "Loading…" after symbol switch
+
+Hotfix on top of v14.39. The clear-on-click architecture landed in v14.39 (generation counter, in-flight guards, synchronous blank) works correctly for the OHLC options row and DD Band widgets — they populate on symbol switch. But the Market Context / Directional Bias / Setup Score / Conviction sections stay stuck on `Loading…` / `LOADING — Waiting for new symbol…` indefinitely until a `data_refresh` / `biasRefresh` WS broadcast eventually triggers a fresh fetch (can be minutes during quiet periods).
+
+### Root cause — listener-order race with double `_clearSymbolState` bump
+
+v14.39 added a `_symbolSwitchGen` counter that `_clearSymbolState()` bumps. Every async fetch (`/api/bias`, `/api/options`, `/api/ddbands`) captures the counter at entry and bails after each `await` if the value has moved — prevents stale responses from overwriting the new blank state.
+
+The bias IIFE at [public/js/alerts.js:3195-3750](public/js/alerts.js#L3195-L3750) runs synchronously at script load and registers its `chartViewChange` listener ([public/js/alerts.js:3731](public/js/alerts.js#L3731)) immediately. The alerts IIFE's `chartViewChange` listener ([public/js/alerts.js:1231](public/js/alerts.js#L1231)) is registered inside async `boot()`, which only reaches that line after multiple `await`s — so it's registered **second**. Listeners fire in registration order.
+
+Click walk:
+1. Sym-btn click handler ([public/js/alerts.js:1202](public/js/alerts.js#L1202)): `_clearSymbolState` bumps gen 0→1, then `window._fetchAndRenderBias(newSym)` captures `myGen=1` and starts fetch #A.
+2. chart.js `loadData()` completes, dispatches `chartViewChange`.
+3. **Bias IIFE listener fires first** — `fetchAndRenderBias(sym)` captures `myGen=1` and starts fetch #B.
+4. **Alerts IIFE listener fires second** — `_clearSymbolState(activeSymbol)` bumps gen 1→2, then kicks `_fetchOptionsData` + `_fetchDDBands` which capture `myGen=2`. **No bias fetch call after the bump.**
+5. Responses land: bias fetch #A stale (gen=2 ≠ myGen=1) → bails; bias fetch #B stale → bails; options + DD fetches match (myGen=2) → render.
+
+Options and DD populate because the alerts IIFE handler calls them AFTER its own bump. Bias is the only widget missing that post-bump kick — v14.39 set up `window._fetchAndRenderBias` for the sym-btn click handler but didn't call it from the `chartViewChange` / `dashModeChange` handlers.
+
+The hypothesis floated during triage (`window._fetchAndRenderBias` being undefined due to a function-reference mismatch) was wrong: [public/js/alerts.js:3310](public/js/alerts.js#L3310) does assign `window._fetchAndRenderBias = fetchAndRenderBias` and the click handler's `typeof` guard passes. The real bug is strictly about WHICH gen the fetch captures, not whether it fires at all.
+
+### Fix
+
+**[public/js/alerts.js](public/js/alerts.js)** — two additions, one to each event handler in the alerts IIFE:
+
+- `chartViewChange` handler (~line 1258): after `_fetchOptionsData` / `_fetchDDBands`, call `window._fetchAndRenderBias(activeSymbol)`. Fires with `myGen=2` (post-bump), survives the stale check, paints.
+- `dashModeChange` handler (~line 1228): same addition — the Futures↔Crypto toggle has the identical listener-order race (bias IIFE listener at line 3727 also registered first).
+
+Both guarded with `typeof window._fetchAndRenderBias === 'function'` to match the click handler's pattern. Bias IIFE listeners at lines 3727/3731 retained — they fire harmlessly-stale fetches, but removing them would change v14.39's surface more than necessary for a hotfix.
+
+**[public/sw.js](public/sw.js)** — cache version bumped `v38 → v39` so PWAs pick up the JS change on next load.
+
+### Scope fences honored
+
+- v14.39 architecture (generation counter, `_clearSymbolState` invalidation, in-flight guards, `_blankBiasPanel`) kept verbatim.
+- `_fetchOptionsData` / `_fetchDDBands` paths untouched.
+- Server-side routes (`/api/bias`, `setups.js`, `simulator.js`, bias.js) untouched.
+- No changes to setup detection, confidence scoring, `applyMarketContext()` math, outcome resolution, or backtest code paths.
+- **B9 paper-trading edge unaffected** — pure client-side event-handler fix.
+
+### Verification
+
+Open DevTools console, then Network tab filtered to `bias`, then click MNQ → MES → MCL → SIL → MHG → MYM → M2K:
+
+1. `typeof window.fetchAndRenderBias === 'function'` — also `typeof window._fetchAndRenderBias === 'function'` — both return `true`.
+2. Each click emits `[v14.39] sym-switch clear-on-click: <prev> -> <new>` to the console.
+3. Network tab shows a new `GET /api/bias?symbol=<new>` returning 200 per click (expect up to ~3 per click: click-handler + bias-IIFE-chartViewChange + alerts-IIFE-chartViewChange-hotfix; first two mark stale post-await, third one paints).
+4. Bias panel blanks to `Loading…` within one animation frame of the click, then populates with the new symbol's Macro Context gates, Directional Bias signals, Setup Score, and Conviction label within ~500ms.
+5. MHG specifically shows `Daily HP: N/A (no op...)` / `Monthly HP: N/A (no op...)` once populated — not stuck on `Loading…`.
+6. No regression on OHLC options row (populates / hides for MHG) or DD Band widget (populates) — both already working post-v14.39 and still working.
+
+No server restart needed — client-side only. Browser hard-reload (Ctrl+Shift+R) to evict the `v38` cache.
+
+### Rollback
+
+Trivial: revert the two handler edits in `public/js/alerts.js` and the cache version in `public/sw.js`. No data migrated.
+
+### Files changed
+
+- `public/js/alerts.js` — `dashModeChange` and `chartViewChange` handlers each call `window._fetchAndRenderBias(activeSymbol)` after the `_clearSymbolState` bump.
+- `public/sw.js` — `CACHE_NAME` bumped `v38 → v39`.
+- `docs/CHANGELOG.md` — this entry.
+- `docs/CLAUDE.md` — Build Phases table tick.
+- `docs/CONTEXT_SUPPLEMENT.md` — v14.39 section extended with the hotfix note.
+- `docs/ROADMAP.md` — current version + Track 3 follow-up row updated to v14.39.1.
+
+---
+
 ## [v14.39] — 2026-04-22 — Right-panel + OHLC options-row stale data on symbol switch (Track 3 follow-up)
 
 Fixes a right-panel and OHLC-header stale-data leak that Jeff surfaced from live trading: clicking a different symbol in the topbar swaps the chart candles correctly, but the Market Context / Directional Bias / Setup Score / Conviction panel AND the OHLC-header options-metrics row (`<ETF> P/C | IV | MaxPain | DEX | Resilience`) continue to display the PREVIOUS symbol's values until the next scheduled bias + options refresh completes. During a seven-symbol click walk (MNQ → MES → MCL → SIL → MHG → MYM → M2K), each click left the panel showing the prior symbol's "Current" price, TP/SL, ↑/↓ reference levels, all 11 directional-bias signal rows, all 6 macro-gate rows, and the conviction label. On MHG specifically the OHLC options row showed SLV's values (SLV was SIL's proxy) — MHG has no options proxy at all and should be N/A, not populated from the previously selected symbol's ETF.

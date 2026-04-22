@@ -1224,6 +1224,13 @@
       if (rsWidget) rsWidget.style.display = (activeSymbol === 'MNQ' || activeSymbol === 'MES') ? '' : 'none';
       _fetchOptionsData(activeSymbol);
       _fetchDDBands(activeSymbol);
+      // v14.39.1: the bias IIFE also has a dashModeChange listener, but it was
+      // registered first and captures _symbolSwitchGen BEFORE our _clearSymbolState
+      // above bumps it — so its fetch is marked stale and never paints. Kick a
+      // fresh fetch post-bump, mirroring the click handler's pattern.
+      if (typeof window._fetchAndRenderBias === 'function') {
+        window._fetchAndRenderBias(activeSymbol);
+      }
       _fetchPrediction();
     });
 
@@ -1253,6 +1260,14 @@
       } else {
         _fetchOptionsData(activeSymbol);
         _fetchDDBands(activeSymbol);
+      }
+      // v14.39.1: the bias IIFE has its own chartViewChange listener (registered
+      // synchronously at script load, before boot() added this one), so it fires
+      // first and captures _symbolSwitchGen BEFORE the _clearSymbolState above
+      // bumps it — its fetch is then marked stale and bails. Kick a fresh fetch
+      // post-bump so the bias panel actually paints for the new symbol.
+      if (typeof window._fetchAndRenderBias === 'function') {
+        window._fetchAndRenderBias(activeSymbol);
       }
       _fetchPrediction();
     });

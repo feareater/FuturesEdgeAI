@@ -4,7 +4,7 @@
 > Read alongside ../CLAUDE.md and AI_ROADMAP.md.
 > Updated after every completed phase or significant decision.
 
-**Current version:** v14.39 — right-panel + OHLC-options-row stale-on-symbol-switch fix (Track 3 follow-up, 2026-04-22)
+**Current version:** v14.39.1 — hotfix: bias panel stuck on "Loading…" after symbol switch (2026-04-22)
 **Last updated:** 2026-04-22
 
 ---
@@ -165,7 +165,7 @@ Diagnostic at [data/analysis/2026-04-20_bias_macro_reconciliation.md](data/analy
 | Bug | Description | Severity | Status |
 |-----|-------------|----------|--------|
 | MES aggregation | Aggregated candle values show unrealistic prices for MES | High — incorrect chart data | **Fixed v14.5** — partial bar was not replaced by completed bar on window close |
-| Dollar values stale | Dollar/currency values remain stale after symbol switch on dashboard | Medium — confusing display | **Fixed v14.5** — setup overlay + predictions cleared on symbol switch. **Follow-up v14.39** — extended clear-on-click discipline to the Market Context / Directional Bias / Setup Score / Macro Context / Conviction subcomponents + OHLC header options-metrics row. Added `window._symbolSwitchGen` in-flight guard on `/api/bias`, `/api/options`, `/api/ddbands` so stale responses can't overwrite the new blank state; ETF-proxy short-circuit so MHG renders N/A instead of inheriting SLV values. Client-only; B9 edge unaffected. See CHANGELOG [v14.39]. |
+| Dollar values stale | Dollar/currency values remain stale after symbol switch on dashboard | Medium — confusing display | **Fixed v14.5** — setup overlay + predictions cleared on symbol switch. **Follow-up v14.39** — extended clear-on-click discipline to the Market Context / Directional Bias / Setup Score / Macro Context / Conviction subcomponents + OHLC header options-metrics row. Added `window._symbolSwitchGen` in-flight guard on `/api/bias`, `/api/options`, `/api/ddbands` so stale responses can't overwrite the new blank state; ETF-proxy short-circuit so MHG renders N/A instead of inheriting SLV values. **Hotfix v14.39.1** — bias panel (Market Context / Directional Bias / Setup Score / Conviction sections) stayed stuck on `Loading…` after the v14.39 click flow. Listener-order race: the bias IIFE's `chartViewChange` / `dashModeChange` listeners register synchronously at script load and fire before the alerts IIFE's (registered in async `boot()`) bumps `_symbolSwitchGen` — bias fetch captured the pre-bump gen and bailed post-await. Fixed by calling `window._fetchAndRenderBias(activeSymbol)` from both alerts IIFE handlers after the bump, mirroring the v14.39 click-handler pattern. Options + DD widgets were unaffected (alerts IIFE already called them post-bump). Client-only; B9 edge unaffected. See CHANGELOG [v14.39.1]. |
 | Symbol load failures | Some symbols fail to load chart data intermittently | Medium — user-facing error | **Fixed v14.5** — graceful "Waiting for data" overlay + startup warnings |
 | TF selector centering | Timeframe selector buttons not properly centered in UI | Low — cosmetic | **Fixed v14.5** — justify-content:center on all screen sizes |
 
