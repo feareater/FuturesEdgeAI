@@ -4,6 +4,133 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v14.40] — 2026-04-23 — Refresh scheduler restructure + Bug 8 reference-symbol coverage
+
+Final piece of the v14.33 → v14.40 data-layer remediation arc. Restructures the single hourly refresh into a tighter, more trustworthy cadence with manual control and visible state, and closes Bug 8 from the 2026-04-21 audit (reference-instrument backfill coverage). Paper trading, the upcoming forward-test improvements, and any signal-quality work all depend on trusted data — this release makes the data layer trustworthy and visible.
+
+### Part A — Refresh scheduler restructure
+
+- `server/data/dailyRefresh.js` → **`server/data/dataRefresh.js`** (rename). Old `[HOURLY-REFRESH]` log prefix split into `[QUICK-REFRESH]` (15-min cycle) and `[DAILY-REFRESH]` (new 24-h cycle). Import updated in `server/index.js`; `server/data/dataQuality.js` auto-refresh callback rewired to `dataRefresh.refreshSymbol(symbol)` — same signature (default lookback 95 min) so its call site is unchanged.
+- **Quick refresh — every 15 minutes, clock-aligned** to `:00` / `:15` / `:30` / `:45`. `scheduleQuickRefresh()` computes `nextTrigger = ceil(now / 15min) * 15min` at startup; `setTimeout` to that, then `setInterval` at 15 min. Lookback: 95 minutes (90 + 5 buffer). Symbols: all 16. Skip guard: if a refresh is still in flight when the next interval fires, logs `[QUICK-REFRESH] Skipping — previous still in flight` and waits.
+- **Daily refresh — once per day at 17:30 ET.** Implementation: a 5-min `setInterval` polls; if current ET time is in the 17:25–17:35 window AND `_lastDailyRunDate !== todayET`, it fires and stamps the date. Lookback: 24 hours (1440 min). Symbols: all 16. Same skip-if-running guard. ET conversion uses `Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', ... })` so DST is handled automatically — no hardcoded UTC offsets.
+  - **Rationale** (code comment): 17:00–18:00 ET is the CME maintenance window; running at 17:30 means the live feed isn't competing, Databento has had ~30 min to settle ingest of the just-closed session, and bars are written before 18:00 ET re-open.
+- **`refreshSymbol(symbol, lookbackMinutes, opts)`** now takes a lookback parameter (default 95 preserves back-compat with `dataQuality.js`). For `lookbackMinutes ≤ 1440` (≤24 h) it uses the existing single Databento REST query path (Yahoo fallback preserved for tradeable symbols). For `lookbackMinutes > 1440` (>24 h) it delegates to a newly-exported `backfillSymbolWindow(symbol, lookbackMinutes, {force})` helper in `scripts/backfillHistoricalWindow.js` — same chunked per-day fetch + Phase 2 dedup + re-aggregation the CLI uses, just without the console output.
+- **`refreshAll(lookbackMinutes, opts)`** propagates the lookback to all 16 symbols via `Promise.allSettled`, wraps each with per-symbol progress emit, then runs options HP recompute + final in-memory purge.
+- New **`refreshOne(symbol, lookbackMinutes, opts)`** wrapper emits the same `refresh_start` / `refresh_progress` / `refresh_complete` events as `refreshAll` so single-symbol manual refreshes drive the same dashboard banner.
+
+### Part B — Bug 8 closed: `backfillHistoricalWindow.js` extended to all 16 symbols
+
+- Default symbol pool: `TRADEABLE_SYMBOLS.concat(REFERENCE_SYMBOLS)` from `instruments.js` — 16 CME symbols (MNQ, MES, M2K, MYM, MGC, SIL, MHG, MCL + M6E, M6B, MBT, ZT, ZF, ZN, ZB, UB). Pre-v14.40 hard-coded 8-tradeable list restored via new `--tradeable-only` flag for callers who want the old behavior.
+- `--symbol SYM` flag already targeted a single symbol; validation widened to accept any of the 16 (was: tradeable only).
+- All other script semantics preserved verbatim: Phase 2 dedup (highest volume wins, last-occurrence ties), `time` field on every written bar, per-file `.bak` sidecars, today-excluded, ≥1,300-bars skip-if-complete gate, `--force` bypass, 5m/15m/30m re-aggregation into both `data/historical/futures/{sym}/{tf}/` and `data/historical/futures_agg/{sym}/{tf}/`.
+- Reference symbols use the same `stype_in=parent` / `GLBX.MDP3` / `ohlcv-1m` request shape — no new Databento integration surface.
+- **Exports added** so `dataRefresh.js` can delegate > 24-h lookbacks without spawning a child process: `backfillSymbolWindow(symbol, lookbackMinutes, {force})`, `fetchOneDay`, `fetchRange`, `mergeAndDedup`, `aggregateBars`. CLI behavior unchanged when invoked via `node scripts/backfillHistoricalWindow.js`.
+
+### Part B (run) — reference-symbol catch-up backfill
+
+Ran `node scripts/backfillHistoricalWindow.js --symbol $sym --days 14` for each of the 8 reference symbols (Apr 10 → Apr 21 window, today excluded). Summary:
+
+| Symbol | 1m files written | Dates skipped | Dates errored | Bars fetched | Bars merged | Aggregated files |
+|---|---:|---:|---:|---:|---:|---:|
+| M6E | 12 | 2 | 0 |  13,685 |  12,391 |  72 |
+| M6B | 12 | 2 | 0 |   6,676 |   6,759 |  72 |
+| MBT | 11 | 2 | 1 |  20,416 |  13,736 |  66 |
+| ZT  | 12 | 2 | 0 |  11,439 |  11,759 |  72 |
+| ZF  | 12 | 2 | 0 |  12,097 |  12,361 |  72 |
+| ZN  | 12 | 2 | 0 |  13,042 |  12,918 |  72 |
+| ZB  | 12 | 2 | 0 |  11,437 |  11,334 |  72 |
+| UB  | 12 | 2 | 0 |  11,537 |  11,908 |  72 |
+| **Total** | **95** | **16** | **1** | **100,329** | **93,166** | **570** |
+
+Dates skipped per symbol (2) correspond to weekends already at ≥1,300 bars from prior runs or returning 0 bars (weekend/holiday). One MBT date (2026-04-12, Sunday partial session) returned HTTP 206 partial-content mid-stream; the remaining 11 MBT dates backfilled cleanly with 20,416 raw bars merged to 13,736 front-month bars. No reference symbol returned zero data across the window — the Databento parent subscription returns bars for every reference root on weekdays.
+
+Spot-check (`M6E`, `ZN`, `UB` × `2026-04-14`, `2026-04-17`, `2026-04-20`): 1m files have 1,060–1,331 bars per date (full 22-h+ sessions for bonds/FX/CME crypto); every bar carries `time` (not `ts`); 5m / 15m / 30m files exist in both `data/historical/futures/{sym}/{tf}/` and `data/historical/futures_agg/{sym}/{tf}/` with matching bar counts.
+
+### Part C — Manual refresh API
+
+All three existing routes extended; signatures preserved for pre-v14.40 callers that POSTed empty bodies.
+
+- `POST /api/refresh/symbol/:symbol` — body `{ lookbackMinutes?: number, force?: boolean }`. Defaults: 95, false. Validation: positive integer ≤ 43 200 (30 days).
+- `POST /api/refresh/all` — same body shape, same validation. Both routes return 409 with `inFlight` detail if a refresh is already running.
+- `GET /api/refresh/status` — returns `{ inFlight: {scope, symbol?, lookbackMinutes, startedAt, currentIndex, totalSymbols} | null, lastRun: {scope, symbol?, completedAt, durationMs, lookbackMinutes, results} | null, lastRefreshPerSymbol: {[symbol]: {completedAt, lookbackMinutes, status, barsWritten}} }`. `lastRefreshPerSymbol` persists across runs (in-memory; resets on server restart — no disk persistence).
+- `force=true` bypasses the ≥ 1,300-bar skip-if-complete gate in the > 24-h backfill path. It is a no-op on the short-window path (there is no skip gate on the 95-min → 24-h single-REST-request codepath).
+
+### Part D — WebSocket broadcasts
+
+All three events fire from both manual and scheduled refreshes — the dashboard banner doesn't care which kind triggered.
+
+- `refresh_start` — `{ scope: 'all'|'symbol', symbol?: string, lookbackMinutes, startedAt, totalSymbols }`
+- `refresh_progress` — `{ symbol, status: 'running'|'done'|'error', error?: string, currentIndex, totalSymbols }` — fires per-symbol as each enters + completes.
+- `refresh_complete` — `{ scope, symbol?, durationMs, lookbackMinutes, results: {[symbol]: {status, barsWritten, error?}}, completedAt }`
+
+Implementation: `dataRefresh.js` exports a Node `EventEmitter` (`.events`) that the refresh functions fire internally. `server/index.js` subscribes at startup and rebroadcasts via `broadcast({ type: '<eventName>', ...payload })`. Verified end-to-end with a raw `ws` client connected to `ws://localhost:3000`: single-symbol `POST /api/refresh/symbol/MNQ {lookbackMinutes:90}` emitted 1× `refresh_start`, 2× `refresh_progress` (running, then done), 1× `refresh_complete` with correct shapes.
+
+### Part E — Dashboard UI
+
+**Refresh dropdown (`public/index.html`):** restructured layout with a `<select>` for refresh window (90 min · 6 hr · 24 hr · 3 d · 7 d · 14 d · 30 d), a force-re-pull checkbox (auto-disabled when window ≤ 24 h), the two existing trigger buttons, and three status lines that re-render every 30 s while the dropdown is open:
+
+```
+Last full refresh: 2 min ago (90 min, 16 symbols, 1,723 bars)
+Next quick refresh: in 13 min
+Next daily refresh: in 4 hr 22 min
+```
+
+Quick-refresh countdown is computed client-side (next clock-aligned :00 / :15 / :30 / :45 boundary). Daily-refresh countdown uses `Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York' })` to derive current ET and roll forward to 17:30 ET — matches the server-side DST handling.
+
+**Topbar refresh banner (`public/index.html` + `public/css/dashboard.css`):** new full-width 32 px banner rendered above the topbar via `<div id="refresh-banner">`. States:
+
+- **Running** (dark blue): `🔄 Refreshing 16 symbols (last 90 min)… [N/16 complete]` — updates on each `refresh_progress` frame.
+- **Success** (dark green): `✓ Refresh complete: 16 symbols, 1,723 bars updated in 8.9s` — 3 s hold then 500 ms fade.
+- **Warning** (dark amber): `⚠ Refresh complete with errors: 14/16 succeeded — see console` — 6 s hold then 500 ms fade. Error details logged to browser console.
+- **Validation error** (dark red): surfaces API validation failures (e.g. `lookbackMinutes must be a positive integer ≤ 43200`).
+
+Event plumbing: `alerts.js` re-dispatches `refresh_start` / `refresh_progress` / `refresh_complete` WS messages as DOM `CustomEvent`s on `document` so the banner's inline IIFE in `index.html` can subscribe without reaching into the WS socket owned by `alerts.js`. Intentionally **not coupled** to the v14.39 `_symbolSwitchGen` listener-order architecture — the banner is a global, symbol-independent surface.
+
+**Refresh button state:** while a refresh is in flight, the `↻ Data` button gains a `.refreshing` class (CSS spinner overlay, `cursor: wait`). Both "Refresh Current Symbol" and "Refresh All Symbols" buttons are `disabled` with `title="Refresh in progress, please wait."`. Re-enabled on `refresh_complete`.
+
+`public/sw.js` — `CACHE_NAME` bumped `v39` → `v40` so PWAs evict the v39 shell and pick up the new JS / CSS / HTML on next load.
+
+### B9 paper-trading edge unaffected
+
+- No changes to setup detection, confidence scoring, `applyMarketContext()` math, Phase 2 loss-analysis gates, multipliers, breadth scoring, DD band scoring, or the B9 trade config.
+- No changes to the backtest engine, the simulator `_persistForwardTrade()` path, outcome resolution, or the forward-test harness.
+- The only on-disk changes from the catch-up backfill are to `data/historical/futures/{sym}/{tf}/{date}.json` for reference symbols (M6E/M6B/MBT/ZT/ZF/ZN/ZB/UB) — none of these are scanned for trade setups (`tradeable: false` in `instruments.js`). `marketBreadth.js` reads them for daily regime classification; thicker 1-min coverage just makes that classification more stable.
+- Regression spot-check (2026-03-01 → 2026-04-01, MNQ/MES/MCL, `or_breakout`, `conf≥70`, `tf=5m`): **21 trades** — bit-for-bit matches the v14.35 / v14.36 reference trade count, proving setup detection + dedup gates are unchanged.
+
+### Files changed
+
+- `server/data/dataRefresh.js` — **new** (renamed + rewritten from `dailyRefresh.js`, +two schedulers, +event emitter, +lookback parameter, +force, +per-symbol progress wrapping).
+- `server/data/dailyRefresh.js` — **deleted** (renamed to `dataRefresh.js`).
+- `scripts/backfillHistoricalWindow.js` — all-16-symbol default pool, new `--tradeable-only` flag, extracted `backfillSymbolWindow` helper (+ siblings) for `dataRefresh.js` to import.
+- `server/index.js` — import rewired to `dataRefresh`, three `/api/refresh/*` routes rewritten with body validation + 409 in-flight guard + richer status shape, startup block calls both schedulers + subscribes to the three refresh events for WS rebroadcast, `dataQuality` auto-refresh callback updated to call `dataRefresh.refreshSymbol`.
+- `public/index.html` — refresh banner markup (above `#topbar`), restructured `#data-refresh-dropdown` (window select + force checkbox + three status lines), new inline IIFE for dropdown + banner state machine with WS event handling.
+- `public/js/alerts.js` — WS handler rebroadcasts `refresh_start` / `refresh_progress` / `refresh_complete` as `document` `CustomEvent`s.
+- `public/css/dashboard.css` — `.refresh-banner` (+ success / warning / error / fading states), `.chart-refresh-btn.refreshing` spinner overlay, `.data-refresh-dropdown` + `.dr-*` layout.
+- `public/sw.js` — `CACHE_NAME` bumped `v39` → `v40`.
+- `data/historical/futures/{M6E,M6B,MBT,ZT,ZF,ZN,ZB,UB}/{1m,5m,15m,30m}/*.json` — reference-symbol catch-up backfill (95 files written, 570 agg files written; pre-existing `.bak` sidecars from prior runs retained, new `.bak` sidecars per merged file for rollback).
+- `docs/CHANGELOG.md`, `docs/CONTEXT_SUPPLEMENT.md`, `docs/DATABENTO_PROJECT.md`, `docs/ROADMAP.md`, `CLAUDE.md` — doc updates for v14.40.
+
+### Rollback
+
+- **Code:** `git revert v14.40` restores the hourly single-schedule architecture and the 8-symbol backfill pool. The old `server/data/dailyRefresh.js` is preserved in git history; `server/data/dataRefresh.js` is removed. `server/data/dataQuality.js` is unchanged by this commit — its call site `dataRefresh.refreshSymbol(symbol)` works identically on pre-v14.40 tree after the revert (just re-resolves to the old module).
+- **Catch-up backfill data:** per-file `.bak` sidecars on every modified file. Full rollback:
+  ```bash
+  for sym in M6E M6B MBT ZT ZF ZN ZB UB; do
+    for tf in 1m 5m 15m 30m; do
+      find data/historical/futures/$sym/$tf -name '*.json.bak' | while read f; do
+        mv "$f" "${f%.bak}"
+      done
+      if [ -d data/historical/futures_agg/$sym/$tf ]; then
+        find data/historical/futures_agg/$sym/$tf -name '*.json.bak' | while read f; do
+          mv "$f" "${f%.bak}"
+        done
+      fi
+    done
+  done
+  ```
+
+---
+
 ## [v14.39.1] — 2026-04-22 — Hotfix: bias panel stuck on "Loading…" after symbol switch
 
 Hotfix on top of v14.39. The clear-on-click architecture landed in v14.39 (generation counter, in-flight guards, synchronous blank) works correctly for the OHLC options row and DD Band widgets — they populate on symbol switch. But the Market Context / Directional Bias / Setup Score / Conviction sections stay stuck on `Loading…` / `LOADING — Waiting for new symbol…` indefinitely until a `data_refresh` / `biasRefresh` WS broadcast eventually triggers a fresh fetch (can be minutes during quiet periods).

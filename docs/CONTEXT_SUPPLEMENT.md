@@ -75,44 +75,82 @@
 
 ---
 
-## Hourly Refresh System (v14.26)
+## Data Refresh System (v14.40, replaces Hourly Refresh v14.26)
 
-### How it works
-- Every 60 minutes (via `setInterval`), `refreshAll()` pulls the last 95 minutes (90 min + 5 min buffer) of 1m OHLCV data for all 16 CME symbols
-- Primary source: Databento REST API (`POST hist.databento.com/v0/timeseries.get_range`, ohlcv-1m schema, GLBX.MDP3 dataset, `stype_in=parent`)
-- Fallback: Yahoo Finance 7-day 1m bars (filtered to last 95 min) — triggers automatically if Databento fails; symbols without Yahoo ticker (bonds, FX, crypto CME) are skipped with warning
-- For each date returned, 1m bars are written to `data/historical/futures/{SYMBOL}/1m/{YYYY-MM-DD}.json` (replaces existing file)
-- Higher TFs (5m/15m/30m) are re-aggregated from the refreshed 1m data and written to both `futures/{SYMBOL}/{tf}/` and `futures_agg/{SYMBOL}/{tf}/`
-- After all symbols refresh, `purgeAllInvalidBars()` sanitizes in-memory candle store and rebuilds higher-TF bars
-- Options HP is recomputed for the last 2 trading dates across all 7 OPRA ETF proxies using existing `computeHP()` from `hpCompute.js`
-- If a refresh is still running when the next interval fires, the cycle is skipped with a log
+### Two schedules
+
+- **QUICK — every 15 minutes, clock-aligned to `:00` / `:15` / `:30` / `:45`.** 95-min lookback (90 min of bars + 5 min buffer). All 16 CME symbols. Log prefix `[QUICK-REFRESH]`. Catches fresh gaps / spikes between bar closes while the live feed is running.
+- **DAILY — once per day at 17:30 ET.** 24-h lookback. All 16 CME symbols. Log prefix `[DAILY-REFRESH]`. Implementation: a 5-min `setInterval` polls ET time (via `Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York' })`, so DST is automatic); fires when current ET lands in the 17:25–17:35 window and `_lastDailyRunDate !== todayET`. Chosen deliberately — 17:00–18:00 ET is the CME maintenance window, so the live feed isn't competing, Databento has had ~30 min to settle ingest of the just-closed session, and bars are written before the 18:00 ET re-open.
+
+Both schedules call the same `refreshAll(lookbackMinutes)` code path; the sole difference is the lookback value. Skip guard on both: if a refresh is still in flight when the next interval fires, the new cycle logs `Skipping — previous still in flight` and waits.
+
+### How a refresh runs
+
+- Source 1: Databento REST (`POST hist.databento.com/v0/timeseries.get_range`, `ohlcv-1m`, `GLBX.MDP3`, `stype_in=parent`). For **lookback ≤ 24 h** this is a single request per symbol. For **lookback > 24 h** (manual only — > 1440 min is not reachable from either auto schedule) the refresh delegates to `backfillSymbolWindow()` exported from `scripts/backfillHistoricalWindow.js` — chunks the window into per-day queries, merges with Phase 2 dedup semantics, writes `.bak` sidecars, and re-aggregates 5m/15m/30m.
+- Source 2: Yahoo Finance 7-day 1m fallback, filtered to the requested window. Triggers only if Databento fails on the ≤ 24 h path; symbols without a Yahoo ticker (bonds, FX, crypto CME) are skipped with a warning.
+- For each date returned, 1m bars are written to `data/historical/futures/{SYMBOL}/1m/{YYYY-MM-DD}.json`; higher TFs (5m/15m/30m) are re-aggregated from the refreshed 1m and written to both `data/historical/futures/{SYMBOL}/{tf}/` and `data/historical/futures_agg/{SYMBOL}/{tf}/` (when the second dir exists for that symbol).
+- After every full refresh, `purgeAllInvalidBars()` rebuilds the in-memory candle store, then options HP is recomputed for the last 2 trading dates across all 7 OPRA ETF proxies via `computeHP()`.
 
 ### Symbols covered
-- All 16 CME symbols from `instruments.js` with a `dbRoot`: MNQ, MES, M2K, MYM, MGC, SIL, MHG, MCL (tradeable) + M6E, M6B, MBT, ZT, ZF, ZN, ZB, UB (reference)
 
-### OPRA baseline subscription
-- After OPRA TCP connects and authenticates, QQQ, SPY, USO, GLD, IWM, SLV are always subscribed
-- These are the ETF proxies for all tradeable futures, ensuring HP/GEX/DEX/resilience scores stay current
-- `/api/datastatus` returns `opra.subscribedSymbols` array
+All 16 CME symbols from `instruments.js` with a `dbRoot`: MNQ, MES, M2K, MYM, MGC, SIL, MHG, MCL (tradeable) + M6E, M6B, MBT, ZT, ZF, ZN, ZB, UB (reference).
 
-### Manual trigger
-- Dashboard: "↻ Data" button in the TF row opens dropdown with per-symbol and full-refresh options
-- API: `POST /api/refresh/symbol/:symbol` (single), `POST /api/refresh/all` (all), `GET /api/refresh/status`
-- Duplicate prevention: per-symbol `_runningSymbols` Set + 409 response if full refresh already running
+### OPRA baseline subscription (unchanged from v14.26)
+
+After the OPRA TCP feed connects and authenticates, QQQ, SPY, USO, GLD, IWM, SLV are always subscribed (ETF proxies for all tradeable futures). `/api/datastatus` returns `opra.subscribedSymbols`.
+
+### Manual trigger — UI
+
+Dashboard "↻ Data" button in the TF row opens a dropdown with:
+
+- **Refresh window** select: 90 min · 6 hr · 24 hr · 3 d · 7 d · 14 d · 30 d (maps to `lookbackMinutes`)
+- **Force re-pull** checkbox — enabled only when the window is > 24 h (bypasses the ≥ 1,300-bar skip-if-complete gate in the per-day backfill path)
+- **Refresh Current Symbol** / **Refresh All Symbols** buttons (disabled while a refresh is in flight)
+- Live status lines, re-rendered every 30 s while the dropdown is open:
+
+```
+Last full refresh: 2 min ago (90 min, 16 symbols, 1,723 bars)
+Next quick refresh: in 13 min
+Next daily refresh: in 4 hr 22 min
+```
+
+While any refresh is running (manual OR scheduled), a 32-px full-width topbar banner renders: dark-blue `🔄 Refreshing N symbols (last X min)… [k/N complete]` during the run; morphs to green `✓ Refresh complete: N symbols, B bars updated in Ts` (3 s hold, 500 ms fade) on success; amber `⚠ Refresh complete with errors: N-E/N succeeded — see console` (6 s hold, 500 ms fade) if any symbol errored. The banner is a global surface — not coupled to the v14.39 `_symbolSwitchGen` clear-on-symbol-switch architecture.
+
+### Manual trigger — API
+
+| Route | Body | Notes |
+|---|---|---|
+| `POST /api/refresh/symbol/:symbol` | `{ lookbackMinutes?: number, force?: boolean }` | Defaults: 95 min, false. Validation: positive integer ≤ 43 200 (30 days). 409 if a refresh is in flight. |
+| `POST /api/refresh/all` | same | Same validation + 409 guard. |
+| `GET /api/refresh/status` | — | `{ inFlight: {scope, symbol?, lookbackMinutes, startedAt, currentIndex, totalSymbols} \| null, lastRun: {scope, symbol?, completedAt, durationMs, lookbackMinutes, results} \| null, lastRefreshPerSymbol: {[symbol]: {completedAt, lookbackMinutes, status, barsWritten}} }` |
+
+### WebSocket broadcasts
+
+All three events fire for both manual AND scheduled refreshes:
+
+- `refresh_start` — `{ scope:'all'\|'symbol', symbol?, lookbackMinutes, startedAt, totalSymbols }`
+- `refresh_progress` — `{ symbol, status:'running'\|'done'\|'error', error?, currentIndex, totalSymbols }`
+- `refresh_complete` — `{ scope, symbol?, durationMs, lookbackMinutes, results, completedAt }`
+
+`alerts.js` re-dispatches them as DOM `CustomEvent`s on `document` so the banner IIFE in `index.html` can subscribe without reaching into the WS socket that `alerts.js` owns.
 
 ### Why this exists
-- Live Databento WebSocket feed accumulates data quality issues: bad ticks that slip through spike filtering, gaps from reconnects, partial bars at session boundaries
-- The hourly refresh replaces those dirty bars with clean historical data from Databento's REST API (which is post-processed and validated)
-- Yahoo fallback ensures bars are refreshed even when Databento API key has exhausted its quota
+
+- Live Databento WebSocket feed accumulates data quality issues: bad ticks that slip through spike filtering, gaps from reconnects, partial bars at session boundaries. The refresh replaces those dirty bars with clean historical data from Databento's REST API (post-processed and validated).
+- A **15-minute cadence** (was hourly v14.26) keeps the most-recent window continuously fresh so paper trading and signal-quality work have trustworthy inputs.
+- A **daily full 24-h sweep** (was absent v14.26, present pre-v14.26 as the midnight 48-h sweep) plants a known-good baseline once per session, outside the live-feed contention window.
+- Yahoo fallback ensures bars are refreshed even when the Databento API key has exhausted its quota (tradeable symbols only).
 
 ### Tightened spike thresholds (v14.25)
-- `CLOSE_SPIKE_THRESHOLD` in snapshot.js: MNQ/MES/M2K/MYM/MHG = 5%, MGC/MCL/SIL = 8%, DEFAULT = 6%
-- `_sanitizeYahooBars()` in gapFill.js: spike threshold lowered from 3× to 2× tick threshold; added 10× median range sanity check
 
-### Bar schema + spike filter hardening (v14.34 / v14.35 / v14.38)
-- **Bar schema unified** to `time` field on every file under `data/historical/futures/**` after the v14.35 migration (181,120 files rewritten, 9,059 duplicate timestamps collapsed). Hourly refresh already wrote `time`; `liveArchive.js` and `historicalPipeline.js` joined it in v14.34. `engine.js` normalize mirrors `time`↔`ts` so downstream reads work regardless of caller. Per-file `.bak` sidecars retained for rollback. Maintenance script: `node scripts/migrateBarSchema.js` (standing, idempotent).
+- `CLOSE_SPIKE_THRESHOLD` in `snapshot.js`: MNQ/MES/M2K/MYM/MHG = 5%, MGC/MCL/SIL = 8%, DEFAULT = 6%.
+- `_sanitizeYahooBars()` in `gapFill.js`: spike threshold lowered from 3× to 2× tick threshold; added 10× median range sanity check.
+
+### Bar schema + spike filter hardening (v14.34 / v14.35 / v14.38 / v14.40)
+
+- **Bar schema unified** to `time` field on every file under `data/historical/futures/**` after the v14.35 migration (181,120 files rewritten, 9,059 duplicate timestamps collapsed). The refresh writer always wrote `time`; `liveArchive.js` and `historicalPipeline.js` joined in v14.34. `engine.js` normalize mirrors `time`↔`ts` so downstream reads work regardless of caller. Per-file `.bak` sidecars retained for rollback. Maintenance script: `node scripts/migrateBarSchema.js` (standing, idempotent).
 - **Live-feed spike filter hardened** to three layers (v14.38): Layer 1 hard floor (±25% from last validated price, belt-and-suspenders from v14.33); Layer 2 low-volume floor (`volume<3 AND deviation>0.5%` from the 30-tick rolling median); Layer 3 per-symbol percentage threshold (unchanged). Rolling-median buffer raised from 10 → 30 ticks. Full narrative in CHANGELOG [v14.38].
-- **14-day Databento backfill available on demand** (v14.36): `node scripts/backfillHistoricalWindow.js --days 14` re-pulls thin or gappy 1m windows for the 8 tradeable CME symbols, re-aggregates 5m/15m/30m, skips (symbol, date) pairs already carrying ≥1,300 bars. Today's date is always skipped.
+- **14-day Databento backfill extended to all 16 symbols in v14.40** (was 8 tradeable in v14.36): `node scripts/backfillHistoricalWindow.js --days 14` re-pulls thin or gappy 1m windows for every CME symbol in `TRADEABLE_SYMBOLS.concat(REFERENCE_SYMBOLS)`, re-aggregates 5m/15m/30m, skips (symbol, date) pairs already carrying ≥ 1,300 bars. `--tradeable-only` flag restores the pre-v14.40 8-symbol pool. Today's date is always skipped. v14.40 also exports `backfillSymbolWindow()` from the same file so `dataRefresh.refreshSymbol(sym, lookback > 1440)` can delegate per-day chunking without spawning a child process.
 
 ---
 
@@ -184,7 +222,7 @@ config/
 scripts/
   databentoDiag.js             ← Standalone Databento connection & data health check (no server required)
   migrateBarSchema.js          ← Rewrites bar files under data/historical/futures/** to canonical `time` schema + dedups (v14.35, standing)
-  backfillHistoricalWindow.js  ← 14-day Databento REST pull for 8 tradeable CME symbols, skip-if-complete, .bak sidecars (v14.36, standing)
+  backfillHistoricalWindow.js  ← 14-day Databento REST pull for all 16 CME symbols (v14.40; --tradeable-only for old 8-symbol behavior); exports backfillSymbolWindow() consumed by dataRefresh.js for lookbacks > 24h; skip-if-complete, .bak sidecars (v14.36, standing)
   backfillETFDailyCloses.js    ← Databento REST ETF daily-close fetch → etf_closes.json; DBEQ.BASIC floor 2023-03-28 (v14.37)
 ```
 

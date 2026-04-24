@@ -578,16 +578,22 @@ Merge each feature branch to main only after its acceptance criteria are met and
 
 The following scripts were added during the 2026-04-21/22 data-layer remediation (audit: [data/analysis/2026-04-21_data_artifact_audit.md](../data/analysis/2026-04-21_data_artifact_audit.md)). They are NOT kanban items — they are ongoing maintenance tooling. Full commit-level detail in [CHANGELOG.md](CHANGELOG.md) entries v14.33 → v14.38.
 
-### `scripts/backfillHistoricalWindow.js` — historical 1m gap-filler (v14.36, standing)
+### `scripts/backfillHistoricalWindow.js` — historical 1m gap-filler (v14.36, extended to 16 symbols in v14.40, standing)
 
-Per-symbol per-day Databento REST pull for the 8 tradeable CME symbols (MNQ/MES/M2K/MYM/MGC/SIL/MHG/MCL). Chunked per-day to stay well under Databento's 10,000-record and rate-limit constraints. Writes `time` field to match the Phase 1 schema unification. Skip-if-complete gate on any (symbol, date) already holding ≥1,300 bars; today's date is always skipped (live feed is appending, Databento has ~15-min ingest lag). Merge-with-existing uses Phase 2 dedup semantics (highest volume wins; ties broken by last occurrence). Per-file `.bak` sidecars on every modified file. Re-aggregates 5m/15m/30m into both `data/historical/futures/{sym}/{tf}/` and `data/historical/futures_agg/{sym}/{tf}/` for every touched date.
+Per-symbol per-day Databento REST pull. **Default pool: all 16 CME symbols** — `TRADEABLE_SYMBOLS.concat(REFERENCE_SYMBOLS)` from `instruments.js` (v14.40, closing Bug 8 from the audit). Chunked per-day to stay well under Databento's 10,000-record and rate-limit constraints. Writes `time` field to match the Phase 1 schema unification. Skip-if-complete gate on any (symbol, date) already holding ≥1,300 bars; today's date is always skipped (live feed is appending, Databento has ~15-min ingest lag). Merge-with-existing uses Phase 2 dedup semantics (highest volume wins; ties broken by last occurrence). Per-file `.bak` sidecars on every modified file. Re-aggregates 5m/15m/30m into both `data/historical/futures/{sym}/{tf}/` and `data/historical/futures_agg/{sym}/{tf}/` for every touched date.
+
+v14.40 also exports `backfillSymbolWindow(symbol, lookbackMinutes, {force})` so `server/data/dataRefresh.js` can delegate manual refreshes with `lookbackMinutes > 1440` to the same per-day chunked fetch without spawning a child process. CLI behavior is unchanged.
 
 ```bash
-# Full 14-day gap-fill across all 8 tradeable symbols
+# Full 14-day gap-fill across all 16 CME symbols (tradeable + reference)
 node scripts/backfillHistoricalWindow.js --days 14
 
-# Single-symbol spot-fix
+# Pre-v14.40 behavior — 8 tradeable only
+node scripts/backfillHistoricalWindow.js --days 14 --tradeable-only
+
+# Single-symbol spot-fix (any of the 16)
 node scripts/backfillHistoricalWindow.js --symbol MCL --days 14
+node scripts/backfillHistoricalWindow.js --symbol M6E --days 14
 
 # Dry-run first (plan only, no HTTP, no writes)
 node scripts/backfillHistoricalWindow.js --dry-run --days 14
@@ -596,7 +602,7 @@ node scripts/backfillHistoricalWindow.js --dry-run --days 14
 node scripts/backfillHistoricalWindow.js --force --days 7
 ```
 
-Run this whenever `scripts/auditInstruments.js` flags a symbol with thin coverage, or after a prolonged live-feed outage where the hourly 95-min refresh can't close the gap on its own.
+Run this whenever `scripts/auditInstruments.js` flags a symbol with thin coverage, or after a prolonged live-feed outage where the 15-min quick refresh can't close the gap on its own.
 
 ### `scripts/migrateBarSchema.js` — bar-schema normalizer (v14.35, standing, idempotent)
 

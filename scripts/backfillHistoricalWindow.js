@@ -1,30 +1,38 @@
 'use strict';
-// Phase 3A of data-layer remediation (v14.36).
+// Historical 1m gap-filler (v14.36 → extended to 16 symbols in v14.40).
 //
-// Fills the thin-historical window called out in the 2026-04-21 audit (Bug 5):
-// every tradeable symbol has ~14 days of <500 bars/day since 2026-04-02. The
-// hourly refresh only pulls a 95-min window so it can't close the gap between
-// scheduled runs; live-feed gaps (reconnects, cold starts, overnight thin
-// volume) leave holes that never get filled.
+// Originally Phase 3A of the data-layer remediation (v14.36): fill the thin
+// 14-day window for the 8 tradeable CME symbols (Bug 5). v14.40 closes Bug 8
+// by extending the default symbol set to all 16 CME symbols (tradeable +
+// reference). The script's Phase 2 dedup semantics, `.bak` sidecars, and
+// per-day re-aggregation are unchanged; only the symbol list and the new
+// `--tradeable-only` flag are new.
 //
-// Solution: for each of the 8 tradeable CME symbols, fetch 14 calendar days
-// of 1m OHLCV from the Databento historical REST API, day-by-day, and merge
-// into the existing `data/historical/futures/{SYMBOL}/1m/{YYYY-MM-DD}.json`
-// files using Phase 2 dedup semantics. Then re-aggregate 5m/15m/30m.
+// For each (symbol, date) in the window, fetch 1m OHLCV from the Databento
+// historical REST API, merge into the existing
+// `data/historical/futures/{SYMBOL}/1m/{YYYY-MM-DD}.json` using Phase 2 dedup
+// semantics, then re-aggregate 5m/15m/30m into both
+// `data/historical/futures/{sym}/{tf}/` and
+// `data/historical/futures_agg/{sym}/{tf}/`.
 //
-// Writes bars with `time` field (Phase 1 compliance). Per-file `.bak` sidecars
-// match Phase 2's rollback strategy. Skip-if-complete: any (symbol, date) file
-// already holding ≥1300 bars (near-complete 23h CME session) is left alone.
-//
-// Today's date is always skipped — the live feed is actively appending to
-// today's 1m file, and Databento's historical API has a ~15-min ingest lag.
+// Writes bars with `time` field (Phase 1 compliance). Per-file `.bak`
+// sidecars match Phase 2's rollback strategy. Skip-if-complete: any
+// (symbol, date) file already holding ≥1300 bars (near-complete 23h CME
+// session) is left alone. Today's date is always skipped — the live feed is
+// actively appending, and Databento's historical API has a ~15-min ingest
+// lag.
 //
 // Flags:
 //   --dry-run            Plan only; no network calls, no writes.
-//   --symbol SYM         Restrict to one symbol.
+//   --symbol SYM         Restrict to one symbol (repeatable via flag position).
 //   --days N             Window in days (default 14).
 //   --verbose            Log every file decision.
 //   --force              Ignore the ≥1300-bar skip gate (re-backfill even complete days).
+//   --tradeable-only     Restrict to the original 8 tradeable symbols (pre-v14.40 default).
+//
+// v14.40 also exports `backfillSymbolWindow(symbol, lookbackMinutes, {force})`
+// so `server/data/dataRefresh.js` can delegate lookbacks >1440 minutes to the
+// same chunked per-day fetch logic without spawning a child process.
 
 require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 
@@ -32,27 +40,35 @@ const fs    = require('fs');
 const path  = require('path');
 const https = require('https');
 
-const { INSTRUMENTS } = require('../server/data/instruments');
+const { INSTRUMENTS, TRADEABLE_SYMBOLS, REFERENCE_SYMBOLS } = require('../server/data/instruments');
 
-const argv = process.argv.slice(2);
-const DRY_RUN  = argv.includes('--dry-run');
-const VERBOSE  = argv.includes('--verbose');
-const FORCE    = argv.includes('--force');
-const SYM_IDX  = argv.indexOf('--symbol');
-const SYMBOL   = SYM_IDX >= 0 ? argv[SYM_IDX + 1] : null;
-const DAYS_IDX = argv.indexOf('--days');
-const DAYS     = DAYS_IDX >= 0 ? parseInt(argv[DAYS_IDX + 1], 10) : 14;
-
-const TRADEABLE = ['MNQ', 'MES', 'M2K', 'MYM', 'MGC', 'SIL', 'MHG', 'MCL'];
+const TRADEABLE = TRADEABLE_SYMBOLS.slice();                                         // 8 symbols
+const ALL_16    = TRADEABLE_SYMBOLS.concat(REFERENCE_SYMBOLS);                       // 16 symbols (v14.40)
 
 const HIST_DIR    = path.resolve(__dirname, '..', 'data', 'historical');
 const FUTURES_DIR = path.join(HIST_DIR, 'futures');
 const AGG_DIR     = path.join(HIST_DIR, 'futures_agg');
 
 const COMPLETE_BAR_THRESHOLD = 1300;
+const TF_SEC = { '5m': 300, '15m': 900, '30m': 1800 };
 
-function log(...a)  { console.log(...a); }
-function vlog(...a) { if (VERBOSE) console.log(...a); }
+// Whether this file is being executed directly (CLI) or imported as a module.
+const IS_CLI = require.main === module;
+
+// ─── CLI arg parsing (only when invoked as CLI) ───────────────────────────────
+
+const argv = process.argv.slice(2);
+const DRY_RUN         = argv.includes('--dry-run');
+const VERBOSE         = argv.includes('--verbose');
+const FORCE_CLI       = argv.includes('--force');
+const TRADEABLE_ONLY  = argv.includes('--tradeable-only');
+const SYM_IDX         = argv.indexOf('--symbol');
+const SYMBOL          = SYM_IDX >= 0 ? argv[SYM_IDX + 1] : null;
+const DAYS_IDX        = argv.indexOf('--days');
+const DAYS            = DAYS_IDX >= 0 ? parseInt(argv[DAYS_IDX + 1], 10) : 14;
+
+function log(...a)  { if (IS_CLI) console.log(...a); }
+function vlog(...a) { if (IS_CLI && VERBOSE) console.log(...a); }
 function warn(...a) { console.warn(...a); }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -99,7 +115,6 @@ function probeFile(symbol, date) {
 
 /**
  * Fetch one UTC day of 1m bars for a symbol via Databento REST.
- * Same pattern as dailyRefresh.js fetchSymbol24h but windowed to a full day.
  * Returns sorted ascending array of `{time, open, high, low, close, volume}`.
  */
 function fetchOneDay(symbol, dateStr) {
@@ -114,6 +129,24 @@ function fetchOneDay(symbol, dateStr) {
   const nextDate = new Date(Date.parse(startIso) + 86400 * 1000).toISOString().slice(0, 10);
   const endIso   = `${nextDate}T00:00:00Z`;
 
+  return _fetchRange(inst, startIso, endIso);
+}
+
+/**
+ * Fetch an explicit [startIso, endIso) range of 1m bars. Used when
+ * `backfillSymbolWindow` needs a sub-day tail (e.g. 6-hour lookback on the
+ * most recent day only).
+ */
+function fetchRange(symbol, startIso, endIso) {
+  const apiKey = process.env.DATABENTO_API_KEY;
+  if (!apiKey) return Promise.reject(new Error('DATABENTO_API_KEY not set'));
+  const inst = INSTRUMENTS[symbol];
+  if (!inst || !inst.dbRoot) return Promise.reject(new Error(`Unknown symbol: ${symbol}`));
+  return _fetchRange(inst, startIso, endIso);
+}
+
+function _fetchRange(inst, startIso, endIso) {
+  const apiKey = process.env.DATABENTO_API_KEY;
   const body = new URLSearchParams({
     dataset:  'GLBX.MDP3',
     schema:   'ohlcv-1m',
@@ -141,12 +174,12 @@ function fetchOneDay(symbol, dateStr) {
       res.on('data', c => { raw += c; });
       res.on('end', () => {
         if (res.statusCode === 422) {
-          // 422 = data not yet available (e.g. asking for today's full day too early).
+          // 422 = data not yet available (asking for today's full day too early).
           // Soft-fail: return empty rather than abort.
           return resolve([]);
         }
         if (res.statusCode !== 200) {
-          return reject(new Error(`Databento HTTP ${res.statusCode} for ${symbol} ${dateStr}: ${raw.slice(0, 200)}`));
+          return reject(new Error(`Databento HTTP ${res.statusCode}: ${raw.slice(0, 200)}`));
         }
 
         try {
@@ -168,7 +201,7 @@ function fetchOneDay(symbol, dateStr) {
           bars.sort((a, b) => a.time - b.time);
           resolve(bars);
         } catch (err) {
-          reject(new Error(`Databento parse error for ${symbol} ${dateStr}: ${err.message}`));
+          reject(new Error(`Databento parse error: ${err.message}`));
         }
       });
     });
@@ -194,13 +227,8 @@ function mergeAndDedup(existingBars, newBars) {
       byTime.set(t, normalized);
     }
   }
-  const merged = Array.from(byTime.values()).sort((a, b) => a.time - b.time);
-  return merged;
+  return Array.from(byTime.values()).sort((a, b) => a.time - b.time);
 }
-
-// ─── Aggregation (shared with historicalPipeline.js semantics) ────────────────
-
-const TF_SEC = { '5m': 300, '15m': 900, '30m': 1800 };
 
 function aggregateBars(bars1m, minutes) {
   if (!bars1m || bars1m.length === 0) return [];
@@ -242,8 +270,8 @@ function aggregateBars(bars1m, minutes) {
 
 // ─── Per-file write (with .bak sidecar) ───────────────────────────────────────
 
-function writeWithBackup(filePath, bars) {
-  if (DRY_RUN) return;
+function writeWithBackup(filePath, bars, { dryRun = false } = {}) {
+  if (dryRun) return;
   ensureDir(path.dirname(filePath));
   if (fs.existsSync(filePath)) {
     try { fs.renameSync(filePath, filePath + '.bak'); }
@@ -255,7 +283,7 @@ function writeWithBackup(filePath, bars) {
   writeJSON(filePath, bars);
 }
 
-// ─── Main per-symbol flow ─────────────────────────────────────────────────────
+// ─── CLI stats (module-scoped, only populated when IS_CLI) ───────────────────
 
 const stats = {
   symbolsAttempted: 0,
@@ -270,7 +298,7 @@ const stats = {
   perSymbol:        {},
 };
 
-async function backfillSymbol(symbol, dates) {
+async function backfillSymbolCli(symbol, dates, { force, dryRun }) {
   stats.symbolsAttempted++;
   const sstat = (stats.perSymbol[symbol] ||= { fetched: 0, skipped: 0, errored: 0, barsIn: 0, barsOut: 0 });
 
@@ -279,7 +307,7 @@ async function backfillSymbol(symbol, dates) {
     stats.datesAttempted++;
 
     const probe = probeFile(symbol, date);
-    if (probe.exists && !FORCE && probe.barCount >= COMPLETE_BAR_THRESHOLD) {
+    if (probe.exists && !force && probe.barCount >= COMPLETE_BAR_THRESHOLD) {
       vlog(`  [SKIP] ${symbol} ${date} (already has ${probe.barCount} bars)`);
       stats.datesSkipped++;
       sstat.skipped++;
@@ -288,7 +316,7 @@ async function backfillSymbol(symbol, dates) {
 
     let newBars;
     try {
-      if (DRY_RUN) {
+      if (dryRun) {
         vlog(`  [DRY] ${symbol} ${date} — would fetch (existing=${probe.barCount || 0})`);
         stats.datesFetched++;
         sstat.fetched++;
@@ -321,19 +349,18 @@ async function backfillSymbol(symbol, dates) {
 
     log(`  ${symbol} ${date}: fetched ${newBars.length}, merged to ${merged.length} (was ${probe.barCount || 0})`);
 
-    writeWithBackup(existingPath, merged);
+    writeWithBackup(existingPath, merged, { dryRun });
     stats.filesWritten++;
     sstat.fetched++;
     touchedDates.push(date);
 
-    // Throttle between requests to stay under Databento's rate limits
     await new Promise(r => setTimeout(r, 150));
   }
 
   return touchedDates;
 }
 
-async function reaggregateSymbolDates(symbol, dates) {
+async function reaggregateSymbolDates(symbol, dates, { dryRun }) {
   for (const date of dates) {
     const src = readJSON(path.join(FUTURES_DIR, symbol, '1m', `${date}.json`));
     if (!Array.isArray(src) || src.length === 0) continue;
@@ -341,20 +368,85 @@ async function reaggregateSymbolDates(symbol, dates) {
       const tfBars = aggregateBars(src, TF_SEC[tf] / 60);
       const futPath = path.join(FUTURES_DIR, symbol, tf, `${date}.json`);
       const aggPath = path.join(AGG_DIR,     symbol, tf, `${date}.json`);
-      writeWithBackup(futPath, tfBars);
-      writeWithBackup(aggPath, tfBars);
+      writeWithBackup(futPath, tfBars, { dryRun });
+      writeWithBackup(aggPath, tfBars, { dryRun });
       stats.filesAggregated += 2;
     }
   }
 }
 
-// ─── Main ─────────────────────────────────────────────────────────────────────
+// ─── Exported helper (for dataRefresh.js) ─────────────────────────────────────
+
+/**
+ * Programmatic per-symbol backfill used by `dataRefresh.refreshSymbol()` for
+ * lookbacks > 24 h. Fetches the last `lookbackMinutes` of 1m bars, chunked
+ * per-day so any individual request stays well inside Databento's 10k-record
+ * and rate-limit constraints. Returns a summary.
+ *
+ * @param {string} symbol              Internal CME symbol (TRADEABLE or REFERENCE).
+ * @param {number} lookbackMinutes     How far back to pull (> 1440 triggers this code path).
+ * @param {object} [opts]
+ * @param {boolean} [opts.force=false] Bypass the ≥1,300-bar skip-if-complete gate.
+ * @returns {Promise<{symbol, datesRefreshed: string[], barsTotal: number, source: string}>}
+ */
+async function backfillSymbolWindow(symbol, lookbackMinutes, opts = {}) {
+  const force = !!opts.force;
+  const inst = INSTRUMENTS[symbol];
+  if (!inst || !inst.dbRoot) {
+    return { symbol, datesRefreshed: [], barsTotal: 0, source: 'skipped' };
+  }
+
+  const days = Math.ceil(lookbackMinutes / 1440);
+  const dates = listDates(days);                        // newest-first, today excluded
+  const datesReversed = dates.slice().reverse();        // oldest-first for readability in logs
+  const datesRefreshed = [];
+  let barsTotal = 0;
+
+  for (const date of datesReversed) {
+    const probe = probeFile(symbol, date);
+    if (probe.exists && !force && probe.barCount >= COMPLETE_BAR_THRESHOLD) {
+      continue;
+    }
+    let newBars;
+    try {
+      newBars = await fetchOneDay(symbol, date);
+    } catch (err) {
+      console.warn(`[REFRESH-BACKFILL] ${symbol} ${date}: ${err.message}`);
+      continue;
+    }
+    if (!newBars || newBars.length === 0) continue;
+
+    const existingPath = path.join(FUTURES_DIR, symbol, '1m', `${date}.json`);
+    const existing = probe.exists ? readJSON(existingPath) : null;
+    const merged = mergeAndDedup(existing, newBars);
+
+    writeWithBackup(existingPath, merged, { dryRun: false });
+    for (const tf of Object.keys(TF_SEC)) {
+      const tfBars = aggregateBars(merged, TF_SEC[tf] / 60);
+      if (tfBars.length > 0) {
+        writeWithBackup(path.join(FUTURES_DIR, symbol, tf, `${date}.json`), tfBars, { dryRun: false });
+        if (fs.existsSync(path.join(AGG_DIR, symbol))) {
+          writeWithBackup(path.join(AGG_DIR, symbol, tf, `${date}.json`), tfBars, { dryRun: false });
+        }
+      }
+    }
+    datesRefreshed.push(date);
+    barsTotal += merged.length;
+    await new Promise(r => setTimeout(r, 150));
+  }
+
+  return { symbol, datesRefreshed, barsTotal, source: 'databento' };
+}
+
+// ─── CLI main ─────────────────────────────────────────────────────────────────
 
 async function main() {
   log('═══════════════════════════════════════════════════════════');
-  log(' Historical backfill — 14d × 1m × 8 tradeable (Phase 3A)');
+  log(' Historical backfill — per-day 1m Databento REST pull');
   log('═══════════════════════════════════════════════════════════');
-  log(` DRY_RUN=${DRY_RUN}  SYMBOL=${SYMBOL || 'all'}  DAYS=${DAYS}  FORCE=${FORCE}  VERBOSE=${VERBOSE}`);
+  const symbolPool = TRADEABLE_ONLY ? TRADEABLE : ALL_16;
+  log(` DRY_RUN=${DRY_RUN}  SYMBOL=${SYMBOL || 'all'}  DAYS=${DAYS}  FORCE=${FORCE_CLI}  TRADEABLE_ONLY=${TRADEABLE_ONLY}  VERBOSE=${VERBOSE}`);
+  log(` Pool: ${symbolPool.length} symbols (${symbolPool.join(', ')})`);
 
   if (!process.env.DATABENTO_API_KEY && !DRY_RUN) {
     warn('DATABENTO_API_KEY not set — aborting (pass --dry-run to plan-only)');
@@ -365,20 +457,25 @@ async function main() {
   log(` Date window: ${dates[dates.length - 1]} → ${dates[0]} (${dates.length} days, today=${todayUTCDateStr()} excluded)`);
   log('');
 
-  const symbols = SYMBOL ? [SYMBOL] : TRADEABLE;
-  if (SYMBOL && !TRADEABLE.includes(SYMBOL)) {
-    warn(`Symbol '${SYMBOL}' is not in the tradeable list: ${TRADEABLE.join(', ')}`);
-    process.exit(1);
+  let symbols;
+  if (SYMBOL) {
+    if (!ALL_16.includes(SYMBOL)) {
+      warn(`Symbol '${SYMBOL}' is not recognised. Known symbols: ${ALL_16.join(', ')}`);
+      process.exit(1);
+    }
+    symbols = [SYMBOL];
+  } else {
+    symbols = symbolPool;
   }
 
   const t0 = Date.now();
   for (const sym of symbols) {
     log(`── ${sym} ─────────────────────────────────`);
-    const touched = await backfillSymbol(sym, dates);
+    const touched = await backfillSymbolCli(sym, dates, { force: FORCE_CLI, dryRun: DRY_RUN });
 
     if (!DRY_RUN && touched.length > 0) {
       log(`  Re-aggregating 5m/15m/30m for ${touched.length} dates...`);
-      await reaggregateSymbolDates(sym, touched);
+      await reaggregateSymbolDates(sym, touched, { dryRun: DRY_RUN });
     }
   }
 
@@ -406,7 +503,17 @@ async function main() {
   log('');
 }
 
-main().catch(err => {
-  console.error('Fatal:', err.message);
-  process.exit(1);
-});
+if (IS_CLI) {
+  main().catch(err => {
+    console.error('Fatal:', err.message);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  backfillSymbolWindow,
+  fetchOneDay,
+  fetchRange,
+  mergeAndDedup,
+  aggregateBars,
+};

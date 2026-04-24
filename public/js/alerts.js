@@ -3041,6 +3041,10 @@
             detail: { symbol: msg.symbol, status: finalStatus, issues: mergedIssues }
           }));
         }
+        if (msg.type === 'refresh_start' || msg.type === 'refresh_progress' || msg.type === 'refresh_complete') {
+          // Re-dispatch as DOM CustomEvent for the refresh-banner handler in index.html (v14.40).
+          document.dispatchEvent(new CustomEvent(msg.type, { detail: msg }));
+        }
       } catch (_) {}
     };
   }

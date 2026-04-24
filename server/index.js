@@ -42,7 +42,7 @@ const { computeSetupReadiness, computeDirectionalBias } = require('./analysis/bi
 const { isDuplicate, applyStaleness, pruneExpired } = require('./analysis/alertDedup');
 const { exportForwardTest } = require('./analysis/forwardTestExport');
 const pushManager = require('./push/pushManager');
-const dailyRefresh          = require('./data/dailyRefresh');
+const dataRefresh           = require('./data/dataRefresh');
 const dataQuality           = require('./data/dataQuality');
 const settings              = require('../config/settings.json');
 const fs                    = require('fs');
@@ -1093,39 +1093,64 @@ app.post('/api/refresh', async (_req, res) => {
   }
 });
 
-// POST /api/refresh/symbol/:symbol — trigger 24h data refresh for a single symbol
+// ---------------------------------------------------------------------------
+// Data refresh API routes (v14.40 — manual window selector + force flag)
+// ---------------------------------------------------------------------------
+
+const MAX_REFRESH_LOOKBACK_MIN = 30 * 24 * 60;   // 30 days
+
+function _parseRefreshBody(body) {
+  const out = { lookbackMinutes: 95, force: false, error: null };
+  if (!body || typeof body !== 'object') return out;
+  if (body.lookbackMinutes != null) {
+    const lb = Number(body.lookbackMinutes);
+    if (!Number.isFinite(lb) || lb < 1 || lb > MAX_REFRESH_LOOKBACK_MIN || Math.floor(lb) !== lb) {
+      out.error = `lookbackMinutes must be a positive integer ≤ ${MAX_REFRESH_LOOKBACK_MIN}`;
+      return out;
+    }
+    out.lookbackMinutes = lb;
+  }
+  if (body.force === true) out.force = true;
+  return out;
+}
+
+// POST /api/refresh/symbol/:symbol — manual single-symbol refresh
 app.post('/api/refresh/symbol/:symbol', (req, res) => {
   const symbol = req.params.symbol?.toUpperCase();
-  if (!dailyRefresh.CME_REFRESH_SYMBOLS.includes(symbol)) {
+  if (!dataRefresh.CME_REFRESH_SYMBOLS.includes(symbol)) {
     return res.status(400).json({ error: `Unknown or non-CME symbol: ${symbol}` });
   }
-  res.json({ status: 'started', symbol });
-  dailyRefresh.refreshSymbol(symbol).then(result => {
-    broadcast({ type: 'daily_refresh_complete', symbol, result });
-  }).catch(err => {
-    console.error(`[api] /refresh/symbol/${symbol} error:`, err.message);
-    broadcast({ type: 'daily_refresh_error', symbol, error: err.message });
-  });
-});
+  const { lookbackMinutes, force, error } = _parseRefreshBody(req.body);
+  if (error) return res.status(400).json({ error });
 
-// POST /api/refresh/all — trigger full 24h data refresh for all CME symbols
-app.post('/api/refresh/all', (_req, res) => {
-  const status = dailyRefresh.getRefreshStatus();
-  if (status.status === 'running') {
-    return res.status(409).json({ status: 'already_running', lastRun: status.lastRun });
+  const inFlight = dataRefresh.getRefreshStatus().inFlight;
+  if (inFlight) {
+    return res.status(409).json({ status: 'already_running', inFlight });
   }
-  res.json({ status: 'started' });
-  dailyRefresh.refreshAll().then(summary => {
-    broadcast({ type: 'daily_refresh_complete', summary });
-  }).catch(err => {
-    console.error('[api] /refresh/all error:', err.message);
-    broadcast({ type: 'daily_refresh_error', error: err.message });
-  });
+
+  res.json({ status: 'started', symbol, lookbackMinutes, force });
+  dataRefresh.refreshOne(symbol, lookbackMinutes, { force, logPrefix: '[REFRESH-MANUAL]' })
+    .catch(err => console.error(`[api] /refresh/symbol/${symbol} error:`, err.message));
 });
 
-// GET /api/refresh/status — status of the last daily refresh run
+// POST /api/refresh/all — manual full refresh across all 16 CME symbols
+app.post('/api/refresh/all', (req, res) => {
+  const { lookbackMinutes, force, error } = _parseRefreshBody(req.body);
+  if (error) return res.status(400).json({ error });
+
+  const inFlight = dataRefresh.getRefreshStatus().inFlight;
+  if (inFlight) {
+    return res.status(409).json({ status: 'already_running', inFlight });
+  }
+
+  res.json({ status: 'started', lookbackMinutes, force });
+  dataRefresh.refreshAll(lookbackMinutes, { force, logPrefix: '[REFRESH-MANUAL]' })
+    .catch(err => console.error('[api] /refresh/all error:', err.message));
+});
+
+// GET /api/refresh/status — current in-flight + last completed run + per-symbol map
 app.get('/api/refresh/status', (_req, res) => {
-  res.json(dailyRefresh.getRefreshStatus());
+  res.json(dataRefresh.getRefreshStatus());
 });
 
 // ---------------------------------------------------------------------------
@@ -3477,8 +3502,17 @@ async function start() {
         if (settings.features?.liveOpra === true) opraLive.startOpraFeed();
       });
 
-    // Hourly data refresh scheduler — every 60 minutes, all 16 CME symbols
-    dailyRefresh.scheduleHourlyRefresh();
+    // Data refresh schedulers (v14.40)
+    //   - QUICK: every 15 min, clock-aligned, 95-min lookback
+    //   - DAILY: 17:30 ET, 24-h lookback
+    dataRefresh.scheduleQuickRefresh();
+    dataRefresh.scheduleDailyRefresh();
+
+    // Rebroadcast refresh events over WebSocket so the dashboard banner
+    // reflects both manual + auto (quick/daily) refreshes identically.
+    dataRefresh.events.on('refresh_start',    (ev) => broadcast({ type: 'refresh_start', ...ev }));
+    dataRefresh.events.on('refresh_progress', (ev) => broadcast({ type: 'refresh_progress', ...ev }));
+    dataRefresh.events.on('refresh_complete', (ev) => broadcast({ type: 'refresh_complete', ...ev }));
 
     // Real-time crypto prices — Coinbase Exchange WebSocket (free, no auth)
     coinbaseWS.start();
@@ -3492,7 +3526,7 @@ async function start() {
     // Runs in both seed and live modes: surfaces bad bars from sanitization + periodic checks
     dataQuality.setGetCandlesFn(getCandles);
     dataQuality.setRefreshFn(async (symbol) => {
-      await dailyRefresh.refreshSymbol(symbol);
+      await dataRefresh.refreshSymbol(symbol);
     });
     dataQuality.onStatusChange(async (symbol, tf, oldStatus, newStatus, issues) => {
       broadcast({ type: 'data_quality_update', symbol, tf, status: newStatus, issues });

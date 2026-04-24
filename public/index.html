@@ -19,6 +19,12 @@
 <body>
   <div id="app">
 
+    <!-- Data refresh banner (v14.40) — shown while a manual or scheduled refresh is running -->
+    <div id="refresh-banner" class="refresh-banner" style="display:none" role="status" aria-live="polite">
+      <span class="rb-icon">🔄</span>
+      <span id="refresh-banner-text" class="rb-text">Refreshing…</span>
+    </div>
+
     <header id="topbar">
 
       <!-- Row 1: Brand + status · Nav links (centered) -->
@@ -122,12 +128,30 @@
         </div>
         <button id="chart-refresh-btn" class="chart-refresh-btn" title="Refresh chart data">&#x27F3;</button>
         <div class="data-refresh-wrapper" style="position:relative;display:inline-block;margin-left:8px">
-          <button id="data-refresh-btn" class="chart-refresh-btn" title="Refresh 24h data from Databento/Yahoo">&#x21BB; Data</button>
-          <div id="data-refresh-dropdown" style="display:none;position:absolute;right:0;top:100%;z-index:1000;background:#1e1e2e;border:1px solid #444;border-radius:6px;padding:8px;min-width:200px;box-shadow:0 4px 12px rgba(0,0,0,0.5)">
-            <button id="dr-current" style="display:block;width:100%;padding:6px 10px;margin-bottom:4px;background:#2a2a3e;color:#e0e0e0;border:1px solid #555;border-radius:4px;cursor:pointer;text-align:left;font-size:12px">Refresh Current Symbol</button>
-            <button id="dr-all" style="display:block;width:100%;padding:6px 10px;margin-bottom:6px;background:#2a2a3e;color:#e0e0e0;border:1px solid #555;border-radius:4px;cursor:pointer;text-align:left;font-size:12px">Refresh All Symbols</button>
-            <div id="dr-status" style="font-size:11px;color:#888;padding:2px 4px">Last refresh: never</div>
-            <div id="dr-spinner" style="display:none;font-size:11px;color:#4fc3f7;padding:2px 4px">&#x23F3; Refreshing...</div>
+          <button id="data-refresh-btn" class="chart-refresh-btn" title="Refresh data from Databento">&#x21BB; Data</button>
+          <div id="data-refresh-dropdown" class="data-refresh-dropdown" style="display:none">
+            <div class="dr-row">
+              <label class="dr-label" for="dr-window">Refresh window:</label>
+              <select id="dr-window" class="dr-select">
+                <option value="90" selected>90 min</option>
+                <option value="360">6 hours</option>
+                <option value="1440">24 hours</option>
+                <option value="4320">3 days</option>
+                <option value="10080">7 days</option>
+                <option value="20160">14 days</option>
+                <option value="43200">30 days</option>
+              </select>
+            </div>
+            <label class="dr-row dr-row-check">
+              <input type="checkbox" id="dr-force" disabled />
+              <span>Force re-pull (bypass skip-if-complete)</span>
+            </label>
+            <button id="dr-current" class="dr-btn">Refresh Current Symbol</button>
+            <button id="dr-all" class="dr-btn">Refresh All Symbols</button>
+            <div class="dr-divider"></div>
+            <div id="dr-last-full" class="dr-status-line">Last full refresh: never</div>
+            <div id="dr-next-quick" class="dr-status-line">Next quick refresh: —</div>
+            <div id="dr-next-daily" class="dr-status-line">Next daily refresh: —</div>
           </div>
         </div>
       </div>
@@ -618,79 +642,252 @@
     setInterval(fetchPaperTrading, PT_INTERVAL);
   })();
 
-  // ── Data Refresh Controls (v14.25) ──────────────────────────────────────────
+  // ── Data Refresh Controls (v14.40 — window selector, force flag, topbar banner) ─
   (function() {
-    const btn      = document.getElementById('data-refresh-btn');
-    const dropdown = document.getElementById('data-refresh-dropdown');
-    const drCurrent = document.getElementById('dr-current');
-    const drAll     = document.getElementById('dr-all');
-    const drStatus  = document.getElementById('dr-status');
-    const drSpinner = document.getElementById('dr-spinner');
+    const btn        = document.getElementById('data-refresh-btn');
+    const dropdown   = document.getElementById('data-refresh-dropdown');
+    const drCurrent  = document.getElementById('dr-current');
+    const drAll      = document.getElementById('dr-all');
+    const drWindow   = document.getElementById('dr-window');
+    const drForce    = document.getElementById('dr-force');
+    const drLastFull = document.getElementById('dr-last-full');
+    const drNextQ    = document.getElementById('dr-next-quick');
+    const drNextD    = document.getElementById('dr-next-daily');
+    const banner     = document.getElementById('refresh-banner');
+    const bannerTxt  = document.getElementById('refresh-banner-text');
     if (!btn || !dropdown) return;
 
-    // Toggle dropdown
+    // ── State ──────────────────────────────────────────────────────────────
+    let _lastFullRunAt = null;      // Date, updated by /api/refresh/status and refresh_complete
+    let _lastFullResults = null;    // { [symbol]: {status, barsWritten} }
+    let _lastFullLookback = null;   // number
+    let _inFlight = false;
+    let _currentIndex = 0;
+    let _totalSymbols = 16;
+    let _currentLookback = 90;
+    let _bannerHideTimer = null;
+    let _statusTicker = null;
+
+    function _fmtRelative(d) {
+      if (!d) return 'never';
+      const sec = Math.floor((Date.now() - d.getTime()) / 1000);
+      if (sec < 60)      return sec + ' sec ago';
+      if (sec < 3600)    return Math.floor(sec / 60)   + ' min ago';
+      if (sec < 86400)   return Math.floor(sec / 3600) + ' hr ago';
+      return Math.floor(sec / 86400) + ' days ago';
+    }
+    function _fmtCountdown(ms) {
+      if (ms == null || ms < 0) return '—';
+      const sec = Math.floor(ms / 1000);
+      if (sec < 60)      return 'in ' + sec + ' sec';
+      if (sec < 3600)    return 'in ' + Math.floor(sec / 60)   + ' min';
+      const hr = Math.floor(sec / 3600);
+      const mn = Math.floor((sec % 3600) / 60);
+      return 'in ' + hr + ' hr ' + mn + ' min';
+    }
+    function _nextQuickAt() {
+      // Next clock-aligned :00/:15/:30/:45 slot.
+      const n = Date.now();
+      const slot = 15 * 60 * 1000;
+      return Math.ceil(n / slot) * slot;
+    }
+    function _nextDailyAt() {
+      // Next 17:30 ET. Use Intl to derive current ET clock, then roll forward.
+      const fmt = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York',
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+      });
+      const parts = Object.fromEntries(fmt.formatToParts(new Date()).map(p => [p.type, p.value]));
+      const hour = parseInt(parts.hour, 10);
+      const min  = parseInt(parts.minute, 10);
+      // Minutes remaining until the next 17:30 ET.
+      let mins = (17 * 60 + 30) - (hour * 60 + min);
+      if (mins <= 0) mins += 24 * 60;
+      return Date.now() + mins * 60 * 1000;
+    }
+    function _renderStatusLines() {
+      drLastFull.textContent = 'Last full refresh: ' + (
+        _lastFullRunAt
+          ? _fmtRelative(_lastFullRunAt)
+            + (_lastFullLookback ? ' (' + _lastFullLookback + ' min' : '')
+            + (_lastFullResults ? ', ' + Object.keys(_lastFullResults).length + ' symbols'
+                + ', ' + Object.values(_lastFullResults).reduce((s, r) => s + (r.barsWritten || 0), 0) + ' bars)'
+                : (_lastFullLookback ? ')' : ''))
+          : 'never'
+      );
+      drNextQ.textContent = 'Next quick refresh: ' + _fmtCountdown(_nextQuickAt() - Date.now());
+      drNextD.textContent = 'Next daily refresh: ' + _fmtCountdown(_nextDailyAt() - Date.now());
+    }
+    function _startStatusTicker() {
+      if (_statusTicker) return;
+      _renderStatusLines();
+      _statusTicker = setInterval(_renderStatusLines, 30_000);
+    }
+    function _stopStatusTicker() {
+      if (_statusTicker) { clearInterval(_statusTicker); _statusTicker = null; }
+    }
+    function _syncForceEnabled() {
+      const lb = parseInt(drWindow.value, 10);
+      drForce.disabled = lb <= 1440;
+      if (drForce.disabled) drForce.checked = false;
+    }
+    drWindow.addEventListener('change', _syncForceEnabled);
+    _syncForceEnabled();
+
+    // ── Dropdown open/close ────────────────────────────────────────────────
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       const vis = dropdown.style.display === 'none';
       dropdown.style.display = vis ? 'block' : 'none';
-      if (vis) _fetchRefreshStatus();
+      if (vis) { _fetchRefreshStatus(); _startStatusTicker(); }
+      else     { _stopStatusTicker(); }
     });
-    document.addEventListener('click', () => { dropdown.style.display = 'none'; });
+    document.addEventListener('click', () => {
+      if (dropdown.style.display !== 'none') {
+        dropdown.style.display = 'none';
+        _stopStatusTicker();
+      }
+    });
     dropdown.addEventListener('click', (e) => e.stopPropagation());
 
+    // ── /api/refresh/status hydrate on open ────────────────────────────────
     function _fetchRefreshStatus() {
       fetch('/api/refresh/status').then(r => r.json()).then(s => {
         if (s.lastRun) {
-          const d = new Date(s.lastRun);
-          drStatus.textContent = 'Last refresh: ' + d.toLocaleString() + ' (' + s.status + ')';
-        } else {
-          drStatus.textContent = 'Last refresh: never';
+          _lastFullRunAt    = new Date(s.lastRun.completedAt);
+          _lastFullResults  = s.lastRun.results;
+          _lastFullLookback = s.lastRun.lookbackMinutes;
         }
-        drSpinner.style.display = s.status === 'running' ? 'block' : 'none';
+        _inFlight = !!s.inFlight;
+        if (s.inFlight) {
+          _currentIndex = s.inFlight.currentIndex || 0;
+          _totalSymbols = s.inFlight.totalSymbols || 16;
+          _currentLookback = s.inFlight.lookbackMinutes;
+          _showBannerRunning();
+        }
+        _renderButtonState();
+        _renderStatusLines();
       }).catch(() => {});
     }
 
+    // ── Trigger ─────────────────────────────────────────────────────────────
     function _doRefresh(url) {
-      drSpinner.style.display = 'block';
-      drCurrent.disabled = true;
-      drAll.disabled = true;
-      fetch(url, { method: 'POST' }).then(r => r.json()).then(() => {
-        drStatus.textContent = 'Refresh started...';
-      }).catch(err => {
-        drStatus.textContent = 'Error: ' + err.message;
-        drSpinner.style.display = 'none';
-      }).finally(() => {
-        drCurrent.disabled = false;
-        drAll.disabled = false;
-      });
+      const lookbackMinutes = parseInt(drWindow.value, 10);
+      const force           = !!drForce.checked;
+      fetch(url, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ lookbackMinutes, force }),
+      }).then(r => r.json()).then(j => {
+        if (j.error) {
+          console.error('[refresh] ' + j.error);
+          bannerTxt.textContent = '⚠ ' + j.error;
+          banner.classList.add('rb-error');
+          banner.style.display = 'flex';
+          setTimeout(() => { banner.style.display = 'none'; banner.classList.remove('rb-error'); }, 4000);
+        }
+      }).catch(err => console.error('[refresh]', err));
     }
-
     drCurrent.addEventListener('click', () => {
+      if (_inFlight) return;
       const sym = window._activeSymbol || 'MNQ';
       _doRefresh('/api/refresh/symbol/' + sym);
     });
     drAll.addEventListener('click', () => {
+      if (_inFlight) return;
       _doRefresh('/api/refresh/all');
     });
 
-    // Listen for WS completion events to update status
-    if (window._dashWs) {
-      const origHandler = window._dashWs.onmessage;
-      window._dashWs.addEventListener('message', (evt) => {
-        try {
-          const msg = JSON.parse(evt.data);
-          if (msg.type === 'daily_refresh_complete') {
-            drSpinner.style.display = 'none';
-            _fetchRefreshStatus();
-            // Reload chart data for current symbol
-            if (typeof window.loadData === 'function') window.loadData();
-          } else if (msg.type === 'daily_refresh_error') {
-            drSpinner.style.display = 'none';
-            drStatus.textContent = 'Error: ' + (msg.error || 'unknown');
-          }
-        } catch (_) {}
-      });
+    function _renderButtonState() {
+      btn.classList.toggle('refreshing', _inFlight);
+      drCurrent.disabled = _inFlight;
+      drAll.disabled     = _inFlight;
+      if (_inFlight) {
+        drCurrent.title = 'Refresh in progress, please wait.';
+        drAll.title     = 'Refresh in progress, please wait.';
+      } else {
+        drCurrent.title = '';
+        drAll.title     = '';
+      }
     }
+
+    // ── Banner ─────────────────────────────────────────────────────────────
+    function _showBannerRunning() {
+      if (_bannerHideTimer) { clearTimeout(_bannerHideTimer); _bannerHideTimer = null; }
+      banner.classList.remove('rb-success', 'rb-warning', 'rb-error', 'rb-fading');
+      banner.style.display = 'flex';
+      const lb   = _currentLookback || 90;
+      const done = _currentIndex || 0;
+      const total = _totalSymbols || 16;
+      bannerTxt.textContent = `Refreshing ${total} symbol${total === 1 ? '' : 's'} (last ${lb} min)… [${done}/${total} complete]`;
+    }
+    function _showBannerDone(durationMs, results, lookback) {
+      const syms    = Object.keys(results || {});
+      const errs    = syms.filter(s => results[s].status === 'error');
+      const bars    = syms.reduce((sum, s) => sum + (results[s].barsWritten || 0), 0);
+      const seconds = (durationMs / 1000).toFixed(1);
+
+      if (errs.length === 0) {
+        banner.classList.remove('rb-warning', 'rb-error', 'rb-fading');
+        banner.classList.add('rb-success');
+        bannerTxt.textContent = `✓ Refresh complete: ${syms.length} symbol${syms.length === 1 ? '' : 's'}, ${bars.toLocaleString()} bars updated in ${seconds}s`;
+        _scheduleBannerFade(3000);
+      } else {
+        banner.classList.remove('rb-success', 'rb-error', 'rb-fading');
+        banner.classList.add('rb-warning');
+        bannerTxt.textContent = `⚠ Refresh complete with errors: ${syms.length - errs.length}/${syms.length} succeeded — see console`;
+        console.warn('[refresh] errors:', errs.map(s => `${s}: ${results[s].error || 'unknown'}`).join('; '));
+        _scheduleBannerFade(6000);
+      }
+    }
+    function _scheduleBannerFade(holdMs) {
+      if (_bannerHideTimer) clearTimeout(_bannerHideTimer);
+      _bannerHideTimer = setTimeout(() => {
+        banner.classList.add('rb-fading');
+        setTimeout(() => {
+          banner.style.display = 'none';
+          banner.classList.remove('rb-success', 'rb-warning', 'rb-error', 'rb-fading');
+        }, 500);
+      }, holdMs);
+    }
+
+    // ── WS event handlers ──────────────────────────────────────────────────
+    function _onRefreshEvent(msg) {
+      if (msg.type === 'refresh_start') {
+        _inFlight = true;
+        _currentIndex = 0;
+        _totalSymbols = msg.totalSymbols || 16;
+        _currentLookback = msg.lookbackMinutes;
+        _renderButtonState();
+        _showBannerRunning();
+      }
+      else if (msg.type === 'refresh_progress') {
+        if (typeof msg.currentIndex === 'number') _currentIndex = msg.currentIndex;
+        if (typeof msg.totalSymbols === 'number') _totalSymbols = msg.totalSymbols;
+        _showBannerRunning();
+      }
+      else if (msg.type === 'refresh_complete') {
+        _inFlight = false;
+        _lastFullRunAt    = new Date(msg.completedAt || Date.now());
+        _lastFullResults  = msg.results;
+        _lastFullLookback = msg.lookbackMinutes;
+        _renderButtonState();
+        _showBannerDone(msg.durationMs || 0, msg.results || {}, msg.lookbackMinutes);
+        _renderStatusLines();
+        // Reload chart data so the new bars show on the currently-viewed symbol.
+        if (typeof window.loadData === 'function') window.loadData();
+      }
+    }
+
+    // alerts.js owns the dashboard WebSocket and re-dispatches refresh_*
+    // messages as DOM CustomEvents on `document`. We subscribe here.
+    document.addEventListener('refresh_start',    (ev) => _onRefreshEvent({ type: 'refresh_start',    ...ev.detail }));
+    document.addEventListener('refresh_progress', (ev) => _onRefreshEvent({ type: 'refresh_progress', ...ev.detail }));
+    document.addEventListener('refresh_complete', (ev) => _onRefreshEvent({ type: 'refresh_complete', ...ev.detail }));
+
+    // Prime the status once on load so the dropdown has something before first click.
+    _fetchRefreshStatus();
   })();
   </script>
 </body>
