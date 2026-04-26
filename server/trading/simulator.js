@@ -247,13 +247,28 @@ function _isPastSessionClose(unixSec) {
  *
  * Breadth fields (equityBreadth / riskAppetite / bondRegime) live on
  * setup.scoreBreakdown.context.breadthDetail (populated by setups.js
- * applyMarketContext). dxyDirection uses the same fallback chain as the
- * Phase 2 gates and bias.js: breadth.dollarRegime → dxy.direction → null.
+ * applyMarketContext).
+ *
+ * dxyDirection fallback chain (v14.41 — aligned with setups.js Phase 2 gate
+ * at lines 1319-1321 for consistency between the live stamp and live gating):
+ *   marketContext.dxy?.direction  (primary — real DXY 5m candles for
+ *                                   DXY_APPLICABLE: MNQ/MES/M2K/MYM/MGC/MCL;
+ *                                   hardcoded 'flat' for other symbols)
+ *   → breadth.dollarRegime         (fallback — inferred from M6E EUR/USD micro)
+ *   → null                         (no source available)
+ *
+ * v14.32 used the reverse order (breadth first). Audit v14.41 found that
+ * reference-symbol seed gaps (M6E has no seed file) cause live breadth to
+ * default to dollarRegime='flat' during the warm-up window after server start,
+ * which then shadowed the real DXY signal in the stamp. DXY has a seed file
+ * so ctx.dxyDirection is reliable. Switching primary to dxy.direction also
+ * matches the authoritative setups.js gate order.
+ *
  * Honest missingness — we never coerce to 'flat'/'neutral' to hide nulls.
  *
  * TODO(P2-deriveMarketSnapshot): the same fallback chain is duplicated in
- * bias.js:21-29 and setups.js:1319-1321 (in reverse order there). Consolidate
- * into a shared deriveMarketSnapshot(mktCtx) helper in a follow-up ticket.
+ * bias.js:21-29 (uses breadth→dxy) and setups.js:1319-1321 (uses dxy→breadth).
+ * Consolidate into a shared deriveMarketSnapshot(mktCtx) helper.
  */
 function _persistForwardTrade(alert, outcome, exitPrice, exitTime) {
   const s = alert.setup || {};
@@ -267,15 +282,18 @@ function _persistForwardTrade(alert, outcome, exitPrice, exitTime) {
 
   const exitReason = outcome === 'won' ? 'tp' : outcome === 'lost' ? 'sl' : 'timeout';
 
-  // DXY fallback chain: breadth.dollarRegime (primary, live+backtest) → dxy.direction (live-only) → null
-  const rawDollar = bd.dollarRegime;
+  // v14.41 fallback chain (dxy.direction primary, breadth.dollarRegime fallback)
+  const primaryDxy = ctx.dxyDirection;
+  const fallbackDxy = bd.dollarRegime;
   let dxyDirection;
-  if (rawDollar === 'rising' || rawDollar === 'falling') {
-    dxyDirection = rawDollar;
-  } else if (rawDollar === 'flat') {
+  if (primaryDxy === 'rising' || primaryDxy === 'falling') {
+    dxyDirection = primaryDxy;
+  } else if (fallbackDxy === 'rising' || fallbackDxy === 'falling') {
+    dxyDirection = fallbackDxy;
+  } else if (primaryDxy === 'flat' || fallbackDxy === 'flat') {
     dxyDirection = 'flat';
   } else {
-    dxyDirection = ctx.dxyDirection ?? null;
+    dxyDirection = null;
   }
 
   const trade = {
