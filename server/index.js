@@ -1750,6 +1750,20 @@ app.get('/api/opra/health', async (_req, res) => {
   }
 });
 
+// POST /api/opra/snapshot — manually fire the v14.42 daily HP snapshot writer.
+// Same code path as the 17:30 ET daily refresh's snapshot step; useful for ad-hoc
+// catch-up or post-restart verification once the morning OCC OI broadcast has fired.
+app.post('/api/opra/snapshot', async (_req, res) => {
+  try {
+    const { snapshotDailyHP } = require('./data/opraSnapshot');
+    const summary = await snapshotDailyHP();
+    res.json({ ok: true, summary });
+  } catch (e) {
+    console.error('[api] /opra/snapshot error:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // GET /api/barvalidator/stats — per-symbol bar validation statistics
 app.get('/api/barvalidator/stats', (_req, res) => {
   res.json(getValidatorStats());

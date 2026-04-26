@@ -4,6 +4,174 @@ All notable changes to this project are documented here, newest first.
 
 ---
 
+## [v14.42] — 2026-04-26 — OPRA live computation diagnosis + April HP backfill + daily HP snapshot writer
+
+Closes the v14.41 standing item #1 (HP coverage 2026-04-01+ gap) end-to-end. Three-stage release:
+
+1. Read-only diagnosis of why the live OPRA path was producing CBOE-fallback metrics (not OPRA-derived) — concluded the live computation path is sound; OPRA-derived metrics will land naturally as soon as the morning OCC OpenInterest broadcast fires after each reconnect.
+2. April historical HP backfill from Databento OPRA + DBEQ.BASIC ETF zips Jeff staged: 96 new HP files (16 trading dates × 6 ETFs) covering 2026-04-02 → 2026-04-24. April backtest unblocked: **34 trades / WR 35.3% / PF 3.063 / Net +$2,894** (vs **0 trades** when the gap was open per the v14.36 spot-check).
+3. Daily 17:30 ET OPRA HP snapshot writer wired into `dataRefresh.js` so the live OPRA chain is persisted to disk in the same shape as the historical pipeline output — going forward the gap won't re-open.
+
+### Stage 1 — OPRA zero-metrics diagnosis (read-only, no fixes)
+
+[scripts/diagOpraMetrics.js](../scripts/diagOpraMetrics.js) (**new**, ~280 LOC). Standalone read-only diagnostic that hits `/api/datastatus` + `/api/opra/health`, fetches a raw CBOE chain for direct comparison, and writes a structured diagnosis MD to `data/analysis/{timestamp}_opra_diagnosis.md` (gitignored). Sections 1A (feed state), 1B (HP path trace), 1C (CBOE comparison), 1D (statistics broadcast timing).
+
+[scripts/inspectOpraZips.js](../scripts/inspectOpraZips.js) (**new**, ~80 LOC). Reads `metadata.json` from every zip in `Historical_data/OPRA/{etf}/` via the unzipper streaming API (no payload extraction) and prints a schema/dataset/date-range table. Used pre-extraction to confirm Jeff's new zips contain only `statistics` + `definition` schemas (no extra ohlcv-1s/trades/TCBBO bundles that would need a phase-1b filter).
+
+**Finding (matches hypothesis A from the spec).** OPRA TCP feed connected, ~51,694 contract definitions accumulated across the 6 baseline ETFs (rtype=22 records flowing on connect), but **zero `OpenInterest` statistics records** (rtype=24, stat_type=7) since the current TCP session reconnected. `_strikeData` empty across all ETFs → `getOpraRawChain()` correctly returns `hasData=false` → `options.js getOptionsData()` correctly falls through to CBOE → CBOE returns plausible non-floor metrics (QQQ hp=0.49 GEX=391M, SPY hp=0.47 GEX=22M, etc.). The "HP=0.10 / GEX=0 / DEX=0 / fragile" symptom did NOT match the live system at diagnostic time — the live path is sound, the symptom likely came from reading the historical `data/historical/options/{etf}/computed/` files (which truly stop 2026-04-01) for some downstream consumer.
+
+**Root cause.** OPRA OpenInterest records are emitted once per trading day, populated from the OCC overnight clearing file, broadcast in the OPRA stream around 06:00–06:30 ET each weekday. After every server restart, definitions arrive immediately (rtype=22, on connect) but OI buckets stay empty until the next morning's broadcast.
+
+**Verdict.** Computation path correct (every stage of `_processRecord` → `getOpraRawChain` → `_computeMetrics` verified). Recommended fix: passive — wait for the next morning broadcast and the live OPRA path populates naturally. Optional follow-up: startup REST backfill from Databento historical `statistics` schema for today's OCC OI snapshot — eliminates the after-restart cold-start gap. Stage 3 ships without this; can land later if Jeff wants near-zero restart recovery.
+
+### Stage 2 — April HP historical backfill from Jeff's raw zips
+
+Jeff staged 24 OPRA zips into `Historical_data/OPRA/{etf}/` covering 6 ETFs (no DIA — MYM HP backfill stays blocked, matches pre-v14.42 state). Two zip pairs per ETF:
+
+- **2026-04-03 dated zips** — full historical archive 2013-04-01 → 2026-04-02 (already extracted up to 2026-04-01)
+- **2026-04-26 dated zips** — gap window 2026-03-25 → 2026-04-25 (closes the April HP gap)
+
+[scripts/extractOpraZips.js](../scripts/extractOpraZips.js) (**new**, ~120 LOC). Focused OPRA-only extraction (mirrors `historicalPipeline.js` Phase 1b's OPRA loop). Skip-if-exists per file with silent counting (no per-file SKIP log lines for the 39k existing archive entries — Phase 1b's loop logs every skip, which would drown out signal). Defensive whitelist: rejects any entry whose name doesn't match `.statistics.csv.zst` / `.definition.csv.zst` / known JSON metadata — defends against schema bundling surprises beyond Phase 1b's no-filter loop. Run summary: **24 zips processed in 12.2s, 192 new files extracted (16 trading dates × 2 schemas × 6 ETFs), 39,384 skipped (already-present archive), 0 rejected** — confirms the new zips contain only the expected schemas.
+
+**ETF closes backfill via DBEQ.BASIC.** Phase 1e requires an `etf_closes.json` entry per (etf, date) or it skips — QQQ/SPY/GLD/USO/SLV stopped at 2026-04-02 (XNYS.PILLAR archive); IWM stopped at 2026-04-20 (DBEQ.BASIC v14.37). Ran existing [scripts/backfillETFDailyCloses.js](../scripts/backfillETFDailyCloses.js) twice: `--ticker QQQ SPY GLD USO SLV --start 2026-04-03 --end 2026-04-24` (5 ETFs × 14 dates) and `--ticker QQQ SPY GLD USO SLV IWM --start 2026-04-21 --end 2026-04-25` (catches 2026-04-24 + IWM 04-21..04-24). All 6 ETFs now current through 2026-04-24. `.bak` sidecar on `etf_closes.json`.
+
+**Phase 1e — parse OPRA contracts.** `node server/data/historicalPipeline.js --phase 1e --from-date 2026-04-02` — 96 files written in 49.9s, 0 errors. Per-ETF date contracts in plausible ranges (out=702-3787 contracts, defs=4344-13502, oi=3271-9702 per date).
+
+**Phase 1f — compute HP via Black-Scholes.** `node server/data/historicalPipeline.js --phase 1f --from-date 2026-04-02` — 96 dates computed in 15.5s, 0 errors. IV in 16-90% range (correctly higher for USO/SLV vs equity index ETFs), GEX in real ranges (0.01-0.99B per date), DEX bias mostly bullish post April-7 reset (matches the April recovery period).
+
+**Verification (Stage 2D).** Coverage check: every ETF (QQQ/SPY/IWM/GLD/USO/SLV) now has 17 April dates — 04-01 (existing) + 16 backfilled. Spot-checks on 3 random (etf, date) pairs all show real values (HP 78-100, GEX 100-535M, DEX 24-81M, valid maxPain/gexFlip, proper futures-space scaling ratios — NOT defaults). **April backtest** (2026-04-01 → 2026-04-23, MNQ/MES/MCL, or_breakout, conf≥70, 5m): **34 trades / WR 35.3% / PF 3.063 / Sharpe 7.054 / Net +$2,894 / Max DD $912** — was 0 trades when the gap was open. Phase 2 loss-gate filter 3 (hard-skip on `dexBias='neutral'`) no longer fires across the board.
+
+### Stage 3 — Daily HP snapshot writer + manual API trigger
+
+[server/data/opraSnapshot.js](../server/data/opraSnapshot.js) (**new**, ~190 LOC). Exports `snapshotDailyHP()`. Per ETF: pulls `getOpraRawChain()` from `opraLive`, parses OCC tickers → contract array, looks up today's ETF close from `etf_closes.json` (with prior-day fallback), reads today's last 1m bar for `futuresClose`, builds a 20-day rolling log-returns array for IV estimation, calls `computeHP()` (the same function `historicalPipeline.js` Phase 1f calls), writes the result to `data/historical/options/{etf}/computed/{YYYY-MM-DD}.json`.
+
+Stamps two provenance fields on every snapshot:
+- `dataSource: 'opra-live'` — distinguishes live-feed snapshots from the historical pipeline's `opra-historical-zip`-equivalent output. Lets downstream consumers flag fidelity.
+- `_snapshottedAt: ISO timestamp` — when the snapshot was written.
+
+**Skip behaviour.** When the OPRA chain has no OI data (e.g. post-restart before the morning OCC broadcast — the canonical Stage 1 condition), the writer skips with reason `'OPRA chain has no OI data; CBOE fallback intentionally not snapshotted'`. CBOE-derived snapshots are intentionally NOT written to disk because they have different greeks and would silently mislead downstream consumers expecting the historical pipeline shape.
+
+**`.bak` discipline.** First overwrite per (etf, date) per day writes a `.bak` sidecar; subsequent overwrites within the same day do not, so `.bak` files don't proliferate. Tracker resets at midnight ET. Fresh writes (no prior file) never write a `.bak` (consistent with the historical pipeline).
+
+[server/data/dataRefresh.js](../server/data/dataRefresh.js) modified — `refreshAll()` now calls `snapshotDailyHP()` AFTER `Promise.allSettled` (so 1m futures + ETF closes are fresh) and BEFORE `refreshOptions()` (so the historical recompute reads the freshly-snapshotted file when it walks the last 2 dates). Snapshot is a no-op when OPRA has no data — never breaks the refresh chain. Both daily 17:30 ET and ad-hoc `POST /api/refresh/all` requests trigger snapshots transparently.
+
+[server/index.js](../server/index.js) modified — new `POST /api/opra/snapshot` route fires `snapshotDailyHP()` on demand and returns the per-ETF summary. Useful for ad-hoc catch-up and post-restart verification once the morning broadcast lands. No UI work in this release (per spec — can land later if Jeff wants a button).
+
+**Verification (Stage 3C).** Three checks:
+1. **API route** — `curl -s -X POST http://localhost:3000/api/opra/snapshot` returns `{ok:true, summary:{QQQ:{status:'skipped', reason:'OPRA chain has no OI data...'}, ...}}` for all 7 ETFs. Skip path correct, route plumbed cleanly.
+2. **Write path bit-identical to Phase 1f** — [scripts/testOpraSnapshot.js](../scripts/testOpraSnapshot.js) (**new**, ~110 LOC) reads a real Phase 1e parsed contracts file, runs `computeHP()` with the same args `snapshotDailyHP()` would use, and compares to the corresponding Phase 1f computed file. **PASS for QQQ 2026-04-24** — every field of the Phase 1f shape (date, underlying, futuresProxy, etfClose, scalingRatio, atmIV, totalGex/Dex, dexScore/Bias, pcRatio, resilienceScore/Label, oiWalls, maxPain, callWall, putWall, gexFlip, all scaled fields, hedgePressureZones[0]) matches bit-for-bit. Only deltas the snapshot writer adds: `dataSource` + `_snapshottedAt` provenance — no math change.
+3. **End-to-end via natural broadcast** — deferred to the next 06:00 ET window. The skip path's correct behaviour combined with the bit-identical write-path verification covers the risk: the snapshot writer can only fire incorrectly if `_strikeData` itself is corrupt, which would also corrupt `getOpraRawChain()` and thus `_computeMetrics()` — both of which are verified by the live `/api/opra/health` showing CBOE-correct fall-through (Stage 1).
+
+### B9 paper-trading edge unaffected
+
+- No changes to setup detection, confidence scoring, `applyMarketContext()`, Phase 2 loss-analysis gates, multipliers, breadth scoring, DD band scoring.
+- No changes to the backtest engine, scan engine, live feed, simulator, or alert dedup.
+- `dataRefresh.js` refresh contract preserved — snapshot is appended after symbol refresh + before existing options HP recompute, both of which retain pre-v14.42 behaviour.
+- `opraSnapshot.js` is read-only against `opraLive` state (only calls public exports `getOpraRawChain` + `getOpraStatus`).
+
+### Standing items NOT addressed (deferred)
+
+- **DXY coverage gap 2026-04-04+** — out of scope for v14.42 (HP-only release). v14.41 audit standing item #2.
+- **Historical breadth-cache 17/30 spot-check divergence** — v14.41 audit standing item #3, requires Jeff's call.
+- **M6E seed file gap** — v14.41 audit standing item #5, single-file change for `seedFetch.js` REF_SYMBOLS, deferred.
+- **DIA HP** — DIA has zero raw OPRA zips; MYM HP stays blocked. Pre-v14.42 state, not a regression.
+- **Startup REST OI backfill** — optional path B from Stage 1 diagnosis. Would eliminate after-restart cold-start gap; deferred until needed.
+
+### Files changed
+
+- `scripts/diagOpraMetrics.js` — **new** (Stage 1, ~280 LOC).
+- `scripts/inspectOpraZips.js` — **new** (Stage 1 helper, ~80 LOC).
+- `scripts/extractOpraZips.js` — **new** (Stage 2, ~120 LOC).
+- `scripts/testOpraSnapshot.js` — **new** (Stage 3 verification, ~110 LOC).
+- `server/data/opraSnapshot.js` — **new** (Stage 3, ~190 LOC).
+- `server/data/dataRefresh.js` — `refreshAll()` now calls `snapshotDailyHP()` between symbol-refresh completion and `refreshOptions()`.
+- `server/index.js` — new `POST /api/opra/snapshot` route.
+- `data/historical/options/{etf}/computed/2026-04-{02..24}.json` — 96 new HP files via Phase 1e + 1f (gitignored).
+- `data/historical/etf_closes.json` — +14 dates × 5 ETFs + 4 dates × IWM (gitignored, `.bak` sidecar).
+- `data/historical/raw/OPRA/{etf}/opra-pillar-2026-04-*.{statistics,definition}.csv.zst` — 192 new raw files (gitignored).
+- `data/analysis/2026-04-26T*_opra_diagnosis.md` — Stage 1 diagnosis output (gitignored).
+- `docs/CHANGELOG.md`, `docs/CONTEXT_SUPPLEMENT.md`, `docs/DATABENTO_PROJECT.md`, `docs/ROADMAP.md`, `CLAUDE.md` — v14.42 doc updates.
+
+---
+
+## [v14.41] — 2026-04-24 — Data trust audit + remediation pass
+
+Overnight unattended audit of the data foundation before Jeff's calculation-adjustment work. Ten-category read-only audit → targeted remediation → re-audit → cross-validation → comprehensive findings doc. Result: Phase 1 **red** (1A 1C 1F) → Phase 3 **yellow** post-fix. Forward-test stamping (the highest-priority section per the overnight brief) now green.
+
+Full narrative: [data/analysis/2026-04-24_data_trust_audit_REPORT.md](../data/analysis/2026-04-24_data_trust_audit_REPORT.md). Phase JSONs at `data/analysis/2026-04-24_data_trust_audit_phase{1,3_postfix,4}.json`.
+
+### Fix — simulator dxyDirection fallback order reversed
+
+[server/trading/simulator.js:258-314](../server/trading/simulator.js#L258-L314) `_persistForwardTrade` — v14.32's fallback chain `breadth.dollarRegime → dxy.direction → null` was correct in spec but backwards in practice: because M6E has no seed file, `computeMarketBreadth()` in live mode returns `dollarRegime='flat'` (the `_emptyBreadth()` default) for ~5-6h after every server restart, until enough M6E 30m bars accumulate. `'flat'` is a concrete value — it satisfied the first branch and shadowed the real DXY signal from `data/seed/DXY_5m.json`. Every one of 128 post-v14.32 forward trades stamped `dxyDirection='flat'` as a result. The new chain `ctx.dxyDirection → bd.dollarRegime → 'flat' (if either says flat) → null` matches the authoritative Phase 2 loss-gate order at [setups.js:1319-1321](../server/analysis/setups.js#L1319-L1321). Includes a block comment explaining the M6E seed-gap motivation. 7/7 synthetic fallback cases pass. Stamping path only — **zero impact on setup detection, confidence scoring, gate math, outcome resolution, or the backtest engine**.
+
+### Fix — forward-test record backfill (39 trades on 2026-04-20/21)
+
+[scripts/backfillForwardTrades.js](../scripts/backfillForwardTrades.js) (new). For each post-v14.32 trade with null `equityBreadth`/`bondRegime`/`riskAppetite`, derives the DST-aware ET entry date (matches `simulator.js:toETDate`), looks up `breadth_cache.json[etDate]`, fills the three fields, upgrades `dxyDirection` `'flat' → 'rising'/'falling'` **only** when breadth cache reports an unambiguous direction (honest missingness — never synthetic 'flat'). Writes `_backfilledFields`/`_backfilledFrom`/`_backfilledAt`/`_backfilledPhase` provenance. `.bak` sidecar on `data/logs/forward_trades.json`. Result: 39/39 filled; Phase 4D verified 10/10 samples re-derive deterministically.
+
+### Fix — 7-day Databento re-backfill (2026-04-21..24, 16 symbols, 35 dupe files cleared)
+
+Re-ran `scripts/backfillHistoricalWindow.js --days 7 --force` on all 16 symbols after `pm2 stop futuresedge`. 96 1m files + 576 aggregated files written; 148,471 bars fetched, 102,198 merged onto disk (parent-subscription contract-month dedup). MCL/MGC/SIL/MHG had 50-94% dup rates on 2026-04-23; post-fix 0 dupes.
+
+### Fix — MGC 2026-04-06 spread-trade bars (209 negative-OHLC bars)
+
+One-shot invalid-OHLC sweep found 209 consecutive bars on MGC 2026-04-06 with `open=high=low=close=-17.1` etc. — calendar-spread quotes bleeding through the Databento `parent` subscription. `.bak` sidecars. 5m/15m/30m re-aggregated from the cleaned 1m (974 → 765 bars).
+
+### Fix — breadth cache extension (+4 dates)
+
+[scripts/extendBreadthCache.js](../scripts/extendBreadthCache.js) (new). Never rebuilds existing entries — only adds missing dates in the last 24 months to avoid invalidating prior backtest reproducibility. Computed 2026-04-21..24 from current clean 1m via `computeMarketBreadthHistorical()`. Cache: 4,097 → 4,101 entries. `.bak` sidecar.
+
+### Fix — VIX cache extension (+19 dates)
+
+[scripts/extendVix.js](../scripts/extendVix.js) (new). Uses `buildVolatilityIndex()` from `historicalVolatility.js` against current MNQ 1m daily closes, appends dates after the cache's last (was 2026-04-02, now 2026-04-24). Values in expected 17.9–35.9 range. `.bak` sidecar. Internally consistent with the pre-v14.41 series (same realized-vol-from-MNQ method).
+
+### Fix — bar schema migration re-run
+
+[scripts/migrateBarSchema.js](../scripts/migrateBarSchema.js) (existing v14.35). Post-backfill sweep caught 66 residual dupes across 9 2026-04-24 partial-day files. Zero `ts`-only bars, zero bad-OHLC bars, zero out-of-order files across the full 186,835-file tree post-fix.
+
+### Standing items NOT fixed (require Jeff's decision — documented in TL;DR of findings doc)
+
+1. **HP options coverage gap 2026-04-02+.** All 6 ETF `options/{etf}/computed/` directories stop 2026-04-01. Blocks trustworthy April+ `or_breakout` backtests (Phase 2 loss-gate filter 3 hard-skips `dexBias='neutral'`, and missing HP → neutral). Requires Databento OPRA zip purchase OR extended live-OPRA accumulation.
+2. **DXY coverage gap 2026-04-04+.** `data/historical/dxy.json` stops 2026-04-03. Phase 2 loss-gate 1 (rising DXY + or_breakout = -20 pts) cannot fire on April+ backtests. Requires Databento DX zip purchase (small dataset).
+3. **Historical breadth cache 17/30 spot-check divergence vs current 1m daily closes.** Extended cache only; did NOT rebuild — spec said ">10% divergence → stop and surface, don't auto-fix." Full rebuild via `precomputeBreadth.js --force` would shift every prior backtest's reproducibility. Documented as "consistent-within-cache, not guaranteed vs current 1m."
+4. **Phase 4A regression shift.** Same config (MNQ/MES/MCL, `or_breakout`, conf≥70, tf=5m, 2026-03-01 → 2026-04-01), same engine commit, same untouched test-window files: **current 13 trades / WR 46.2% / PF 6.02 / Net +$1,761** vs **v14.40 CHANGELOG claim 21 trades / WR 47.6% / PF 4.89 / Net +$3,073**. Engine deterministic (Phase 4C). Most likely the v14.40 reference was transcribed forward from v14.35 without re-measurement; the honest current profile is what Phase 4A reports. **Treat 13 trades as the new baseline and re-measure B9 against it.** This is the single most-surprising finding of the audit.
+5. **M6E seed file gap.** Root cause behind the simulator dxyDirection shadowing. Out of scope for v14.41 — adding `M6E: 'EURUSD=X'` to `seedFetch.js` REF_SYMBOLS should ship as its own focused commit with verification.
+
+### Phase 4 cross-validation results
+
+- **4A** — 13 trades / WR 46.2% / PF 6.02 / Net +$1,761 (reference discrepancy — see standing item 4).
+- **4B** — 10 random dates sampled for live-vs-backtest breadth parity; 1/10 divergent (2026-03-02: equityBreadth cached=2 vs recomputed=1) — same root cause as 1C.
+- **4C** — 3 back-to-back runs of the 4A config produced bit-identical trade lists. No non-determinism.
+- **4D** — 10 of 39 backfilled forward trades sampled; all 10 re-derive to the exact stamped values. Backfill is deterministic and reversible.
+
+### B9 paper-trading edge unaffected
+
+- No changes to setup detection, confidence scoring, `applyMarketContext()`, Phase 2 loss-analysis gates, multipliers, breadth scoring, DD band scoring.
+- No changes to the backtest engine, scan engine, or live feed.
+- Simulator change is in the stamping-only `_persistForwardTrade` path — does not affect outcome resolution, SL/TP checks, the one-trade-per-symbol gate, or the or_breakout session dedup.
+- `bias.js` untouched — directional bias panel unaffected.
+
+### Operational notes
+
+- PM2 `futuresedge` service was stopped at the start of Phase 2 remediation (to prevent live-feed dupe accumulation during the backfill) and **must be restarted** by Jeff (`pm2 start futuresedge`) before resuming paper trading. The simulator fix also requires a restart to activate.
+- All modified data files have `.bak` sidecars. Full rollback procedure in the findings doc's appendix.
+
+### Files changed
+
+- `server/trading/simulator.js` — dxyDirection fallback order reversed + code comment updated (~30 LOC delta inside `_persistForwardTrade`).
+- `scripts/dataAudit.js` — **new** (auditor, 580 LOC).
+- `scripts/backfillForwardTrades.js` — **new** (~120 LOC).
+- `scripts/extendBreadthCache.js` — **new** (~85 LOC).
+- `scripts/extendVix.js` — **new** (~65 LOC).
+- `scripts/phase4CrossValidate.js` — **new** (~200 LOC).
+- `data/historical/futures/**` — 96 1m files + 576 agg files written via `backfillHistoricalWindow.js`; MGC 2026-04-06 1m + 5m/15m/30m rewritten post OHLC-clean.
+- `data/historical/breadth_cache.json` — +4 entries.
+- `data/historical/vix.json` — +19 entries.
+- `data/logs/forward_trades.json` — 39 records modified with `_backfilledFields` provenance.
+- `data/analysis/2026-04-24_*` — Phase 1/3/4 JSONs, progress logs, findings MD.
+- `docs/CHANGELOG.md`, `docs/CONTEXT_SUPPLEMENT.md`, `docs/ROADMAP.md`, `CLAUDE.md` — v14.41 doc updates.
+
+---
+
 ## [v14.40] — 2026-04-23 — Refresh scheduler restructure + Bug 8 reference-symbol coverage
 
 Final piece of the v14.33 → v14.40 data-layer remediation arc. Restructures the single hourly refresh into a tighter, more trustworthy cadence with manual control and visible state, and closes Bug 8 from the 2026-04-21 audit (reference-instrument backfill coverage). Paper trading, the upcoming forward-test improvements, and any signal-quality work all depend on trusted data — this release makes the data layer trustworthy and visible.

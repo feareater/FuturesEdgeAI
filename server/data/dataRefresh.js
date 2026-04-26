@@ -527,6 +527,20 @@ async function refreshAll(lookbackMinutes = QUICK_LOOKBACK_MIN, opts = {}) {
 
   await Promise.allSettled(promises);
 
+  // v14.42 Stage 3 — daily OPRA HP snapshot.
+  // Runs AFTER symbol refresh (so the 1m futures files driving futuresClose
+  // and the volatility input are fresh) and BEFORE refreshOptions() (so
+  // refreshOptions sees the snapshot we just wrote when it recomputes the
+  // last 2 dates). Snapshot only writes when OPRA has live OI data;
+  // otherwise it logs the skip reason and is a no-op — refreshOptions still
+  // does its historical recompute pass independently.
+  try {
+    const { snapshotDailyHP } = require('./opraSnapshot');
+    await snapshotDailyHP();
+  } catch (err) {
+    console.warn(`${logPrefix} OPRA snapshot failed: ${err.message}`);
+  }
+
   // Options HP piggy-backs on every full refresh (cheap — recomputes last 2 dates only).
   try { await refreshOptions(); }
   catch (err) { console.warn(`${logPrefix} options HP recompute failed: ${err.message}`); }
